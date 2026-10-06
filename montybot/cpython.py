@@ -55,7 +55,7 @@ TMP_BYTES = 256 << 20
 PROCESSES = 32
 """Processes and threads the code may have at once, so its memory is at most this many times `cpython_memory_mb`."""
 CODE_LIMIT = 100_000
-"""Characters of code per call: it travels on the command line, which caps one argument at 128 KiB."""
+"""UTF-8 bytes of code per call: it travels on the command line, which caps one argument at 128 KiB."""
 
 KEPT = frozenset({'usr', 'bin', 'sbin', 'lib', 'lib32', 'lib64', 'libx32', 'etc', 'proc', 'dev', 'sys', 'tmp', 'run'})
 """Top-level folders the jail sees: programs, libraries and their configuration. `/proc`, `/dev`, `/tmp` and `/run`
@@ -129,8 +129,8 @@ async def run_jailed(resources: Resources, user_id: str, code: str) -> str:
     settings: Settings = resources.settings
     if not can_jail():
         return 'Error: Python with packages is not available on this server; use `run_code`.'
-    if len(code) > CODE_LIMIT:
-        return f'Error: the code is over {CODE_LIMIT} characters; write it in smaller steps.'
+    if len(code.encode('utf-8')) > CODE_LIMIT:
+        return f'Error: the code is over {CODE_LIMIT} UTF-8 bytes; write it in smaller steps.'
     limits = LIMITS.format(
         cpu=settings.cpython_cpu_seconds, memory=settings.cpython_memory_mb << 20, size=FILE_LIMIT, processes=PROCESSES
     )

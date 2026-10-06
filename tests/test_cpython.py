@@ -29,10 +29,10 @@ from montybot.cpython import can_jail, jail_of, run_jailed
 from montybot.settings import Settings
 from montybot.workspaces import Workspaces, save_download
 
-pytestmark = [
-    pytest.mark.anyio,
-    pytest.mark.skipif(not can_jail(), reason='bwrap needs Linux: run tests/linux/run.sh tests/test_cpython.py'),
-]
+pytestmark = pytest.mark.anyio
+linux_only = pytest.mark.skipif(
+    not can_jail(), reason='bwrap needs Linux: run tests/linux/run.sh tests/test_cpython.py'
+)
 
 
 @pytest.fixture
@@ -69,6 +69,7 @@ def listener() -> Iterator[int]:
         yield server.getsockname()[1]
 
 
+@linux_only
 async def test_pandas_works_on_the_users_files(resources: Any) -> None:
     user = str(uuid.uuid4())
     await save_download(
@@ -105,6 +106,7 @@ print(json.dumps(seen))
 """
 
 
+@linux_only
 async def test_the_jail_sees_only_the_users_files(
     resources: Any, listener: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -134,6 +136,7 @@ async def test_the_jail_sees_only_the_users_files(
     }, seen
 
 
+@linux_only
 async def test_limits_hold_and_nothing_outlives_the_call(resources: Any) -> None:
     user = str(uuid.uuid4())
     out = await run_jailed(resources, user, 'bytearray(3 * 2**30)')
@@ -161,6 +164,7 @@ def running(marker: str) -> bool:
     return False
 
 
+@linux_only
 class TestJailConformance(WorkspaceBackendSuite):
     @pytest.fixture
     def anyio_backend(self) -> str:
@@ -192,6 +196,7 @@ class TestJailConformance(WorkspaceBackendSuite):
                 await anyio.sleep(0.05)
 
 
+@linux_only
 async def test_what_the_jail_leaves_cannot_lead_the_app_out(resources: Any) -> None:
     """Links and FIFOs the code makes stay in the user's files: Monty's calls refuse them, and do not hang."""
     a, b = str(uuid.uuid4()), str(uuid.uuid4())
@@ -215,3 +220,10 @@ async def test_what_the_jail_leaves_cannot_lead_the_app_out(resources: Any) -> N
                 await call(name, '/work/pipe', 'x')
         with pytest.raises(OSError):
             await call('Path.read_text', '/work/pipe')
+
+
+async def test_code_limit_counts_utf8_bytes(resources: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('montybot.cpython.can_jail', lambda: True)
+    # Below the character limit, but above Linux's per-argument byte limit.
+    result = await run_jailed(resources, str(uuid.uuid4()), '#' + '😀' * 40_000)
+    assert result == 'Error: the code is over 100000 UTF-8 bytes; write it in smaller steps.'
