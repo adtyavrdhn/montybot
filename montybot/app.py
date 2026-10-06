@@ -45,6 +45,8 @@ def create_app(settings: Settings) -> Starlette:
             Route('/api/asks/{ask_id:uuid}', api.answer_ask, methods=['POST']),
             Route('/api/runs/{run_id:uuid}/screen', api.read_screen),
             Route('/api/runs/{run_id:uuid}/screen', api.act_on_screen, methods=['POST']),
+            Route('/api/sign-ins', api.read_sign_ins),
+            Route('/api/sign-ins/{site:str}', api.forget_sign_in, methods=['DELETE']),
             Route('/api/memories', api.read_memories),
             Route('/api/memories/{memory_id:uuid}', api.remove_memory, methods=['DELETE']),
         ],

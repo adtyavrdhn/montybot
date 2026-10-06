@@ -19,10 +19,11 @@ from pydantic_ai.models import Model
 
 from montybot.browser.contract import BrowserBackend
 from montybot.browser.host import BrowserHost
-from montybot.browser.jar import InMemoryJar, InMemoryJarLease, JarLease, SignInJar
+from montybot.crypto import deployment_key
 from montybot.db import Pool, create_pool, migrate
 from montybot.imports import import_object
 from montybot.settings import Settings
+from montybot.signins import PostgresJar, PostgresLease
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -30,6 +31,8 @@ class Resources:
     settings: Settings
     pool: Pool
     browser: BrowserHost
+    jar: PostgresJar
+    lease: PostgresLease
     agent: Agent[Any, str]
 
 
@@ -61,8 +64,8 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
     await migrate(settings.database_url)
     pool = create_pool(settings.database_url)
     await pool.open()
-    jar: SignInJar = InMemoryJar()
-    lease: JarLease = InMemoryJarLease()
+    jar = PostgresJar(pool, deployment_key(settings.encryption_key.get_secret_value()))
+    lease = PostgresLease(pool)
     browser = BrowserHost(
         new_backend=backend_factory(settings.browser_backend),
         jar=jar,
@@ -80,7 +83,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
     )
     agent = build_agent(load_model(settings.model))
     async with browser:
-        _current = Resources(settings=settings, pool=pool, browser=browser, agent=agent)
+        _current = Resources(settings=settings, pool=pool, browser=browser, jar=jar, lease=lease, agent=agent)
         try:
             DBOS.launch()
             yield _current

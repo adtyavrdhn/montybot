@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     logfire_token: SecretStr | None = Field(default=None, alias='LOGFIRE_TOKEN')
 
     session_secret: SecretStr
+    encryption_key: SecretStr
+    """Encrypts each user's data key, which encrypts their saved sign-ins: 32 bytes, base64url
+    (`python -c "from montybot.crypto import new_key; print(new_key())"`)."""
     """Signs the web app's session cookie."""
     secure_cookies: bool = False
     """Mark the session cookie `Secure`; on behind TLS."""

@@ -8,6 +8,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, TypeVar
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, StringConstraints, TypeAdapter
 from pydantic_ai.messages import ModelMessage, ModelRequest, TextPart, UserPromptPart
@@ -28,6 +29,7 @@ from montybot.browser.contract import (
     Type,
 )
 from montybot.browser.service import HandoffNotActive, UnknownRun
+from montybot.browser.state import BLANK_URL
 from montybot.memory import delete_memory, list_memories
 from montybot.models import ACTIVE, Ask, Run, User
 from montybot.resources import Resources
@@ -278,6 +280,49 @@ async def act_on_screen(request: Request, user: User) -> Response:
         return JSONResponse({'ok': True})
 
     return await on_handoff(request, user, act)
+
+
+# --- saved sign-ins ---
+
+
+def site_of(domain: str) -> str:
+    return domain.lstrip('.')
+
+
+@auth.signed_in
+async def read_sign_ins(request: Request, user: User) -> Response:
+    """The sites the user's saved browser holds cookies for. Names only, never values."""
+    state = await resources_of(request).jar.load(user_id=user.id)
+    sites = sorted({site_of(c.domain) for c in state.cookies}) if state is not None else []
+    return JSONResponse([{'site': site} for site in sites])
+
+
+@auth.signed_in
+async def forget_sign_in(request: Request, user: User) -> Response:
+    """Drop the cookies and storage of one site. Refused while a task of the user's is using the browser."""
+    resources = resources_of(request)
+    site = str(request.path_params['site'])
+    holder = f'forget:{uuid.uuid4()}'
+    if not await resources.lease.acquire(user_id=user.id, run_id=holder):
+        return JSONResponse({'detail': 'a task is using your browser; try again when it has finished'}, 409)
+    try:
+        state = await resources.jar.load(user_id=user.id)
+        if state is None or not any(site_of(c.domain) == site for c in state.cookies):
+            return NOT_FOUND
+
+        def of_site(origin: str) -> bool:
+            host = urlsplit(origin).hostname or ''
+            return host == site or host.endswith('.' + site)
+
+        state.cookies = [c for c in state.cookies if site_of(c.domain) != site]
+        state.local_storage = {o: items for o, items in state.local_storage.items() if not of_site(o)}
+        state.session_storage = {o: items for o, items in state.session_storage.items() if not of_site(o)}
+        if of_site(state.url):
+            state.url = BLANK_URL
+        await resources.jar.save(user_id=user.id, state=state)
+    finally:
+        await resources.lease.release(user_id=user.id, run_id=holder)
+    return JSONResponse({'ok': True})
 
 
 # --- memory ---

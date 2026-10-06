@@ -4,6 +4,7 @@ version = "0.0.0"
 description = "An always-on agent built on Monty and Pydantic AI, with a browser it can hand to the user."
 requires-python = ">=3.11"
 dependencies = [
+    "cryptography>=45",
     "dbos>=3.2.0",
     "httpx>=0.27",
     "itsdangerous>=2.2",
@@ -42,6 +43,14 @@ packages = ["montybot"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tests"]
+markers = [
+    "u1: user path U1, read the web",
+    "u2: user path U2, sign in once, reuse later",
+    "u3: user path U3, act with approval",
+    "u4: user path U4, scheduled tasks and watches",
+    "u5: user path U5, files",
+    "u6: user path U6, a bot check the user solves",
+]
 
 [tool.ruff]
 line-length = 120
