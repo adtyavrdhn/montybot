@@ -21,8 +21,20 @@ echo "$COMMIT" > /opt/montybot/src/COMMIT
 cd /opt/montybot/src/deploy
 compose() { sudo docker compose --env-file /opt/montybot/.env "$@"; }
 
-compose build --pull app
 . /opt/montybot/.env
+# Only the manual private release installs these images. Normal CD reuses them, failing closed if missing.
+unset COMPOSE_PROFILES MONTY_URL
+if [ -n "${MONTY_PRIVATE_COMMIT:-}" ]; then
+    case "$MONTY_PRIVATE_COMMIT" in *[!0-9a-f]*) echo "Invalid MONTY_PRIVATE_COMMIT" >&2; exit 1 ;; esac
+    [ "${#MONTY_PRIVATE_COMMIT}" -eq 40 ] || { echo "Expected full source commit" >&2; exit 1; }
+    for service in server worker; do
+        image="montybot-monty-$service:$MONTY_PRIVATE_COMMIT"
+        revision=$(sudo docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")
+        [ "$revision" = "$MONTY_PRIVATE_COMMIT" ] || { echo "Source revision mismatch: $image" >&2; exit 1; }
+    done
+    export MONTY_PRIVATE_COMMIT COMPOSE_PROFILES=full-monty MONTY_URL=ws://monty-server:8000
+fi
+compose build --pull app
 case "${MODEL:-}" in claude-code:*)
     if ! compose run --rm --no-deps -T app test -s /data/claude-code/auth.json; then
         echo "The server has no Claude Code sign-in yet. Sign in once, then deploy again:"
