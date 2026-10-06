@@ -27,8 +27,9 @@ class Settings(BaseSettings):
     secure_cookies: bool = False
     """Mark the session cookie `Secure`; on behind TLS."""
 
-    model: str = 'anthropic:claude-sonnet-4-5'
-    """A Pydantic AI model name, or `script:module:attribute` for a `Model` object, which is how tests script the
+    model: str = 'claude-code:claude-opus-5-5'
+    """A Pydantic AI model name; `claude-code:NAME` for a Claude Code subscription model (sign in with
+    `montybot claude-code-login`); or `script:module:attribute` for a `Model` object, which is how tests script the
     model."""
     browser_backend: str = 'montybot.browser.fake:FakeBrowser'
     """`module:attribute` of a callable that makes a closed `BrowserBackend` for one run."""

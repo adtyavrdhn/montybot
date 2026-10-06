@@ -54,7 +54,7 @@ markers = [
 
 [tool.ruff]
 line-length = 120
-extend-exclude = ["poc", "*.md"]
+extend-exclude = ["poc", "*.md", "montybot/vendor/claude_code"]
 
 [tool.ruff.lint]
 extend-select = ["I", "UP", "B"]
@@ -64,5 +64,6 @@ quote-style = "single"
 
 [tool.pyright]
 include = ["montybot", "tests"]
+exclude = ["montybot/vendor/claude_code"]
 strict = ["montybot"]
 pythonVersion = "3.11"
