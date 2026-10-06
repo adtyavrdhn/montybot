@@ -2,9 +2,10 @@
 # Playwright's image has Chromium and its system libraries; its tag matches the playwright version in uv.lock.
 FROM mcr.microsoft.com/playwright/python:v1.63.0-noble
 
-# Xvfb gives each headed Chrome its own screen; bwrap jails each Chrome (`montybot.engines:chromium_server`).
+# Xvfb gives each headed Chrome its own screen; bwrap jails each Chrome (`montybot.engines:chromium_server`); socat
+# carries its connections out of the jail to the egress proxy (montybot/browser/egress.py).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends xvfb bubblewrap \
+    && apt-get install -y --no-install-recommends xvfb bubblewrap socat \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.12 /uv /usr/local/bin/uv
