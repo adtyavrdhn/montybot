@@ -225,10 +225,10 @@ async def test_thread_history_and_status_share_a_snapshot(pool: Pool, monkeypatc
         }
     )
     response = await api.read_thread(request)
-    data = json.loads(response.body)
+    data = json.loads(bytes(response.body))
     assert data['run']['status'] == 'queued'
     assert data['messages'] == [{'role': 'user', 'text': 'hello'}]
     monkeypatch.setattr(store, 'load_history', original)
-    data = json.loads((await api.read_thread(request)).body)
+    data = json.loads(bytes((await api.read_thread(request)).body))
     assert data['run']['status'] == 'done'
     assert data['messages'][-1] == {'role': 'assistant', 'text': 'reply'}
