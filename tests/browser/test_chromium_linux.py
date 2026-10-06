@@ -31,7 +31,8 @@ from montybot.browser.contract import Navigate
 
 pytestmark = pytest.mark.anyio
 
-FAKE_XVFB = """#!/bin/sh
+# bash, not sh: Ubuntu's dash cannot redirect to a file descriptor above 9, and -displayfd is usually one.
+FAKE_XVFB = """#!/bin/bash
 echo "$@" > "$(dirname "$0")/xvfb-args"
 while [ $# -gt 0 ]; do [ "$1" = -displayfd ] && fd=$2; shift; done
 eval "echo 99 >&$fd"

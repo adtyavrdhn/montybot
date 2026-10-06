@@ -1,0 +1,78 @@
+# The whole product on one server: Postgres, the app with its jailed browsers, and Caddy for HTTPS.
+# deploy/deploy.sh runs it on the VM with the settings in /opt/montybot/.env (made by deploy/bootstrap.sh).
+name: montybot
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: montybot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: montybot
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U montybot']
+      interval: 2s
+      retries: 30
+
+  app:
+    build:
+      context: ..
+    image: montybot-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://montybot:${POSTGRES_PASSWORD:?}@postgres:5432/montybot
+      SESSION_SECRET: ${SESSION_SECRET:?}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?}
+      HOST: 0.0.0.0
+      PORT: '8000'
+      PUBLIC_URL: https://${DOMAIN:?}
+      SECURE_COOKIES: 'true'
+      EXECUTOR_ID: vm-1
+      MODEL: ${MODEL:-claude-code:claude-opus-5-5}
+      BROWSER_BACKEND: ${BROWSER_BACKEND:-montybot.engines:chromium_server}
+      CLAUDE_CODE_CREDENTIALS: file
+      CLAUDE_CODE_AUTH_FILE: /data/claude-code/auth.json
+      LOGFIRE_TOKEN: ${LOGFIRE_TOKEN:-}
+    volumes:
+      - claude-code:/data/claude-code
+    # bwrap makes new namespaces for each Chrome, which Docker's default seccomp and AppArmor profiles forbid, and
+    # mounts a fresh /proc, which the kernel refuses while Docker masks paths under /proc (systempaths).
+    # bwrap is the boundary between browsers; the container is not.
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - systempaths=unconfined
+    shm_size: 1gb
+    healthcheck:
+      test: ['CMD', 'python3', '-c', "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 5s
+      retries: 60
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      DOMAIN: ${DOMAIN:?}
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:?}
+      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:?}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  postgres: {}
+  claude-code: {}
+  caddy-data: {}
+  caddy-config: {}
