@@ -232,3 +232,62 @@ async def test_thread_history_and_status_share_a_snapshot(pool: Pool, monkeypatc
     data = json.loads(bytes((await api.read_thread(request)).body))
     assert data['run']['status'] == 'done'
     assert data['messages'][-1] == {'role': 'assistant', 'text': 'reply'}
+
+
+async def test_saved_browser_data_includes_storage_and_forgets_subdomains(pool: Pool) -> None:
+    import json
+    from types import SimpleNamespace
+
+    from starlette.requests import Request
+
+    from montybot import api
+    from montybot.browser.state import BLANK_URL, BrowserState, Cookie
+
+    async with pool.connection() as connection:
+        user = await store.create_user(connection, 'data@example.test', 'x')
+        assert user is not None
+    state = BrowserState(
+        url='https://auth.example.test/account',
+        cookies=[
+            Cookie(name='parent', value='dummy', domain='.example.test'),
+            Cookie(name='child', value='dummy', domain='auth.example.test'),
+            Cookie(name='unrelated', value='dummy', domain='other.test'),
+        ],
+        local_storage={
+            'https://auth.example.test': {'dummy': 'dummy'},
+            'https://storage-only.test': {'dummy': 'dummy'},
+        },
+        session_storage={'https://example.test': {'dummy': 'dummy'}},
+    )
+
+    class Jar:
+        async def load(self, *, user_id: str) -> BrowserState:
+            assert user_id == user.id
+            return state
+
+        async def save(self, *, user_id: str, state: BrowserState) -> None:
+            assert user_id == user.id
+
+    resources = SimpleNamespace(pool=pool, jar=Jar())
+
+    def request(method: str, site: str = '') -> Request:
+        return Request(
+            {
+                'type': 'http',
+                'method': method,
+                'path': '/',
+                'headers': [(b'content-type', b'application/json')],
+                'path_params': {'site': site},
+                'session': {'user_id': user.id},
+                'state': {'resources': resources},
+            }
+        )
+
+    listed = json.loads(bytes((await api.read_sign_ins(request('GET'))).body))
+    assert {'site': 'storage-only.test'} in listed
+    assert (await api.forget_sign_in(request('DELETE', 'example.test'))).status_code == 200
+    assert [cookie.domain for cookie in state.cookies] == ['other.test']
+    assert state.local_storage == {'https://storage-only.test': {'dummy': 'dummy'}}
+    assert state.session_storage == {} and state.url == BLANK_URL
+    assert (await api.forget_sign_in(request('DELETE', 'storage-only.test'))).status_code == 200
+    assert state.local_storage == {}

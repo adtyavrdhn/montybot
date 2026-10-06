@@ -91,3 +91,22 @@ def test_works_on_a_phone(app: App) -> None:
         phone.click('#menu-button')
         expect(phone.locator('#drawer')).to_have_class('drawer open')
         browser.close()
+
+
+@pytest.mark.scripted
+def test_repeated_enter_creates_one_chat_and_preserves_a_new_draft(app: App, person: Page) -> None:
+    sign_up(person, app)
+    pending = []
+    person.route(
+        '**/api/threads', lambda route: pending.append(route) if route.request.method == 'POST' else route.continue_()
+    )
+    person.fill('#message', 'Say hello.')
+    person.evaluate("document.getElementById('composer').requestSubmit()")
+    expect(person.locator('#send')).to_be_disabled()
+    person.evaluate("document.getElementById('composer').requestSubmit()")
+    person.fill('#message', 'My next question')
+    assert len(pending) == 1
+    pending[0].continue_()
+    expect(person.locator('.msg.assistant')).to_have_text('Hello! I am monty-bot.')
+    expect(person.locator('#message')).to_have_value('My next question')
+    expect(person.locator('#threads li')).to_have_count(1)

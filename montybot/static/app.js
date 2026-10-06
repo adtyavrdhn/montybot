@@ -472,6 +472,7 @@ $('close-browser').addEventListener('click', () => { $('browser').hidden = true;
 
 $('composer').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if ($('send').disabled) return;  // requestSubmit/Enter must obey the same in-flight guard as the button
   const text = $('message').value.trim();
   if (!text) return;
   const view = state.view;
@@ -481,8 +482,9 @@ $('composer').addEventListener('submit', async (event) => {
   try {
     const path = thread === null ? '/api/threads' : `/api/threads/${thread}/messages`;
     const created = await api(path, { method: 'POST', body: { text } }, current);
+    await loadThreads();  // a newly-created chat stays discoverable even if its originating view changed
     if (!current()) return;
-    $('message').value = '';
+    if ($('message').value.trim() === text) $('message').value = '';
     if (thread === null) {
       location.hash = `#/t/${created.thread_id}`;
       await loadThreads();
@@ -532,6 +534,9 @@ async function openSchedules() {
     name.textContent = `${s.name}: ${s.when}${s.paused ? ' (paused)' : ''}`;
     const actions = document.createElement('span');
     actions.append(
+      button('Open conversation', 'secondary', () => {
+        location.hash = `#/t/${s.thread_id}`;
+      }),
       button(s.paused ? 'Resume' : 'Pause', 'secondary', async () => {
         await api(`/api/schedules/${s.id}/${s.paused ? 'resume' : 'pause'}`, { method: 'POST', body: {} });
         await openSchedules();
