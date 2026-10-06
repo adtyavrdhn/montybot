@@ -24,7 +24,8 @@ The text format:
 
 Open shadow roots are walked in place of their host's children, with slotted content where the slot is; closed shadow
 roots cannot be read by any script, so they are not shown. Typed passwords show as `***`. Text past the size budget
-is cut at a line boundary and a last line says how many lines and refs were left out.
+is cut at a line boundary and a last line says how many lines and refs were left out. If the first prose line alone
+is too long, its prefix is shown with an explicit truncation notice; control lines are never partially shown.
 
 Refs are numbers stamped on elements (the `data-montybot-ref` attribute, and a map in the page), and live as long as
 the document. An element keeps its ref across snapshots for as long as it is on the page. When a re-render replaces
@@ -56,8 +57,9 @@ SNAPSHOT_JS: str = files('montybot.browser').joinpath('snapshot.js').read_text(e
 REF_ATTRIBUTE = 'data-montybot-ref'
 """The attribute the walker stamps on every element it gives a ref."""
 
-DEFAULT_BUDGET = 20_000
-"""The default size budget for `Snapshot.text`, in characters (UTF-16 code units, as JavaScript counts them)."""
+DEFAULT_BUDGET = 12_000
+"""The default size budget for `Snapshot.text`, in UTF-16 code units (as JavaScript counts them).
+Match the agent's page budget so the walker cuts whole lines and retains its omitted-lines/refs notice."""
 
 JSON = dict[str, 'JSON'] | list['JSON'] | str | int | float | bool | None
 

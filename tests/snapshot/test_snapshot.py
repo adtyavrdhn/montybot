@@ -451,3 +451,52 @@ async def test_size_budget(engine: Engine, site: str) -> None:
     )
     # Refs do not depend on the budget: elements past the cut are numbered all the same.
     assert (await SnapshotWalker(run_script=engine.run_script).snapshot()).text == EXPECTED['shop.html']
+
+
+@pytest.mark.parametrize('length', [11_900, 12_100, 13_000, 19_000, 20_000])
+async def test_default_budget_preserves_oversized_prose(engine: Engine, length: int) -> None:
+    from montybot.browsing import SNAPSHOT_LIMIT
+
+    await engine.goto('about:blank')
+    await engine.run_script(
+        "(n) => { document.body.innerHTML = '<p>' + 'x'.repeat(n) + '</p><button>More</button>'; }", length
+    )
+    walker = SnapshotWalker(run_script=engine.run_script)
+    small = await walker.snapshot()
+    assert walker.budget == SNAPSHOT_LIMIT == 12_000
+    assert len(small.text) <= SNAPSHOT_LIMIT
+    if length == 11_900:
+        assert small.text == 'x' * length + '\n[1] button "More"'
+    else:
+        assert small.text == 'x' * 11_920 + (
+            '\n[cut at 12000 characters: first line truncated; 1 more lines, 1 more refs]'
+        )
+    # Check assignment before a larger snapshot can mutate shared ref state. Internal preservation is not
+    # agent-visible completeness: code must not guess a ref omitted from its returned page.
+    assert (
+        await engine.run_script("() => document.querySelector('button').getAttribute('data-montybot-ref')", None) == '1'
+    )
+    await act(engine, walker, Click(target=Ref(ref='1')))
+    # A larger explicit budget can reveal the same internally retained ref.
+    full = await SnapshotWalker(run_script=engine.run_script, budget=30_000).snapshot()
+    assert full.text == 'x' * length + '\n[1] button "More"'
+    await act(engine, walker, Click(target=Ref(ref='1')))
+
+
+async def test_budget_never_exposes_a_partial_control(engine: Engine) -> None:
+    await engine.goto('about:blank')
+    await engine.run_script("() => { document.body.innerHTML = '<button>' + 'x'.repeat(200) + '</button>'; }", None)
+    small = await SnapshotWalker(run_script=engine.run_script, budget=90).snapshot()
+    assert small.text == '[cut at 90 characters: 1 more lines, 1 more refs]'
+
+
+async def test_partial_prose_reserves_the_complete_notice(engine: Engine) -> None:
+    await engine.goto('about:blank')
+    await engine.run_script(
+        "() => { document.body.innerHTML = '<p>' + 'x'.repeat(13000) + '</p>' + '<button>More</button>'.repeat(1000); }",
+        None,
+    )
+    small = await SnapshotWalker(run_script=engine.run_script).snapshot()
+    notice = '[cut at 12000 characters: first line truncated; 1000 more lines, 1000 more refs]'
+    assert small.text == 'x' * (12_000 - len(notice) - 1) + '\n' + notice
+    assert len(small.text) == 12_000
