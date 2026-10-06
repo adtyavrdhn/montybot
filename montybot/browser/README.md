@@ -8,6 +8,7 @@ the source of truth and this page is the map.
 | `state.py` | `BrowserState`, `Cookie`: one tab's URL, cookies (HttpOnly included), localStorage and sessionStorage per origin | the sign-in jar (#4) |
 | `contract.py` | `BrowserBackend`, the actions and targets, `Snapshot`, `Screenshot`, the errors | Chromium (#11), Servo (#12), snapshot (#13), E2B Desktop (#22) |
 | `service.py` | `BrowserService`: the API the agent and the web app call, with run id and user id on every call | browser service (#10), live view (#14), Monty host functions (#5) |
+| `live.py` | `FrameSource`, `Frame`, `Tabs`, `LiveViewBackend`: the live picture and the user's input, for the live view | live view (#14), Chromium (#11), Servo (#12) |
 | `host.py` | `BrowserHost`: the browser service, which owns every browser (#10) | live view (#14), Monty host functions (#5) |
 | `jar.py` | `SignInJar` and `JarLease`, with in-memory stand-ins | the encrypted jar and lease (#4) |
 | `snapshot.py`, `snapshot.js` | `SnapshotWalker`: the snapshot text and refs, from one JavaScript walker every engine runs | Chromium (#11), Servo (#12) |
@@ -128,6 +129,7 @@ run.
 | `snapshot(run_id, user_id)` | `SnapshotResult(snapshot, restarted)` | Agent only, so refused during a hand-off |
 | `screenshot(run_id, user_id, handoff_id=None)` | `ScreenshotResult(screenshot, restarted)` | |
 | `start_handoff(run_id, user_id, reason)` | `Handoff(handoff_id, run_id, user_id, reason)` | Idempotent: returns the active one |
+| `live_view(run_id, user_id, handoff_id)` | `FrameSource` | Only for the active hand-off. Ending the hand-off ends it |
 | `end_handoff(run_id, user_id, handoff_id)` | `HandoffEnded(handoff_id, url, saved)` | Saves state. A second call raises `HandoffNotActive` |
 | `save_state(run_id, user_id)` | `None` | Saves without closing. Allowed during a hand-off |
 | `close(run_id, user_id)` | `bool`: saved | Saves, closes, and ends any hand-off |
@@ -141,6 +143,9 @@ run.
   service starts a new one from the saved state first, and that call's result carries `Restarted(reason, url)` for
   the agent to read.
 - **Saving.** `saved` is False, and the jar left as it was, only when the engine raises `NotSupported('export')`.
+- **The live view** (`live_view`) gets frames and sends input only while its hand-off is active. A backend that
+  implements `LiveViewBackend` gives its own source (Chromium's screencast, Servo's screenshots); for any other, the
+  service can use `montybot.liveview.polling.PollingFrameSource`. `montybot.liveview.conformance` checks these rules.
 - The wire (HTTP, socket, in-process) is #10's choice. Everything is plain dataclasses, so it encodes to JSON.
 
 ## `BrowserHost`: the browser service

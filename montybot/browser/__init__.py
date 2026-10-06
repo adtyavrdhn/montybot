@@ -5,6 +5,7 @@ Import from the modules directly; this package re-exports nothing, so each name 
 - `montybot.browser.state`: `BrowserState` and `Cookie`, the engine-neutral saved sign-in.
 - `montybot.browser.contract`: `BrowserBackend`, the actions, and the errors.
 - `montybot.browser.service`: `BrowserService`, the API the agent and the web app call.
+- `montybot.browser.live`: `FrameSource`, the live picture and the user's input, for the live view (#14).
 - `montybot.browser.host`: `BrowserHost`, the browser service itself, over any backend.
 - `montybot.browser.jar`: `SignInJar` and `JarLease`, where saved sign-ins go, with in-memory stand-ins.
 - `montybot.browser.snapshot`: `SnapshotWalker`, the snapshot text and refs, from `snapshot.js`, for every engine.
