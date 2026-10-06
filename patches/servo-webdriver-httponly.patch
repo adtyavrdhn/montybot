@@ -1,0 +1,22 @@
+diff --git a/components/script/event_loop/webdriver_handlers.rs b/components/script/event_loop/webdriver_handlers.rs
+index 3b0d44a14..71bf134dc 100644
+--- a/components/script/event_loop/webdriver_handlers.rs
++++ b/components/script/event_loop/webdriver_handlers.rs
+@@ -1454,7 +1454,7 @@ pub(crate) fn handle_get_cookies(
+                         .window()
+                         .as_global_scope()
+                         .resource_threads()
+-                        .send(GetCookiesForUrl(url, sender, NonHTTP));
++                        .send(GetCookiesForUrl(url, sender, HTTP));
+                     Ok(receiver.recv().unwrap())
+                 },
+                 None => Ok(Vec::new()),
+@@ -1481,7 +1481,7 @@ pub(crate) fn handle_get_cookie(
+                         .window()
+                         .as_global_scope()
+                         .resource_threads()
+-                        .send(GetCookiesForUrl(url, sender, NonHTTP));
++                        .send(GetCookiesForUrl(url, sender, HTTP));
+                     let cookies = receiver.recv().unwrap();
+                     Ok(cookies
+                         .into_iter()
