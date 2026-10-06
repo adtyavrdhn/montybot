@@ -20,8 +20,8 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY montybot ./montybot
 RUN uv sync --frozen --no-dev
 
-# The Claude Code sign-in lives on a volume mounted here; a new named volume copies this owner.
-RUN mkdir -p /data/claude-code && chown pwuser:pwuser /data/claude-code
+# The Claude Code sign-in and the users' files live on volumes mounted here; a new named volume copies this owner.
+RUN mkdir -p /data/claude-code /data/workspaces && chown pwuser:pwuser /data/claude-code /data/workspaces
 USER pwuser
 
 CMD ["sh", "-c", "montybot migrate && exec montybot serve"]

@@ -19,16 +19,6 @@ def invoices() -> Iterator[Invoices]:
     site.stop()
 
 
-@pytest.fixture
-def workspaces_dir(tmp_path: Path) -> Path:
-    return tmp_path / 'workspaces'
-
-
-@pytest.fixture
-def app_env(workspaces_dir: Path) -> dict[str, str]:
-    return {'WORKSPACES_DIR': str(workspaces_dir)}
-
-
 @pytest.mark.u5
 @pytest.mark.scripted
 def test_download_invoices_and_total_them(app: App, client: Client, invoices: Invoices, workspaces_dir: Path) -> None:
