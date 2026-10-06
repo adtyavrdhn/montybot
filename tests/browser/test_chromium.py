@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 import shutil
 import socket
@@ -37,6 +38,8 @@ pytestmark = pytest.mark.anyio
 HEADLESS = ChromiumOptions(headless=True)
 HEADED = ChromiumOptions.for_this_machine()
 """A window on a Mac or a Linux desktop; on Linux without a desktop, Xvfb and bwrap."""
+SHOW_WINDOWS = os.environ.get('MONTYBOT_HEADED') == '1'
+"""Headed tests on a desktop open a real window per test, so they only run when asked for."""
 
 
 @pytest.fixture
@@ -46,6 +49,8 @@ def anyio_backend() -> str:
 
 def can_run(options: ChromiumOptions) -> str | None:
     """Why `options` cannot run on this machine, or None."""
+    if not options.headless and not options.virtual_screen and not SHOW_WINDOWS:
+        return 'opens real windows on this desktop; set MONTYBOT_HEADED=1 to run'
     if options.bwrap and sys.platform != 'linux':
         return 'bwrap needs Linux'
     for needed, tool in ((options.bwrap, options.bwrap_path), (options.virtual_screen, options.xvfb_path)):
