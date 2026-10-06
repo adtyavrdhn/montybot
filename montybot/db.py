@@ -1,0 +1,68 @@
+# Copied from viktor c1896df (viktor/db.py). The pgtask schema step is gone: DBOS creates its own tables on launch.
+from __future__ import annotations
+
+import re
+from collections.abc import Iterator
+from pathlib import Path
+
+from psycopg import AsyncConnection
+from psycopg.rows import DictRow, dict_row
+from psycopg_pool import AsyncConnectionPool
+
+Connection = AsyncConnection[DictRow]
+Pool = AsyncConnectionPool[Connection]
+
+MIGRATIONS_DIR = Path(__file__).parent / 'migrations'
+MIGRATION_LOCK = 0x6D6F6E74
+MIGRATION_FILE = re.compile(r'^(\d{4})_[a-z0-9_]+\.sql$')
+
+
+def create_pool(database_url: str) -> Pool:
+    return AsyncConnectionPool(
+        database_url,
+        open=False,
+        min_size=1,
+        max_size=10,
+        connection_class=Connection,
+        kwargs={'row_factory': dict_row},
+    )
+
+
+async def migrate(database_url: str, migrations_dir: Path = MIGRATIONS_DIR) -> list[int]:
+    """Apply pending SQL migrations under an advisory lock."""
+    applied: list[int] = []
+    async with await AsyncConnection.connect(database_url, autocommit=True) as connection:
+        await connection.execute('SELECT pg_advisory_lock(%s)', (MIGRATION_LOCK,))
+        try:
+            await connection.execute('CREATE SCHEMA IF NOT EXISTS montybot')
+            await connection.execute(
+                'CREATE TABLE IF NOT EXISTS montybot.schema_migrations '
+                '(version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())'
+            )
+            cursor = await connection.execute('SELECT version FROM montybot.schema_migrations')
+            done = {row[0] for row in await cursor.fetchall()}
+            for version, path in migration_files(migrations_dir):
+                if version in done:
+                    continue
+                async with connection.transaction():
+                    await connection.execute(path.read_bytes())
+                    await connection.execute('INSERT INTO montybot.schema_migrations (version) VALUES (%s)', (version,))
+                applied.append(version)
+        finally:
+            await connection.execute('SELECT pg_advisory_unlock(%s)', (MIGRATION_LOCK,))
+    return applied
+
+
+def migration_files(migrations_dir: Path) -> Iterator[tuple[int, Path]]:
+    """Two branches can each add the next number. A database that has applied one of them would skip
+    the other without a word, so a repeated number is an error."""
+    seen: dict[int, str] = {}
+    for path in sorted(migrations_dir.glob('*.sql')):
+        match = MIGRATION_FILE.match(path.name)
+        if match is None:
+            raise ValueError(f'migration file name {path.name!r} must look like 0001_name.sql')
+        version = int(match.group(1))
+        if version in seen:
+            raise ValueError(f'migrations {seen[version]!r} and {path.name!r} share the number {version:04d}')
+        seen[version] = path.name
+        yield version, path
