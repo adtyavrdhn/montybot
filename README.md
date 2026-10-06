@@ -33,8 +33,9 @@ separate cache duration. Trace/span IDs correlate operations; user content is no
 
 Pydantic AI keeps `include_content=False` and passes through an allowlist adapter before export. Messages, tool
 arguments/results, code, page contents, typed input, cookies/storage state, credentials, hand-off IDs/links, full
-URLs and exception text are excluded. HTTP/SQL auto-instrumentation and model metrics are deliberately disabled
-because they can expose URL, query or provider metadata. Keep operation names literal and do not add argument
+URLs and exception text are excluded. Exported resources carry only the fixed `service.name=montybot` label;
+environment/detector resource metadata is discarded. HTTP/SQL auto-instrumentation and model metrics are deliberately
+disabled because they can expose URL, query or provider metadata. Keep operation names literal and do not add argument
 capture when extending instrumentation. `tests/e2e/test_traces.py` checks the exported privacy boundary.
 
 ## Tests
