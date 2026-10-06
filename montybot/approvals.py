@@ -27,6 +27,8 @@ from dbos import DBOS
 from pydantic_ai import DeferredToolRequests, DeferredToolResults, RunContext, ToolDenied
 
 from montybot import store
+from montybot.browser.contract import BrowserError
+from montybot.browser.service import UnknownRun
 from montybot.deps import RunDeps
 from montybot.models import AskKind
 from montybot.resources import Resources
@@ -48,6 +50,9 @@ async def ask(
     occurrence = deps.asked.next()
     the_id = ask_id(deps.run_id, occurrence)
     await DBOS.run_step_async(
+        {'name': f'ask.save.{occurrence}'}, save_browser, deps.resources, deps.run_id, deps.user_id
+    )
+    await DBOS.run_step_async(
         {'name': f'ask.open.{occurrence}'},
         open_ask,
         deps.resources,
@@ -64,6 +69,15 @@ async def ask(
         {'name': f'ask.close.{occurrence}'}, close_ask, deps.resources, the_id, deps.run_id, answer is None
     )
     return answer if answer is not None else late
+
+
+async def save_browser(resources: Resources, run_id: str, user_id: str) -> None:
+    """Save the run's browser before it waits, so a restart during the wait reopens it where it was."""
+    try:
+        await resources.browser.save_state(run_id=run_id, user_id=user_id)
+    except (UnknownRun, BrowserError):
+        return  # no browser yet, or one that cannot export: nothing more to keep
+    await resources.lease.acquire(user_id=user_id, run_id=run_id)  # renewed for at least as long as the wait
 
 
 async def open_ask(

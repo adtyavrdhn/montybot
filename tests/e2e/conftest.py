@@ -11,28 +11,24 @@ pytest process                                 app process (python -m montybot s
 The model is `e2e.scripts:model`, a `FunctionModel` that picks its script from the user's message. Tests wait for
 what the user would see (a reply, an ask, an order on the site), never for a fixed time.
 
-Postgres: `MONTYBOT_TEST_POSTGRES` (a server URL), else a `postgres:17` container this session starts with Docker.
+Postgres comes from `tests/conftest.py`.
 """
 
 from __future__ import annotations
 
 import os
-import shutil
 import signal
-import socket
 import subprocess
 import sys
-import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
 import httpx
-import psycopg
 import pytest
-from psycopg import sql
+from helpers import eventually, free_port
 
 ROOT = Path(__file__).resolve().parents[2]
 TESTS = ROOT / 'tests'
@@ -54,63 +50,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
-# --- Postgres ---
-
-
-def _reachable(url: str) -> bool:
-    try:
-        psycopg.connect(url, connect_timeout=2).close()
-    except psycopg.OperationalError:
-        return False
-    return True
-
-
-@pytest.fixture(scope='session')
-def postgres() -> Iterator[str]:
-    """A Postgres server URL whose user may create databases."""
-    url = os.environ.get('MONTYBOT_TEST_POSTGRES')
-    if url:
-        yield url
-        return
-    if shutil.which('docker') is None:
-        pytest.skip('set MONTYBOT_TEST_POSTGRES or install Docker')
-    port = _free_port()
-    name = f'montybot-test-{uuid.uuid4().hex[:8]}'
-    subprocess.run(
-        [
-            'docker',
-            'run',
-            '-d',
-            '--rm',
-            '--name',
-            name,
-            '-e',
-            'POSTGRES_PASSWORD=postgres',
-            '-p',
-            f'{port}:5432',
-            'postgres:17',
-            '-c',
-            'max_connections=500',
-        ],
-        check=True,
-        capture_output=True,
-    )
-    url = f'postgresql://postgres:postgres@127.0.0.1:{port}/postgres'
-    try:
-        _eventually(lambda: _reachable(url) or None, timeout=60, what='Postgres to start')
-        yield url
-    finally:
-        subprocess.run(['docker', 'rm', '-f', name], capture_output=True, check=False)
-
-
-@pytest.fixture
-def database_url(postgres: str) -> str:
-    name = f't_{uuid.uuid4().hex[:12]}'
-    with psycopg.connect(postgres, autocommit=True) as connection:
-        connection.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(name)))
-    return postgres.rsplit('/', 1)[0] + f'/{name}'
-
-
 # --- the app ---
 
 
@@ -120,7 +59,7 @@ class App:
 
     env: dict[str, str]
     log: Path
-    port: int = field(default_factory=lambda: _free_port())
+    port: int = field(default_factory=lambda: free_port())
     process: subprocess.Popen[bytes] | None = None
 
     @property
@@ -143,7 +82,7 @@ class App:
             except httpx.HTTPError:
                 return None
 
-        _eventually(healthy, what='the app to start')
+        eventually(healthy, what='the app to start')
 
     def kill(self) -> None:
         assert self.process is not None
@@ -165,6 +104,7 @@ def app(database_url: str, request: pytest.FixtureRequest, tmp_path: Path) -> It
     env = {
         'DATABASE_URL': database_url,
         'SESSION_SECRET': 'test-session-secret',
+        'ENCRYPTION_KEY': 'bW9udHlib3QtdGVzdC1rZXktMzItYnl0ZXMtbG9uZyE=',
         'MODEL': 'script:e2e.scripts:model',
         'BROWSER_BACKEND': backend,
         'PYTHONPATH': os.pathsep.join([str(TESTS), os.environ.get('PYTHONPATH', '')]),
@@ -225,7 +165,7 @@ class Client:
             ask = run['ask']
             return ask if ask is not None and ask['kind'] == kind else None
 
-        return _eventually(asked, what=f'a {kind} ask')
+        return eventually(asked, what=f'a {kind} ask')
 
     def wait_for_reply(self, thread_id: str) -> str:
         def replied() -> str | None:
@@ -234,7 +174,7 @@ class Client:
                 return None
             return thread['messages'][-1]['text']
 
-        return _eventually(replied, what='the reply')
+        return eventually(replied, what='the reply')
 
     def answer(self, ask: dict[str, Any], **answer: Any) -> None:
         response = self.http.post(f'/api/asks/{ask["id"]}', json=answer)
@@ -280,26 +220,3 @@ def client(app: App) -> Iterator[Client]:
         yield client
     finally:
         client.http.close()
-
-
-# --- helpers ---
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
-
-
-def _eventually(check: Callable[[], T | None], *, timeout: float = WAIT, what: str = 'it') -> T:
-    deadline = time.monotonic() + timeout
-    while True:
-        result = check()
-        if result is not None:
-            return result
-        if time.monotonic() > deadline:
-            raise AssertionError(f'gave up waiting for {what}')
-        time.sleep(0.2)
-
-
-eventually = _eventually
