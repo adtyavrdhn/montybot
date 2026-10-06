@@ -164,6 +164,33 @@ def total_invoices(turn: Turn) -> ModelResponse:
     return say(f'Your last {found.group(1)} invoices come to €{found.group(2)}.')
 
 
+# U5 with the CPython tier (#6): Monty downloads and totals, pandas totals the same files in CPython and reads what
+# Monty wrote, and Monty reads what pandas wrote.
+PANDAS_TOTAL = """
+import pandas as pd
+from pathlib import Path
+frames = [pd.read_csv(name) for name in NAMES]
+total = sum((frame.quantity * frame.unit_price).sum() for frame in frames)
+Path('pandas-total.txt').write_text(f'{total:.2f}')
+print(f'pandas: {total:.2f}, Monty: {Path("monty-total.txt").read_text()}')
+"""
+
+
+def total_invoices_with_pandas(turn: Turn) -> ModelResponse:
+    if not turn.returns:
+        save = "\nPath('/work/monty-total.txt').write_text(f'{total:.2f}')\nprint(saved)"
+        return run(f'site = {turn.url!r}' + DOWNLOAD_INVOICES + save)
+    if not turn.called('run_python'):
+        names = [name.removeprefix('/work/') for name in re.findall(r"'(/work/[^']+)'", turn.last)]
+        return call('run_python', code=f'NAMES = {names!r}' + PANDAS_TOTAL)
+    if turn.called('run_code') < 2:
+        return run("from pathlib import Path\nprint('read back:', Path('/work/pandas-total.txt').read_text())")
+    found = re.search(r'pandas: (\d+\.\d\d), Monty: (\d+\.\d\d)', turn.result_of('run_python'))
+    if found is None:
+        return say(f'I could not total them. {turn.result_of("run_python")}')
+    return say(f'Your last three invoices come to €{found.group(1)} (Monty got €{found.group(2)}; {turn.last}).')
+
+
 def show_file(turn: Turn) -> ModelResponse:
     """Lists the user's files, then reads the path at the end of the message, wherever it points."""
     if not turn.returns:
@@ -291,6 +318,7 @@ SCRIPTS: dict[str, Script] = {
     'Find the three cheapest flights to Lisbon next Friday': cheapest_flights,
     'What is on offer today at': todays_offer,
     'Download my last three invoices from': total_invoices,
+    'Total my last three invoices with pandas from': total_invoices_with_pandas,
     'Show me my files and the file': show_file,
 }
 
