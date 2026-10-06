@@ -91,3 +91,15 @@ handling. Real DBOS restart/replay coverage is run in CI's Postgres e2e harness.
 Tests assert behavior, not elapsed-time or model-speed improvements. Local checks
 are limited to changed files and focused tests; no full local pytest/typecheck,
 Docker or Full Monty run. Full repository checks are delegated to CI before merge.
+
+Independent adversarial review found pending-poll/SSE ordering and delayed browser
+callback races; both were corrected with view/request-generation guards. Follow-up
+review conditionally approved merge with green CI. Further stale refresh-401 and
+ask-answer callbacks were guarded too. An inline streaming failure telemetry probe
+exported two spans and found none of its prompt, partial-text or exception sentinels.
+The real e2e test now includes interrupted model retry, completed-step replay and
+failure-after-preview/reconnect. Actual pre-deployment legacy recordings and a
+commit-before-DBOS-record crash-window fault injection were not reproduced; legacy
+compatibility and idempotent final writes are source/targeted-guard verified, not a
+claim of exhaustive upgrade/crash testing. No live-provider or measured latency
+benchmark was run.

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
-from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
+from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 if TYPE_CHECKING:
@@ -57,6 +57,14 @@ def model() -> FunctionModel:
         yield 'before answering.'
         while not gate.exists():
             await asyncio.sleep(0.05)
+        if any(
+            isinstance(message, ModelRequest)
+            and any(
+                isinstance(part, UserPromptPart) and part.content == 'Fail after preview.' for part in message.parts
+            )
+            for message in messages
+        ):
+            raise RuntimeError('private-provider-error-sentinel')
         yield {0: DeltaToolCall(name='ask_user', json_args=json.dumps({'question': QUESTION}), tool_call_id='colour')}
 
     return FunctionModel(stream_function=stream)
@@ -172,3 +180,32 @@ def test_streaming_preview_and_completed_model_step_survive_recovery(app: App, c
         {'role': 'assistant', 'text': FINAL},
     ]  # The initial assistant text + tool call is not a durable chat reply.
     assert counter.read_text().splitlines() == ['1', '1', '1']
+
+
+def test_streaming_failure_reconciles_preview_and_reconnect(client: Client, tmp_path: Path) -> None:
+    from montybot.workflows import FAILURE_NOTICE
+
+    client.sign_up()
+    prompt = 'Fail after preview.'
+    thread_id = client.ask(prompt)
+    run_id = client.thread(thread_id)['run']['id']
+    path = f'/api/runs/{run_id}/events'
+    with client.http.stream('GET', path) as response:
+        events = sse_events(response)
+        wait_event(events, 'preview', lambda value: value['text'] == PARTIAL)
+        (tmp_path / 'stream-gate').touch()
+        terminal = wait_event(events, 'status', lambda value: value['status'] == 'failed')
+        assert terminal['output'] == FAILURE_NOTICE
+        assert 'private-provider-error-sentinel' not in json.dumps(terminal)
+        assert list(events) == []
+    with client.http.stream('GET', path) as response:
+        replay = list(sse_events(response))
+        assert len(replay) == 1
+        assert replay[0][0] == 'status'
+        assert replay[0][1]['status'] == 'failed'
+        assert replay[0][1]['output'] == FAILURE_NOTICE
+    assert client.wait_for_reply(thread_id, failed=True) == FAILURE_NOTICE
+    assert client.thread(thread_id)['messages'] == [
+        {'role': 'user', 'text': prompt},
+        {'role': 'assistant', 'text': FAILURE_NOTICE},
+    ]

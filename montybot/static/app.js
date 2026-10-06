@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const state = { thread: null, run: null, poll: null, screenTimer: null, liveAsk: null, signingUp: false, routing: false,
   events: null, streamRun: null, preview: null, previewBubble: null, streamError: false, view: 0, refresh: 0 };
 
-async function api(path, options = {}) {
+async function api(path, options = {}, current = () => true) {
   const init = { credentials: 'same-origin', ...options, headers: { ...(options.headers || {}) } };
   if (init.body !== undefined) {
     init.headers['Content-Type'] = 'application/json';
@@ -14,7 +14,7 @@ async function api(path, options = {}) {
   const response = await fetch(path, init);
   const type = response.headers.get('Content-Type') || '';
   const data = type.includes('application/json') ? await response.json() : null;
-  if (response.status === 401 && path !== '/api/signin') signedOut();
+  if (response.status === 401 && path !== '/api/signin' && current()) signedOut();
   if (!response.ok) {
     const detail = data && typeof data.detail === 'string' ? data.detail : `Request failed (${response.status})`;
     const error = new Error(detail);
@@ -137,7 +137,7 @@ async function refresh() {
   if (id === null) return;
   let thread;
   try {
-    thread = await api(`/api/threads/${id}`);
+    thread = await api(`/api/threads/${id}`, {}, current);
   } catch (error) {
     if (!current()) return;
     if (error.status === 404) { location.hash = '#/new'; return; }
@@ -260,6 +260,7 @@ function followRun(run) {
     let status;
     try { status = JSON.parse(event.data); } catch { return; }
     if (status.id !== run.id || status.thread_id !== thread) return;
+    state.refresh++;  // discard any poll response captured before this authoritative SSE update
     renderRun(status);
     if (!['queued', 'running', 'waiting'].includes(status.status)) {
       // renderRun closes the source and removes the draft BEFORE loading committed history.
@@ -334,7 +335,18 @@ function button(text, kind, onClick) {
 }
 
 async function answer(ask, body) {
-  await api(`/api/asks/${ask.id}`, { method: 'POST', body });
+  const view = state.view;
+  const thread = state.thread;
+  const runId = state.run && state.run.id;
+  const current = () => state.view === view && state.thread === thread && state.run &&
+    state.run.id === runId && state.run.ask && state.run.ask.id === ask.id;
+  try {
+    await api(`/api/asks/${ask.id}`, { method: 'POST', body }, current);
+  } catch (error) {
+    if (!current()) return;
+    throw error;
+  }
+  if (!current()) return;
   $('ask').hidden = true;
   $('ask').dataset.id = '';
   schedulePoll();
@@ -342,7 +354,20 @@ async function answer(ask, body) {
 }
 
 async function takeOver(ask) {
-  const link = await api(`/api/runs/${state.run.id}/live`, { method: 'POST', body: {} });
+  const view = state.view;
+  const thread = state.thread;
+  const runId = state.run && state.run.id;
+  const current = () => state.view === view && state.thread === thread && state.run &&
+    state.run.id === runId && state.run.status === 'waiting' && state.run.ask && state.run.ask.id === ask.id;
+  if (!current()) return;
+  let link;
+  try {
+    link = await api(`/api/runs/${runId}/live`, { method: 'POST', body: {} }, current);
+  } catch (error) {
+    if (!current()) return;  // an old request must not alert or sign out a newer view
+    throw error;
+  }
+  if (!current()) return;
   state.liveAsk = ask.id;
   stopWatching();
   $('browser-label').textContent = 'You have the browser. Give it back when you are done.';
@@ -357,11 +382,23 @@ async function takeOver(ask) {
 
 function watchBrowser() {
   if (state.screenTimer !== null || state.liveAsk !== null) return;
+  const view = state.view;
+  const thread = state.thread;
+  const runId = state.run && state.run.id;
+  const askId = state.run && state.run.ask ? state.run.ask.id : null;
   const tick = async () => {
-    if (state.run === null || $('browser').hidden) return;
-    const response = await fetch(`/api/runs/${state.run.id}/screen`, { credentials: 'same-origin' });
-    if (!response.ok) return;
-    const url = URL.createObjectURL(await response.blob());
+    const timer = state.screenTimer;
+    const current = () => state.view === view && state.thread === thread && state.run &&
+      state.run.id === runId && ['queued', 'running'].includes(state.run.status) &&
+      (state.run.ask ? state.run.ask.id : null) === askId && state.liveAsk === null &&
+      state.screenTimer === timer && !$('browser').hidden;
+    if (!current()) return;
+    const response = await fetch(`/api/runs/${runId}/screen`, { credentials: 'same-origin' });
+    if (!current() || !response.ok) return;
+    const blob = await response.blob();
+    if (!current()) return;
+    const url = URL.createObjectURL(blob);
+    if (!current()) { URL.revokeObjectURL(url); return; }
     const old = $('screen').src;
     $('screen').src = url;
     if (old.startsWith('blob:')) URL.revokeObjectURL(old);
@@ -395,6 +432,10 @@ function stopWatching() {
 function hideBrowser() {
   $('browser').hidden = true;
   $('live').src = 'about:blank';
+  const old = $('screen').src || '';
+  $('screen').removeAttribute('src');
+  $('screen').hidden = true;
+  if (old.startsWith('blob:')) URL.revokeObjectURL(old);
   updateBrowserButton();
 }
 
