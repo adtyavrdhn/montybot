@@ -6,7 +6,7 @@ Subclass it in a test module, under a name pytest collects, and say how to make 
         @asynccontextmanager
         async def backend(self, site: Site) -> AsyncGenerator[BrowserBackend]:
             async with async_playwright() as playwright:
-                yield ChromiumBackend(await playwright.chromium.launch())
+                yield ChromiumBackend(playwright=playwright, options=ChromiumOptions(headless=True))
 
 `backend` yields a closed backend; the tests open it. For each feature in `not_supported`, the tests that use it check
 that it raises `NotSupported` instead of doing it.

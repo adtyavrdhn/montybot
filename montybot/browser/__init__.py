@@ -10,6 +10,7 @@ Import from the modules directly; this package re-exports nothing, so each name 
 - `montybot.browser.snapshot`: `SnapshotWalker`, the snapshot text and refs, from `snapshot.js`, for every engine.
 - `montybot.browser.fake`: `FakeBrowser`, an in-memory `BrowserBackend`.
 - `montybot.browser.conformance`: `BrowserBackendConformance`, the tests every backend passes (needs pytest).
+- `montybot.browser.chromium`: `ChromiumBackend`, real Chrome through Playwright (`chromium_linux`: Xvfb and bwrap).
 
 See `README.md` next to this file.
 """

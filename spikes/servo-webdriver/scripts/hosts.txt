@@ -1,0 +1,1 @@
+127.0.0.1 shop.test www.shop.test api.shop.test other.test

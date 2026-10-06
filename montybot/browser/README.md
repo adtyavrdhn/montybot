@@ -13,6 +13,7 @@ the source of truth and this page is the map.
 | `snapshot.py`, `snapshot.js` | `SnapshotWalker`: the snapshot text and refs, from one JavaScript walker every engine runs | Chromium (#11), Servo (#12) |
 | `fake.py` | `FakeBrowser`: an in-memory backend with scriptable pages | agent-side work and fixture tests (#2, #5) |
 | `conformance.py` | `BrowserBackendConformance`: the tests every backend passes | every backend |
+| `chromium.py`, `chromium_linux.py` | `ChromiumBackend`: real Chrome through Playwright; Xvfb and bwrap on Linux. See [`CHROMIUM.md`](CHROMIUM.md) | #11 |
 
 ## `BrowserBackend`
 
@@ -199,7 +200,7 @@ class TestChromium(BrowserBackendConformance):
     @asynccontextmanager
     async def backend(self, site: Site) -> AsyncGenerator[BrowserBackend]:
         async with async_playwright() as playwright:
-            yield ChromiumBackend(await playwright.chromium.launch())
+            yield ChromiumBackend(playwright=playwright, options=ChromiumOptions(headless=True))
 ```
 
 The suite serves a small site on `127.0.0.1` (and `localhost`, for a second origin and cookie host) and checks: an

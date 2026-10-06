@@ -1,0 +1,212 @@
+"""The Linux launch path for `ChromiumBackend`: a virtual screen per browser, and Chrome inside bubblewrap.
+
+Neither has run on Linux yet. On a Mac, the tests drive this code with stand-in `Xvfb` and `bwrap` scripts.
+
+- `start_virtual_screen` starts one Xvfb per browser. Xvfb picks a free display number itself (`-displayfd`), listens
+  only on its socket file (no TCP, no abstract socket), and accepts only clients with this screen's random cookie.
+- `write_bwrap_script` writes the program Playwright runs instead of Chrome. It starts Chrome inside bwrap with its
+  own profile folder, a private `/tmp`, an empty environment, and only this screen's X socket. Playwright still talks
+  to Chrome over the CDP pipe on fds 3 and 4, which bwrap passes through. There is no debugging port.
+
+The network is not separated here: Chrome shares the host's network namespace. DESIGN.md's `pasta` step belongs to
+the server setup (#7).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import os
+import secrets
+import shlex
+import struct
+from dataclasses import dataclass
+from pathlib import Path
+
+X11_SOCKET_DIR = Path('/tmp/.X11-unix')
+_FAMILY_WILD = 0xFFFF
+_COOKIE_NAME = b'MIT-MAGIC-COOKIE-1'
+
+# Read-only host paths Chrome needs inside the sandbox; missing ones are skipped. Not checked on a real distro yet.
+_READ_ONLY_PATHS = (
+    '/usr',
+    '/etc/fonts',
+    '/etc/ssl',
+    '/etc/ca-certificates',
+    '/etc/pki',
+    '/etc/resolv.conf',
+    '/etc/hosts',
+    '/etc/nsswitch.conf',
+    '/etc/localtime',
+    '/sys/devices/system/cpu',
+)
+# Top-level folders that are symlinks into /usr on merged-/usr distros, and real folders on others.
+_ROOT_LINKS = ('/bin', '/sbin', '/lib', '/lib32', '/lib64')
+
+
+@dataclass(frozen=True, kw_only=True)
+class Display:
+    """An X display that one browser may use."""
+
+    number: int
+    xauthority: Path
+    """The client cookie file. Only this display's browser gets it."""
+
+    @property
+    def name(self) -> str:
+        """The `DISPLAY` value, such as `:7`."""
+        return f':{self.number}'
+
+    @property
+    def socket(self) -> Path:
+        return X11_SOCKET_DIR / f'X{self.number}'
+
+
+@dataclass(kw_only=True)
+class VirtualScreen:
+    """A running Xvfb, owned by one browser."""
+
+    display: Display
+    process: asyncio.subprocess.Process
+
+    async def stop(self) -> None:
+        """Stop Xvfb: SIGTERM, then SIGKILL after 5 seconds. Safe to call twice."""
+        if self.process.returncode is not None:
+            return
+        with contextlib.suppress(ProcessLookupError):
+            self.process.terminate()
+        try:
+            await asyncio.wait_for(self.process.wait(), 5)
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                self.process.kill()
+            await self.process.wait()
+
+
+def xauthority_entry(*, number: str, cookie: bytes) -> bytes:
+    """One `.Xauthority` record for any host (FamilyWild), display `number`, with an MIT-MAGIC-COOKIE-1."""
+
+    def counted(data: bytes) -> bytes:
+        return struct.pack('>H', len(data)) + data
+
+    return (
+        struct.pack('>H', _FAMILY_WILD)
+        + counted(b'')
+        + counted(number.encode())
+        + counted(_COOKIE_NAME)
+        + counted(cookie)
+    )
+
+
+def _write_private(path: Path, data: bytes) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'wb') as file:
+        file.write(data)
+
+
+async def start_virtual_screen(
+    *, workdir: Path, width: int, height: int, xvfb: str = 'Xvfb', timeout: float = 10
+) -> VirtualScreen:
+    """Start an Xvfb screen of `width` x `height` on a free display, with its files in `workdir`."""
+    cookie = secrets.token_bytes(16)
+    server_auth = workdir / 'xvfb-auth'
+    _write_private(server_auth, xauthority_entry(number='', cookie=cookie))  # the server ignores the number
+    read_fd, write_fd = os.pipe()
+    args = [
+        *('-displayfd', str(write_fd)),
+        *('-screen', '0', f'{width}x{height}x24'),
+        *('-nolisten', 'tcp'),
+        *('-nolisten', 'local'),  # the Linux abstract socket, reachable from any process in the network namespace
+        *('-auth', str(server_auth)),
+        '-noreset',
+    ]
+    log = os.open(workdir / 'xvfb.log', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        process = await asyncio.create_subprocess_exec(
+            xvfb,
+            *args,
+            pass_fds=(write_fd,),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=log,
+            start_new_session=True,
+        )
+    except BaseException:
+        os.close(read_fd)
+        raise
+    finally:
+        os.close(write_fd)
+        os.close(log)
+    try:
+        line = await asyncio.wait_for(_read_line(read_fd), timeout)
+        number = int(line)
+    except (TimeoutError, ValueError) as error:
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        await process.wait()
+        log_tail = (workdir / 'xvfb.log').read_text(errors='replace')[-500:]
+        raise RuntimeError(f'Xvfb did not start: {log_tail or "no output"}') from error
+    xauthority = workdir / 'Xauthority'
+    _write_private(xauthority, xauthority_entry(number=str(number), cookie=cookie))
+    return VirtualScreen(display=Display(number=number, xauthority=xauthority), process=process)
+
+
+async def _read_line(fd: int) -> bytes:
+    """Read one line from the pipe `fd`, then close it."""
+    loop = asyncio.get_running_loop()
+    reader = asyncio.StreamReader()
+    transport, _ = await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(fd, 'rb', 0))
+    try:
+        return await reader.readline()
+    finally:
+        transport.close()
+
+
+def bwrap_command(*, chrome: Path, profile: Path, display: Display | None, bwrap: str = 'bwrap') -> list[str]:
+    """The bwrap command line that runs `chrome` with `profile` as its only writable folder.
+
+    Chrome's own arguments, which Playwright passes (`--user-data-dir=PROFILE`, `--remote-debugging-pipe`, ...),
+    go after this. The profile is mounted at the same path inside, so Playwright's `--user-data-dir` works unchanged.
+    """
+    command = [
+        bwrap,
+        '--unshare-user',
+        '--unshare-pid',
+        '--unshare-ipc',
+        '--unshare-uts',
+        '--unshare-cgroup-try',
+        '--die-with-parent',
+        '--new-session',
+        '--clearenv',
+    ]
+    for path in _READ_ONLY_PATHS:
+        command += ['--ro-bind-try', path, path]
+    for path in _ROOT_LINKS:
+        if os.path.islink(path):
+            command += ['--symlink', os.readlink(path), path]
+        else:
+            command += ['--ro-bind-try', path, path]
+    chrome_dir = str(chrome.parent)
+    command += ['--ro-bind', chrome_dir, chrome_dir]
+    command += ['--proc', '/proc', '--dev', '/dev', '--tmpfs', '/dev/shm', '--tmpfs', '/tmp']
+    command += ['--bind', str(profile), str(profile), '--chdir', str(profile)]
+    env = {'HOME': str(profile), 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
+    if display is not None:
+        command += ['--bind', str(display.socket), str(display.socket)]
+        command += ['--ro-bind', str(display.xauthority), str(display.xauthority)]
+        env |= {'DISPLAY': display.name, 'XAUTHORITY': str(display.xauthority)}
+    for name, value in env.items():
+        command += ['--setenv', name, value]
+    return [*command, str(chrome)]
+
+
+def write_bwrap_script(
+    *, path: Path, chrome: Path, profile: Path, display: Display | None, bwrap: str = 'bwrap'
+) -> Path:
+    """Write an executable script at `path` that runs Chrome in bwrap with the arguments it is given."""
+    command = bwrap_command(chrome=chrome, profile=profile, display=display, bwrap=bwrap)
+    path.write_text(
+        f'#!/bin/sh\n# Written by montybot for one browser. CDP stays on fds 3 and 4.\nexec {shlex.join(command)} "$@"\n'
+    )
+    path.chmod(0o700)
+    return path
