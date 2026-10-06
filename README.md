@@ -3,6 +3,11 @@
 Notes and design for an always-on agent built on Monty and Pydantic AI: reachable from chat channels, running in
 Monty by default and in a real machine only when a process has to run, with computer use and human takeover.
 
+## Design
+
+[`DESIGN.md`](DESIGN.md) is the current design for monty-bot: scheduled browser runs in Monty and a sandboxed
+Chromium, DBOS for schedules, and hand-off to the user when the agent gets stuck.
+
 ## Notes
 
 Dated files in [`notes/`](notes/), newest last. Later notes win over earlier ones.
