@@ -74,5 +74,4 @@ label { display: block; margin: .8em 0; color: var(--muted); }
 /* Wider screens: chat beside the browser, as in ChatGPT agent and Muse. */
 @media (min-width: 900px) {
   #browser { width: 55%; }
-  #browser-button { display: none; }
 }

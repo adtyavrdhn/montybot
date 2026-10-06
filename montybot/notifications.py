@@ -55,31 +55,65 @@ def _b64(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode().rstrip('=')
 
 
+MAX_SUBSCRIPTIONS = 10
+"""Push subscriptions kept per user; adding one more drops the oldest."""
+
+
+class TakenEndpoint(Exception):
+    """The push endpoint is registered to another user."""
+
+
 async def add_subscription(connection: Connection, user_id: str, endpoint: str, keys: dict[str, str]) -> None:
-    await connection.execute(
-        'INSERT INTO montybot.push_subscriptions (endpoint, user_id, keys) VALUES (%s, %s, %s) '
-        'ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, keys = EXCLUDED.keys',
-        (endpoint, user_id, Jsonb(keys)),
+    """Save the subscription, or update its keys if the user has it already. Keeps the user's newest
+    `MAX_SUBSCRIPTIONS`. Raises `TakenEndpoint` if another user registered this endpoint."""
+    async with connection.transaction():
+        cursor = await connection.execute(
+            'INSERT INTO montybot.push_subscriptions (endpoint, user_id, keys) VALUES (%s, %s, %s) '
+            'ON CONFLICT (endpoint) DO UPDATE SET keys = EXCLUDED.keys, created_at = now() '
+            'WHERE montybot.push_subscriptions.user_id = EXCLUDED.user_id RETURNING endpoint',
+            (endpoint, user_id, Jsonb(keys)),
+        )
+        if await cursor.fetchone() is None:
+            raise TakenEndpoint(endpoint)
+        await connection.execute(
+            'DELETE FROM montybot.push_subscriptions WHERE user_id = %s AND endpoint NOT IN ('
+            'SELECT endpoint FROM montybot.push_subscriptions WHERE user_id = %s ORDER BY created_at DESC LIMIT %s)',
+            (user_id, user_id, MAX_SUBSCRIPTIONS),
+        )
+
+
+async def remove_subscription(connection: Connection, user_id: str, endpoint: str) -> bool:
+    cursor = await connection.execute(
+        'DELETE FROM montybot.push_subscriptions WHERE user_id = %s AND endpoint = %s', (user_id, endpoint)
     )
+    return cursor.rowcount > 0
 
 
 async def notify(resources: Resources, *, user_id: str, thread_id: str, kind: NoticeKind, tag: str) -> None:
+    """Push and email that the bot needs the user. Never raises: a failure is logged by type only."""
+    try:
+        await _notify(resources, user_id=user_id, thread_id=thread_id, kind=kind, tag=tag)
+    except Exception as error:  # noqa: BLE001  a notification must never fail the run
+        logfire.warn('A notification was not sent: {error_type}', error_type=type(error).__name__)
+
+
+async def _notify(resources: Resources, *, user_id: str, thread_id: str, kind: NoticeKind, tag: str) -> None:
     settings = resources.settings
     async with resources.pool.connection() as connection:
         cursor = await connection.execute('SELECT email FROM montybot.users WHERE id = %s', (user_id,))
         row = await cursor.fetchone()
         cursor = await connection.execute(
-            'SELECT endpoint, keys FROM montybot.push_subscriptions WHERE user_id = %s', (user_id,)
+            'SELECT endpoint, keys FROM montybot.push_subscriptions WHERE user_id = %s ORDER BY created_at DESC LIMIT %s',
+            (user_id, MAX_SUBSCRIPTIONS),
         )
         subscriptions = await cursor.fetchall()
     url = f'{settings.public_url}/#/t/{thread_id}'
     body = WHAT[kind]
     gone: list[str] = []
-    if settings.vapid_private_key is not None:
+    if settings.vapid_private_key is not None and subscriptions:
         payload = json.dumps({'title': 'monty-bot', 'body': body, 'url': url, 'tag': tag})
-        for subscription in subscriptions:
-            if not await asyncio.to_thread(_push, settings, subscription, payload):
-                gone.append(subscription['endpoint'])
+        delivered = await asyncio.gather(*(asyncio.to_thread(_push, settings, s, payload) for s in subscriptions))
+        gone = [s['endpoint'] for s, ok in zip(subscriptions, delivered, strict=True) if not ok]
     if gone:
         async with resources.pool.connection() as connection:
             await connection.execute('DELETE FROM montybot.push_subscriptions WHERE endpoint = ANY(%s)', (gone,))

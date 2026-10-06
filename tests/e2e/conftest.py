@@ -231,7 +231,7 @@ class Human:
         self.run_id = run_id
 
     def _ws_url(self) -> str:
-        response = self.client.http.get(f'/api/runs/{self.run_id}/live')
+        response = self.client.http.post(f'/api/runs/{self.run_id}/live', json={})
         assert response.status_code == 200, response.text
         return self.client.app.url.replace('http', 'ws', 1) + response.json()['url'] + '/ws'
 

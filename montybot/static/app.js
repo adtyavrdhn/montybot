@@ -2,7 +2,7 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const state = { thread: null, run: null, poll: null, screenTimer: null, liveAsk: null, signingUp: false };
+const state = { thread: null, run: null, poll: null, screenTimer: null, liveAsk: null, signingUp: false, routing: false };
 
 async function api(path, options = {}) {
   const init = { credentials: 'same-origin', ...options, headers: { ...(options.headers || {}) } };
@@ -13,6 +13,7 @@ async function api(path, options = {}) {
   const response = await fetch(path, init);
   const type = response.headers.get('Content-Type') || '';
   const data = type.includes('application/json') ? await response.json() : null;
+  if (response.status === 401 && path !== '/api/signin') signedOut();
   if (!response.ok) {
     const detail = data && typeof data.detail === 'string' ? data.detail : `Request failed (${response.status})`;
     const error = new Error(detail);
@@ -24,6 +25,14 @@ async function api(path, options = {}) {
 
 function show(id) {
   for (const screen of ['signin', 'main']) $(screen).hidden = screen !== id;
+}
+
+function signedOut() {
+  // The session ended (signed out elsewhere, or expired): stop asking the server and offer to sign in again.
+  stopPolling();
+  state.liveAsk = null;
+  stopWatching();
+  show('signin');
 }
 
 // --- signing in ---
@@ -49,6 +58,11 @@ $('signin-form').addEventListener('submit', async (event) => {
 });
 
 $('signout').addEventListener('click', async () => {
+  try {
+    await stopNotifications();
+  } catch (error) {
+    console.error(error);
+  }
   await api('/api/signout', { method: 'POST', body: {} });
   location.hash = '';
   location.reload();
@@ -93,8 +107,11 @@ async function openThread(id) {
   stopPolling();
   state.thread = id;
   state.run = null;
+  state.liveAsk = null;
+  stopWatching();
   hideBrowser();
   $('ask').hidden = true;
+  $('ask').dataset.id = '';
   $('status').hidden = true;
   if (id === null) {
     $('title').textContent = 'New chat';
@@ -105,14 +122,17 @@ async function openThread(id) {
 }
 
 async function refresh() {
-  if (state.thread === null) return;
+  const id = state.thread;
+  if (id === null) return;
   let thread;
   try {
-    thread = await api(`/api/threads/${state.thread}`);
+    thread = await api(`/api/threads/${id}`);
   } catch (error) {
+    if (state.thread !== id) return;
     if (error.status === 404) { location.hash = '#/new'; return; }
     throw error;
   }
+  if (state.thread !== id) return;  // the user opened another chat meanwhile
   $('title').textContent = thread.title || 'monty-bot';
   const box = $('messages');
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
@@ -120,12 +140,23 @@ async function refresh() {
   if (atBottom) box.scrollTop = box.scrollHeight;
   renderRun(thread.run);
   const active = thread.run && ['queued', 'running', 'waiting'].includes(thread.run.status);
-  if (active && state.poll === null) state.poll = setInterval(() => refresh().catch(console.error), 1500);
-  if (!active) stopPolling();
+  if (active) schedulePoll(); else stopPolling();
+}
+
+function schedulePoll() {
+  // One refresh at a time: the next is scheduled when this one has finished.
+  if (state.poll !== null) return;
+  state.poll = setTimeout(() => {
+    state.poll = null;
+    refresh().catch((error) => {
+      console.error(error);
+      if (error.status !== 401) schedulePoll();  // try again, unless signed out
+    });
+  }, 1500);
 }
 
 function stopPolling() {
-  if (state.poll !== null) clearInterval(state.poll);
+  if (state.poll !== null) clearTimeout(state.poll);
   state.poll = null;
 }
 
@@ -135,9 +166,16 @@ function renderRun(run) {
   $('status').hidden = !working;
   if (working) $('status').textContent = run.activity.length ? run.activity[run.activity.length - 1] : 'Working…';
   $('send').disabled = Boolean(run && ['queued', 'running', 'waiting'].includes(run.status));
-  $('browser-button').hidden = !(run && run.activity.length && working);
   renderAsk(run && run.status === 'waiting' ? run.ask : null);
   if (working && run.activity.length) watchBrowser(); else stopWatching();
+  updateBrowserButton();
+}
+
+function updateBrowserButton() {
+  // Opens the bot's browser while it works and the panel is closed.
+  const run = state.run;
+  const working = run && (run.status === 'queued' || run.status === 'running') && run.activity.length;
+  $('browser-button').hidden = !(working && $('browser').hidden);
 }
 
 // --- what the bot asks ---
@@ -161,7 +199,10 @@ function renderAsk(ask) {
     const input = document.createElement('textarea');
     input.rows = 2;
     input.placeholder = 'Your answer';
-    const send = button('Answer', '', () => answer(ask, { text: input.value }));
+    const send = button('Answer', '', async () => {
+      if (!input.value.trim()) { input.focus(); return; }
+      await answer(ask, { text: input.value });
+    });
     row.append(input, send);
   } else if (ask.kind === 'approval') {
     row.append(
@@ -176,22 +217,34 @@ function renderAsk(ask) {
 }
 
 function button(text, kind, onClick) {
+  // Disabled while its action is pending; a failure is shown to the user.
   const b = document.createElement('button');
   b.type = 'button';
   b.textContent = text;
   if (kind) b.className = kind;
-  b.addEventListener('click', onClick);
+  b.addEventListener('click', async () => {
+    b.disabled = true;
+    try {
+      await onClick();
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      b.disabled = false;
+    }
+  });
   return b;
 }
 
 async function answer(ask, body) {
   await api(`/api/asks/${ask.id}`, { method: 'POST', body });
   $('ask').hidden = true;
+  $('ask').dataset.id = '';
+  schedulePoll();
   await refresh();
 }
 
 async function takeOver(ask) {
-  const link = await api(`/api/runs/${state.run.id}/live`);
+  const link = await api(`/api/runs/${state.run.id}/live`, { method: 'POST', body: {} });
   state.liveAsk = ask.id;
   stopWatching();
   $('browser-label').textContent = 'You have the browser. Give it back when you are done.';
@@ -199,6 +252,7 @@ async function takeOver(ask) {
   $('live').hidden = false;
   $('live').src = link.url;
   $('browser').hidden = false;
+  updateBrowserButton();
 }
 
 // --- the bot's browser, while it works ---
@@ -214,8 +268,15 @@ function watchBrowser() {
     $('screen').src = url;
     if (old.startsWith('blob:')) URL.revokeObjectURL(old);
   };
+  const next = () => {
+    // One screenshot at a time: the next is asked for a second after this one arrived.
+    const timer = setTimeout(() => {
+      tick().catch(() => {}).finally(() => { if (state.screenTimer === timer) next(); });
+    }, 1000);
+    state.screenTimer = timer;
+  };
   if (window.matchMedia('(min-width: 900px)').matches) showScreen();
-  state.screenTimer = setInterval(() => tick().catch(() => {}), 1000);
+  next();
   tick().catch(() => {});
 }
 
@@ -224,10 +285,11 @@ function showScreen() {
   $('live').hidden = true;
   $('screen').hidden = false;
   $('browser').hidden = false;
+  updateBrowserButton();
 }
 
 function stopWatching() {
-  if (state.screenTimer !== null) clearInterval(state.screenTimer);
+  if (state.screenTimer !== null) clearTimeout(state.screenTimer);
   state.screenTimer = null;
   if (state.liveAsk === null) hideBrowser();
 }
@@ -235,10 +297,11 @@ function stopWatching() {
 function hideBrowser() {
   $('browser').hidden = true;
   $('live').src = 'about:blank';
+  updateBrowserButton();
 }
 
 $('browser-button').addEventListener('click', showScreen);
-$('close-browser').addEventListener('click', () => { $('browser').hidden = true; });
+$('close-browser').addEventListener('click', () => { $('browser').hidden = true; updateBrowserButton(); });
 
 // --- sending ---
 
@@ -255,6 +318,7 @@ $('composer').addEventListener('submit', async (event) => {
       location.hash = `#/t/${created.thread_id}`;
       await loadThreads();
     } else {
+      schedulePoll();  // the new run is followed even if this refresh fails
       await refresh();
     }
   } catch (error) {
@@ -280,10 +344,8 @@ async function openSignins() {
     const name = document.createElement('span');
     name.textContent = s.site;
     item.append(name, button('Forget', 'secondary', async () => {
-      try {
-        await api(`/api/sign-ins/${encodeURIComponent(s.site)}`, { method: 'DELETE' });
-        await openSignins();
-      } catch (error) { alert(error.message); }
+      await api(`/api/sign-ins/${encodeURIComponent(s.site)}`, { method: 'DELETE' });
+      await openSignins();
     }));
     return item;
   }) : [Object.assign(document.createElement('li'), { textContent: 'None yet.' })]));
@@ -323,19 +385,39 @@ for (const back of document.querySelectorAll('.page .back')) {
 
 // --- notifications: a push to the phone when the bot needs the user ---
 
+function base64urlBytes(text) {
+  const base64 = text.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (text.length % 4)) % 4);
+  return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+}
+
 async function enableNotifications() {
-  if (!('Notification' in window)) { alert('This browser cannot show notifications.'); return; }
-  if (await Notification.requestPermission() !== 'granted') return;
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+    alert('This browser cannot show notifications.');
+    return;
+  }
   const key = await api('/api/push/key');
-  if (!key.public_key) return;
+  if (!key.public_key) { alert('Notifications are not set up on this server.'); return; }
+  if (await Notification.requestPermission() !== 'granted') return;
   const registration = await navigator.serviceWorker.register('/sw.js');
   const subscription = await registration.pushManager.subscribe({
-    userVisibleOnly: true, applicationServerKey: key.public_key,
+    userVisibleOnly: true, applicationServerKey: base64urlBytes(key.public_key),
   });
   await api('/api/push/subscriptions', { method: 'POST', body: subscription.toJSON() });
   $('enable-notifications').textContent = 'Notifications are on';
 }
+async function stopNotifications() {
+  // On sign-out, so this browser no longer gets this account's pushes.
+  if (!('serviceWorker' in navigator)) return;
+  const registration = await navigator.serviceWorker.getRegistration('/sw.js');
+  const subscription = registration && await registration.pushManager.getSubscription();
+  if (!subscription) return;
+  try {
+    await api('/api/push/subscriptions', { method: 'DELETE', body: { endpoint: subscription.endpoint } });
+  } finally {
+    await subscription.unsubscribe();
+  }
+}
+
 $('enable-notifications').addEventListener('click', () => enableNotifications().catch((e) => alert(e.message)));
 
 function notify(ask) {
@@ -367,7 +449,10 @@ async function start() {
     return;
   }
   show('main');
-  window.addEventListener('hashchange', () => route().catch(console.error));
+  if (!state.routing) {  // once, though signing in again after a 401 calls start() again
+    state.routing = true;
+    window.addEventListener('hashchange', () => route().catch(console.error));
+  }
   await route();
 }
 
