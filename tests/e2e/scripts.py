@@ -86,9 +86,37 @@ def order_eggs(turn: Turn) -> ModelResponse:
     if not turn.called('commit'):
         return call('commit', target='#place-order', description='Place the order for eggs ($3.20)')
     result = turn.result_of('commit')
-    if 'Order #' not in result:
+    order = re.search(r'Order #\d+: [a-z, ]+, \$\d+\.\d\d', result)
+    if order is None:
         return say(f'I did not place the order. {result}')
-    return say(f'Done. {line_with(result, "Order #")}')
+    return say(f'Done. {order.group(0)}')
+
+
+FLIGHT = re.compile(r'\b([A-Z0-9]{2} \d{3,4})\b\W+(\d\d:\d\d)\W+€\s?(\d+)')
+
+
+def cheapest_flights(turn: Turn) -> ModelResponse:
+    if not turn.returns:
+        return call('open_page', url=f'{turn.url}/results?to=Lisbon&date=next+Friday')
+    if 'Next page' in turn.last:
+        return call('click', target='#next')
+    flights = {m.group(1): (m.group(2), int(m.group(3))) for r in turn.returns for m in FLIGHT.finditer(str(r.content))}
+    best = sorted(flights.items(), key=lambda f: f[1][1])[:3]
+    rows = '\n'.join(f'| {flight} | {departs} | €{price} |' for flight, (departs, price) in best)
+    return say(
+        f'The three cheapest flights to Lisbon next Friday:\n\n| Flight | Departs | Price |\n|---|---|---|\n{rows}'
+    )
+
+
+def todays_offer(turn: Turn) -> ModelResponse:
+    if not turn.returns:
+        return call('open_page', url=f'{turn.url}/')
+    if 'Press and hold' in turn.last and not turn.called('hand_off'):
+        return call(
+            'hand_off', reason='The store wants a press-and-hold check. Please hold the button, then hand back.'
+        )
+    offer = line_with(turn.last, 'Today only')
+    return say(offer.strip(' -') if offer else f'I could not get past the check. {turn.last}')
 
 
 def fail(turn: Turn) -> ModelResponse:
@@ -100,6 +128,8 @@ SCRIPTS: dict[str, Script] = {
     'Say hello': hello,
     'Ask me my favourite colour': favourite_colour,
     'Order eggs from': order_eggs,
+    'Find the three cheapest flights to Lisbon next Friday': cheapest_flights,
+    'What is on offer today at': todays_offer,
 }
 
 

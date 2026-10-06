@@ -50,6 +50,8 @@ markers = [
     "u4: user path U4, scheduled tasks and watches",
     "u5: user path U5, files",
     "u6: user path U6, a bot check the user solves",
+    "live: real sites and a real model, nightly only (--live)",
+    "scripted: only meaningful with the scripted model (skipped when MONTYBOT_TEST_MODEL is set)",
 ]
 
 [tool.ruff]

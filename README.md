@@ -23,12 +23,16 @@ model requests and browser calls are steps, and questions, approvals and hand-of
 ## Tests
 
 ```bash
-uv run pytest       # unit tests, and end-to-end tests with the fake browser
+uv run pytest                                   # unit tests, and end-to-end tests with the fake browser
+uv run pytest tests/e2e --browser=chromium      # the same end-to-end tests in real (headless) Chrome
+uv run pytest -m u2                             # one user path (u1 ... u6)
+MONTYBOT_TEST_MODEL=anthropic:claude-sonnet-4-5 uv run pytest tests/e2e --browser=chromium --live   # nightly
 ```
 
 End-to-end tests run the real app in its own process against Postgres (`MONTYBOT_TEST_POSTGRES`, or a container they
-start with Docker), the fixture sites in `tests/sites`, a scripted model (`tests/e2e/scripts.py`) and a scripted
-human who drives hand-offs through the live-view API.
+start with Docker), the fixture sites in `tests/sites` (one per user path), a scripted model (`tests/e2e/scripts.py`)
+and a scripted human who drives hand-offs through the live-view API. With `MONTYBOT_TEST_MODEL` the same tests run
+against a real model; `--live` adds real sites (`tests/e2e/test_live.py`).
 
 ## Notes
 

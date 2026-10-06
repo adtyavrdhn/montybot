@@ -70,6 +70,8 @@ class _Parser(HTMLParser):
             self._in_title = True
         elif tag in BLOCKS:
             self.text.append('\n')
+        elif tag in ('td', 'th'):
+            self.text.append(' | ')
         if tag == 'form':
             self.forms.append(Form(a.get('method', 'get').lower(), a.get('action', ''), {}))
             self._form = len(self.forms) - 1
