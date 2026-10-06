@@ -138,7 +138,7 @@ dev = [
 [package.metadata.requires-dev]
 dev = [
     { name = "anyio", specifier = ">=4.4" },
-    { name = "playwright", specifier = ">=1.55" },
+    { name = "playwright", specifier = ">=1.63" },
     { name = "pyright", specifier = ">=1.1.400" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "ruff", specifier = ">=0.12" },

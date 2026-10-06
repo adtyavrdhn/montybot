@@ -460,15 +460,21 @@ class BrowserBackendConformance(ABC):
                 await browser.act(Type(text=' world'))
                 await wait_for_text(browser, 'typed: hello world')
 
+    async def snapshot_ref(self, browser: BrowserBackend, role: str, name: str) -> Ref:
+        """The ref for `role "name"` in a new snapshot. A backend without refs prints none, so any ref will do: the
+        test only checks that acting on it raises `NotSupported`."""
+        text = (await browser.snapshot()).text
+        return ref_in(text, role, name) if self.supports('ref') else Ref(ref='1')
+
     async def test_click_ref(self, site: Site) -> None:
         async with self.opened(site, BrowserState(url=site.actions)) as browser:
-            ref = ref_in((await browser.snapshot()).text, 'button', 'Press me')
+            ref = await self.snapshot_ref(browser, 'button', 'Press me')
             if await self.act_or_refuse(browser, Click(target=ref)):
                 await wait_for_text(browser, 'clicked: button')
 
     async def test_type_ref(self, site: Site) -> None:
         async with self.opened(site, BrowserState(url=site.actions)) as browser:
-            ref = ref_in((await browser.snapshot()).text, 'textbox', 'Input')
+            ref = await self.snapshot_ref(browser, 'textbox', 'Input')
             if await self.act_or_refuse(browser, Type(text='hello', target=ref)):
                 text = await wait_for_text(browser, 'typed: hello')
                 assert 'value="hello"' in text
@@ -476,7 +482,7 @@ class BrowserBackendConformance(ABC):
     async def test_ref_from_an_earlier_page(self, site: Site) -> None:
         """A ref never reaches an element on a page loaded after its snapshot."""
         async with self.opened(site, BrowserState(url=site.actions)) as browser:
-            ref = ref_in((await browser.snapshot()).text, 'button', 'Press me')
+            ref = await self.snapshot_ref(browser, 'button', 'Press me')
             if not await self.act_or_refuse(browser, Navigate(url=site.actions)):
                 return
             action = Click(target=ref)

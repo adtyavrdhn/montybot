@@ -8,7 +8,7 @@ dependencies = []
 [dependency-groups]
 dev = [
     "anyio>=4.4",
-    "playwright>=1.55",
+    "playwright>=1.63",
     "pyright>=1.1.400",
     "pytest>=8.3",
     "ruff>=0.12",

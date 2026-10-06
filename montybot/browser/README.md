@@ -8,6 +8,8 @@ the source of truth and this page is the map.
 | `state.py` | `BrowserState`, `Cookie`: one tab's URL, cookies (HttpOnly included), localStorage and sessionStorage per origin | the sign-in jar (#4) |
 | `contract.py` | `BrowserBackend`, the actions and targets, `Snapshot`, `Screenshot`, the errors | Chromium (#11), Servo (#12), snapshot (#13), E2B Desktop (#22) |
 | `service.py` | `BrowserService`: the API the agent and the web app call, with run id and user id on every call | browser service (#10), live view (#14), Monty host functions (#5) |
+| `host.py` | `BrowserHost`: the browser service, which owns every browser (#10) | live view (#14), Monty host functions (#5) |
+| `jar.py` | `SignInJar` and `JarLease`, with in-memory stand-ins | the encrypted jar and lease (#4) |
 | `snapshot.py`, `snapshot.js` | `SnapshotWalker`: the snapshot text and refs, from one JavaScript walker every engine runs | Chromium (#11), Servo (#12) |
 | `fake.py` | `FakeBrowser`: an in-memory backend with scriptable pages | agent-side work and fixture tests (#2, #5) |
 | `conformance.py` | `BrowserBackendConformance`: the tests every backend passes | every backend |
@@ -129,6 +131,8 @@ run.
 | `save_state(run_id, user_id)` | `None` | Saves without closing. Allowed during a hand-off |
 | `close(run_id, user_id)` | `bool`: saved | Saves, closes, and ends any hand-off |
 
+`start` raises `UserBusy` while another run of the same user holds the user's sign-ins: one run per user at a time.
+
 - **Hand-off is a lease.** While a hand-off is active, `act` and `screenshot` are accepted only with its `handoff_id`
   (the live view); without it they raise `HandoffActive`, and `snapshot` always does. So no screenshot reaches the
   model while the user drives. A `handoff_id` that is not the active one raises `HandoffNotActive`.
@@ -137,6 +141,30 @@ run.
   the agent to read.
 - **Saving.** `saved` is False, and the jar left as it was, only when the engine raises `NotSupported('export')`.
 - The wire (HTTP, socket, in-process) is #10's choice. Everything is plain dataclasses, so it encodes to JSON.
+
+## `BrowserHost`: the browser service
+
+```python
+async with BrowserHost(new_backend=make_backend, jar=InMemoryJar(), lease=InMemoryJarLease()) as host:
+    await host.start(run_id='run-1', user_id='alice')
+```
+
+- **One browser per run.** `start` calls `new_backend()` once per run and opens it from the user's jar. A retry of the
+  run gets the same browser (`reused=True`). `close` saves, closes it and frees the user's lease.
+- **One run per user.** A run holds the user's `JarLease` from `start` to `close`, and saves only while it holds it.
+- **Saving.** `save_state`, `end_handoff`, `close` and the reaper save. Call `save_state` before pausing a run, so a
+  crash during the pause loses nothing.
+- **Idle reaper.** Inside `async with`, browsers unused for `idle_timeout` seconds (default 10 minutes) are saved and
+  closed. The run stays; its next call starts a new browser and reports `Restarted('closed after 10 minutes idle')`.
+- **Crashes.** When a call fails and the browser no longer answers `snapshot()`, it is closed. A `snapshot` or
+  `screenshot` is retried on a new browser and reports `Restarted('the browser stopped unexpectedly')`. An action is not
+  retried, since the page it was aimed at is gone: it raises `ActionFailed`, and the next call reports the restart.
+- **Service restarts.** A run whose lease is still held is picked up again, and its next call reports
+  `Restarted('the browser service restarted')`. Active hand-offs do not survive a restart.
+- **Wire.** In-process for now. Everything is a plain dataclass, so an HTTP wire can go in front of it unchanged.
+
+`InMemoryJar` and `InMemoryJarLease` stand in for #4. The real lease also needs an expiry, so a lease held by a
+process that died is freed.
 
 ## `FakeBrowser`
 
