@@ -38,12 +38,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Headed screenshots fail under CI's Xvfb (#11); deselected until that issue is resolved.
+          # Keep the Chromium modules together on one worker: headed conformance and server launch tests
+          # start authenticated Xvfb sessions. Overlapping sessions failed X authentication under -n 4 (#41).
           - name: unit
-            args: --ignore=tests/e2e --deselect tests/browser/test_chromium.py::TestChromiumHeaded::test_screenshot
+            workers: 4
+            args: --ignore=tests/e2e --ignore=tests/browser/test_chromium.py --ignore=tests/browser/test_chromium_linux.py
+          - name: browser-serial
+            workers: 0
+            args: tests/browser/test_chromium.py tests/browser/test_chromium_linux.py
           - name: e2e-fake
+            workers: 4
             args: tests/e2e
           - name: e2e-chromium
+            workers: 4
             args: tests/e2e --browser=chromium
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -75,7 +82,7 @@ jobs:
           sudo apt-get install -y -q xvfb bubblewrap socat python3-pandas python3-pypdf
       - run: uv sync --locked
       - run: uv run playwright install --with-deps chromium
-      - run: uv run pytest -q -p no:cacheprovider -n 4 --durations=10 ${{ matrix.args }}
+      - run: uv run pytest -q -p no:cacheprovider -n ${{ matrix.workers }} --durations=10 ${{ matrix.args }}
 
   deploy:
     needs: [lint, test]
