@@ -201,12 +201,12 @@ class BrowserHost:
         backend = run.backend if run is not None and run.user_id == user_id else None
         if run is None or backend is None or run.lock.locked():
             raise UnknownRun('no browser to watch for this run')
-        async with run.lock:  # free, and nothing awaited since the checks above, so this neither waits nor races
+        async with run.lock:  # free when checked above; only a waiter woken just before could get it first
             _check_handoff(run, None)
             try:
                 return await self._call(run, backend, lambda backend: backend.screenshot())
-            except _Gone as gone:
-                raise UnknownRun('no browser to watch for this run') from gone
+            except Exception as error:  # a watcher gets the next frame instead, whatever went wrong with this one
+                raise UnknownRun('no browser to watch for this run') from error
 
     async def start_handoff(self, *, run_id: RunId, user_id: UserId, reason: str) -> Handoff:
         run = await self._find(run_id, user_id)

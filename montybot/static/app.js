@@ -2,7 +2,7 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const state = { thread: null, run: null, poll: null, screenTimer: null, liveAsk: null, signingUp: false };
+const state = { thread: null, run: null, poll: null, screenTimer: null, liveAsk: null, signingUp: false, routing: false };
 
 async function api(path, options = {}) {
   const init = { credentials: 'same-origin', ...options, headers: { ...(options.headers || {}) } };
@@ -239,6 +239,7 @@ async function answer(ask, body) {
   await api(`/api/asks/${ask.id}`, { method: 'POST', body });
   $('ask').hidden = true;
   $('ask').dataset.id = '';
+  schedulePoll();
   await refresh();
 }
 
@@ -317,6 +318,7 @@ $('composer').addEventListener('submit', async (event) => {
       location.hash = `#/t/${created.thread_id}`;
       await loadThreads();
     } else {
+      schedulePoll();  // the new run is followed even if this refresh fails
       await refresh();
     }
   } catch (error) {
@@ -411,10 +413,9 @@ async function stopNotifications() {
   if (!subscription) return;
   try {
     await api('/api/push/subscriptions', { method: 'DELETE', body: { endpoint: subscription.endpoint } });
-  } catch (error) {
-    if (error.status !== 404) throw error;
+  } finally {
+    await subscription.unsubscribe();
   }
-  await subscription.unsubscribe();
 }
 
 $('enable-notifications').addEventListener('click', () => enableNotifications().catch((e) => alert(e.message)));
@@ -448,7 +449,10 @@ async function start() {
     return;
   }
   show('main');
-  window.addEventListener('hashchange', () => route().catch(console.error));
+  if (!state.routing) {  // once, though signing in again after a 401 calls start() again
+    state.routing = true;
+    window.addEventListener('hashchange', () => route().catch(console.error));
+  }
   await route();
 }
 

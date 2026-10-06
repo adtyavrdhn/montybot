@@ -48,9 +48,13 @@ class DbHandoffs:
         return Handoff(handoff_id=handoff_id, run_id=ask.run_id, user_id=ask.user_id, reason=ask.prompt)
 
     async def given_back(self, given: GiveBack) -> None:
+        handoff = given.handoff
         async with self._resources.pool.connection() as connection:
-            ask = await store.find_handoff(connection, given.handoff.handoff_id)
-        if ask is not None:
+            ask = await store.find_handoff(connection, handoff.handoff_id)
+            if ask is None:
+                # The take-over link may have recorded a newer hand-off on the ask meanwhile; it is the run's open one.
+                ask = await store.open_ask(connection, handoff.user_id, handoff.run_id)
+        if ask is not None and ask.kind == 'handoff':
             await approvals.answer(self._resources, ask.user_id, ask.id, {'done': True, 'note': given.summary})
 
 
