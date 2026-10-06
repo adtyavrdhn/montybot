@@ -28,6 +28,9 @@ from pydantic import SecretStr
 from pydantic_ai import Agent
 from pydantic_ai.models.test import TestModel
 from sites.shop import Shop
+from starlette.applications import Starlette
+from starlette.responses import Response
+from starlette.routing import Route
 from starlette.types import Message, Receive, Scope, Send
 
 from montybot import observability
@@ -395,6 +398,7 @@ def test_trace_dump_includes_metadata_surfaces() -> None:
 def test_configured_agent_content_free(monkeypatch: pytest.MonkeyPatch) -> None:
     """Exercise the actual Logfire/Pydantic AI integration, not just the OTel adapter."""
     monkeypatch.delenv('LOGFIRE_TOKEN', raising=False)
+    monkeypatch.setenv('OTEL_RESOURCE_ATTRIBUTES', 'private-resource=https://private.invalid/?credential=private-key')
     exporter = InMemorySpanExporter()
     settings = Settings(
         _env_file=None,  # pyright: ignore[reportCallIssue]  Settings runtime option: don't read local credentials.
@@ -420,3 +424,38 @@ def test_configured_agent_content_free(monkeypatch: pytest.MonkeyPatch) -> None:
     assert {'invoke_agent', 'model.request', 'tool.execute'} <= {span.name for span in spans}
     assert any((span.attributes or {}).get('gen_ai.usage.input_tokens', 0) for span in spans)
     assert 'private-' not in dump_spans(spans)
+    assert all(dict(span.resource.attributes) == {'service.name': 'montybot'} for span in spans)
+
+
+def test_http_timings_include_generated_500(
+    local_traces: tuple[TracerProvider, InMemorySpanExporter], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider, exporter = local_traces
+    monkeypatch.setattr(observability.trace, 'get_tracer', provider.get_tracer)
+    error = RuntimeError('private-endpoint-failure')
+
+    async def endpoint(request: object) -> Response:
+        raise error
+
+    app = HTTPtimings(Starlette(routes=[Route('/', endpoint)]))
+    scope: Scope = {'type': 'http', 'method': 'GET', 'path': '/', 'headers': [], 'query_string': b''}
+    sent: list[Message] = []
+
+    async def receive() -> Message:
+        return {'type': 'http.request', 'body': b'', 'more_body': False}
+
+    async def send(message: Message) -> None:
+        # The complete response is sent before the timing span ends.
+        assert not exporter.get_finished_spans()
+        sent.append(message)
+
+    with pytest.raises(RuntimeError) as caught:
+        asyncio.run(app(scope, receive, send))
+    assert caught.value is error
+    assert sent[0]['status'] == 500
+    (span,) = exporter.get_finished_spans()
+    assert dict(span.attributes or {}) == {'http.response.status_code': 500}
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description is None
+    assert not span.events
+    assert 'private-' not in dump_spans([span])

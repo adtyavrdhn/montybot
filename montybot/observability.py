@@ -16,6 +16,8 @@ import logfire
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.metrics import NoOpMeterProvider
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import Span as SDKSpan
 from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.trace import Link, Span, SpanContext, SpanKind, Status, StatusCode, Tracer, TracerProvider
 
@@ -39,7 +41,8 @@ def configure_observability(settings: Settings, *, span_processors: Sequence[Spa
         console=False,
         inspect_arguments=False,
         add_baggage_to_attributes=False,
-        additional_span_processors=span_processors,
+        additional_span_processors=[FixedResource(), *span_processors],
+        advanced=logfire.AdvancedOptions(emit_configuration_span=False, resource_detectors=[]),
     )
     logfire.instrument_pydantic_ai(
         include_content=False,
@@ -50,6 +53,15 @@ def configure_observability(settings: Settings, *, span_processors: Sequence[Spa
         meter_provider=NoOpMeterProvider(),
         version=5,
     )
+
+
+class FixedResource(SpanProcessor):
+    """Drop environment/detector resource metadata before any processor sees a span."""
+
+    def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
+        # SDK Span.resource is read-only. Source-verified SDK storage, guarded by export regression tests;
+        # Logfire registers additional processors before its exporters (including pending spans).
+        span._resource = Resource({'service.name': 'montybot'})  # pyright: ignore[reportPrivateUsage]
 
 
 @contextmanager
