@@ -41,11 +41,13 @@ services:
       LOGFIRE_TOKEN: ${LOGFIRE_TOKEN:-}
     volumes:
       - claude-code:/data/claude-code
-    # bwrap makes new namespaces for each Chrome, which Docker's default seccomp and AppArmor profiles forbid.
+    # bwrap makes new namespaces for each Chrome, which Docker's default seccomp and AppArmor profiles forbid, and
+    # mounts a fresh /proc, which the kernel refuses while Docker masks paths under /proc (systempaths).
     # bwrap is the boundary between browsers; the container is not.
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
+      - systempaths=unconfined
     shm_size: 1gb
     healthcheck:
       test: ['CMD', 'python3', '-c', "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
