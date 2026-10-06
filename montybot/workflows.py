@@ -56,7 +56,7 @@ async def run_thread(run_id: str) -> str:
                 with timing('run.agent'):
                     result = await resources.agent.run(run.prompt, deps=deps, message_history=history)
             except Exception as error:
-                logfire.error('Run {run_id} failed: {error_type}', run_id=run_id, error_type=type(error).__name__)
+                logfire.error('Run {run_id} failed', run_id=run_id)
                 await DBOS.run_step_async(
                     {**RETRIED, 'name': 'run.failed'}, fail_run, resources, run, type(error).__name__
                 )
@@ -121,10 +121,8 @@ async def close_browser(resources: Resources, run: Run) -> None:
             await resources.browser.close(run_id=run.id, user_id=run.user_id)
         except UnknownRun:
             pass
-        except BrowserError as error:  # the browser is closed either way; the lease is released
-            logfire.warn(
-                'Closing the browser of run {run_id}: {error_type}', run_id=run.id, error_type=type(error).__name__
-            )
+        except BrowserError:  # the browser is closed either way; the lease is released
+            logfire.warn('Closing the browser of run {run_id} failed', run_id=run.id)
 
 
 def recent(history: list[ModelMessage], limit: int) -> list[ModelMessage]:
