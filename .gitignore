@@ -16,3 +16,6 @@ spikes/**/bin/
 spikes/**/target/
 spikes/**/logs/
 spikes/**/out/
+
+# Users' files (WORKSPACES_DIR)
+data/

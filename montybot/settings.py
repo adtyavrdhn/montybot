@@ -2,6 +2,8 @@
 # the model and the browser backend are chosen by name.
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -41,6 +43,8 @@ class Settings(BaseSettings):
     """The longest one `run_code` call may take, browser calls included."""
     code_compute_seconds: float = 60
     """The longest one `run_code` call may compute, not counting time waiting on the browser."""
+    workspaces_dir: Path = Path('data/workspaces')
+    """Each user's files, one directory per user, which code sees at `/work` and browser downloads go to."""
     allow_private_networks: bool = False
     """Let the agent open loopback and private addresses. Only for local fixture sites in tests."""
 

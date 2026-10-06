@@ -38,9 +38,11 @@ services:
       BROWSER_BACKEND: ${BROWSER_BACKEND:-montybot.engines:chromium_server}
       CLAUDE_CODE_CREDENTIALS: file
       CLAUDE_CODE_AUTH_FILE: /data/claude-code/auth.json
+      WORKSPACES_DIR: /data/workspaces
       LOGFIRE_TOKEN: ${LOGFIRE_TOKEN:-}
     volumes:
       - claude-code:/data/claude-code
+      - workspaces:/data/workspaces
     # bwrap makes new namespaces for each Chrome, which Docker's default seccomp and AppArmor profiles forbid, and
     # mounts a fresh /proc, which the kernel refuses while Docker masks paths under /proc (systempaths).
     # bwrap is the boundary between browsers; the container is not.
@@ -74,5 +76,6 @@ services:
 volumes:
   postgres: {}
   claude-code: {}
+  workspaces: {}
   caddy-data: {}
   caddy-config: {}

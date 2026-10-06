@@ -1,10 +1,12 @@
 """#4: every store function a request reaches, called as user B, sees nothing of user A's. Sign-ins are encrypted per
-user, and the lease lets one run at a time hold a user's sign-ins."""
+user, and the lease lets one run at a time hold a user's sign-ins. #21: B's code cannot reach A's files."""
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path, PurePosixPath
+from typing import Any
 
 import pytest
 from cryptography.exceptions import InvalidTag
@@ -13,6 +15,7 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 from montybot import crypto, memory, schedules, signins, store
 from montybot.browser.state import BrowserState, Cookie
 from montybot.db import Pool, create_pool, migrate
+from montybot.workspaces import WorkspaceFiles, Workspaces, save_download
 
 pytestmark = pytest.mark.anyio
 KEY = crypto.deployment_key(crypto.new_key())
@@ -151,3 +154,26 @@ async def test_one_run_at_a_time_holds_a_users_sign_ins(pool: Pool) -> None:
     assert await short.acquire(user_id=a.id, run_id='run-2')
     assert await lease.holder(user_id=a.id) is None
     assert await lease.acquire(user_id=a.id, run_id='run-3')
+
+
+async def test_user_b_cannot_reach_user_a_files(tmp_path: Path) -> None:
+    workspaces = Workspaces(tmp_path)
+    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    saved = await save_download(workspaces.of(a), 'invoice.csv', b'item,quantity,unit_price\n')
+    assert saved == '/work/downloads/invoice.csv'
+    b_files = WorkspaceFiles(workspaces.of(b))
+
+    async def read_as_b(path: str) -> Any:
+        return await b_files(name='Path.read_text', args=(PurePosixPath(path),), kwargs={}, is_async=True)
+
+    with pytest.raises(FileNotFoundError):
+        await read_as_b(saved)
+    # A link in B's folder, as a program B ran could leave there, does not lead out of it.
+    (workspaces.directory(b) / 'a').symlink_to(workspaces.directory(a))
+    (workspaces.directory(b) / 'hosts').symlink_to('/etc/hosts')
+    for path in ['/work/a/downloads/invoice.csv', '/work/hosts', f'/work/../{a}/downloads/invoice.csv', '/etc/hosts']:
+        with pytest.raises(PermissionError):
+            await read_as_b(path)
+    # A user id names one folder, never a path.
+    with pytest.raises(ValueError):
+        workspaces.of(f'../{a}')

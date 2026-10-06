@@ -20,7 +20,7 @@ knows is incomplete.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 
 from montybot.browser.state import BrowserState
 
@@ -171,6 +171,21 @@ class Screenshot:
     """Viewport height in CSS pixels."""
 
 
+MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+"""The largest download a backend keeps (#21)."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class Download:
+    """A file a page made the browser download. Added for the run's files (#21)."""
+
+    name: str
+    """The file name the site suggested; not safe to use as a path as it is."""
+    data: bytes
+    too_large: bool = False
+    """The file was over `MAX_DOWNLOAD_BYTES`, so it was not kept and `data` is empty."""
+
+
 # --- errors ---
 #
 # Messages are safe to show the model: they never contain cookie values, storage values or typed text.
@@ -296,4 +311,15 @@ class BrowserBackend(Protocol):
 
     async def close(self) -> None:
         """Stop the browser and discard its state. Safe to call in any state, any number of times."""
+        ...
+
+
+@runtime_checkable
+class DownloadsBackend(Protocol):
+    """Optional, added for the run's files (#21): a backend that keeps what pages download. Without it, a download
+    is dropped, as before."""
+
+    async def take_downloads(self) -> list[Download]:
+        """The downloads finished since the last call, oldest first. Each is returned once. Downloads not taken when
+        the browser closes are lost."""
         ...

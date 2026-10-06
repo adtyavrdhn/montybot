@@ -4,8 +4,9 @@
 agent: run_code(code)                                     one DBOS step (montybot.code.run_code)
   checkout a Monty session                                Full Monty: monty-server -> monty-worker (MONTY_URL)
   load_session(the run's last state)                      the state is an id in monty-server's store
-  feed_run(code, external_lookup=browser functions)
+  feed_run(code, external_lookup=browser functions, os=the user's files)
     await goto(url) / read_page() / click(t) / ...        host functions: the run's own browser (montybot.browsing)
+    Path('/work/a.csv').read_text()                       OS calls: the user's workspace (montybot.workspaces)
   dump() -> new state id                                  kept in the run's deps, recorded by DBOS with the step
   the session is closed: no worker is held between calls, during a hand-off, or during an approval
 ```
@@ -44,12 +45,14 @@ from montybot.browsing import Session, host_of, refused_url, target_of
 from montybot.deps import RunDeps
 from montybot.resources import Resources, current
 from montybot.settings import Settings
+from montybot.workspaces import DOWNLOADS, VIRTUAL_ROOT, WorkspaceFiles
 
 OUTPUT_LIMIT = 20_000
 
-INSTRUCTIONS = """\
-`run_code` runs Python (a safe subset, no imports beyond `asyncio`, `json`, `re`, `math`, `datetime`) in a session
-that keeps its variables for this whole task. Your browser is a set of async functions inside it; always `await` them:
+INSTRUCTIONS = f"""\
+`run_code` runs Python (a safe subset, no imports beyond `asyncio`, `json`, `re`, `math`, `datetime`, `pathlib`) in a
+session that keeps its variables for this whole task. Your browser is a set of async functions inside it; always
+`await` them:
 
 - `await goto(url) -> str`: open a page; returns what it shows, with numbered refs like [12] for things to click.
 - `await read_page() -> str`: the current page again.
@@ -59,7 +62,10 @@ that keeps its variables for this whole task. Your browser is a set of async fun
 
 Each returns the page afterwards. Use code to read several pages, pull out what matters and compute the answer, and
 `print` only what you need to see. A browser error raises `RuntimeError` with a message you can act on. Clicks that cannot be undone (placing an order,
-paying, sending) are refused from code: use the `commit` tool for those."""
+paying, sending) are refused from code: use the `commit` tool for those.
+
+The user's files are in `{VIRTUAL_ROOT}`, kept from one task to the next: use `pathlib.Path` or `open` there. What the
+browser downloads is saved in `{DOWNLOADS}`, and the page you get back after the click says where."""
 
 
 class MontyRunner:
@@ -236,7 +242,13 @@ async def run_snippet(
                 state = None
         try:
             async with asyncio.timeout(resources.settings.code_timeout_seconds):
-                result = await monty.feed_run(code, external_lookup=browser_functions(session), print_callback=printed)
+                result = await monty.feed_run(
+                    code,
+                    external_lookup=browser_functions(session),
+                    print_callback=printed,
+                    os=WorkspaceFiles(resources.workspaces.of(user_id)),
+                    cwd=VIRTUAL_ROOT,
+                )
         except MontySyntaxError as error:
             return shown(printed, None, error.display('type-msg'), notes), state
         except MontyTypingError as error:

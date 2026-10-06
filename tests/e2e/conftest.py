@@ -131,7 +131,19 @@ def app_env() -> dict[str, str]:
 
 
 @pytest.fixture
-def app(database_url: str, request: pytest.FixtureRequest, tmp_path: Path, app_env: dict[str, str]) -> Iterator[App]:
+def workspaces_dir(tmp_path: Path) -> Path:
+    """Where the app keeps each user's files."""
+    return tmp_path / 'workspaces'
+
+
+@pytest.fixture
+def app(
+    database_url: str,
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    workspaces_dir: Path,
+    app_env: dict[str, str],
+) -> Iterator[App]:
     backend = BACKENDS[str(request.config.getoption('--browser'))]
     env = {
         'DATABASE_URL': database_url,
@@ -142,6 +154,7 @@ def app(database_url: str, request: pytest.FixtureRequest, tmp_path: Path, app_e
         'PYTHONPATH': os.pathsep.join([str(TESTS), os.environ.get('PYTHONPATH', '')]),
         'EXECUTOR_ID': 'local',
         'ALLOW_PRIVATE_NETWORKS': 'true',  # the fixture sites are on 127.0.0.1
+        'WORKSPACES_DIR': str(workspaces_dir),
         # Full Monty (monty-server), if the test run names one; local Monty subprocesses otherwise.
         **({'MONTY_URL': url} if (url := os.environ.get('MONTYBOT_TEST_MONTY_URL')) else {}),
     }
