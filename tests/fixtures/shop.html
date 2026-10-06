@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Shop</title>
+<style>
+  body { font: 16px sans-serif; margin: 40px; }
+  .product { border: 1px solid #ccc; margin: 8px 0; padding: 8px; }
+  .price { color: #070; }
+</style>
+<h1>Groceries</h1>
+<p><label>Search <input id="search" type="search" name="q"></label>
+  <label for="sort">Sort by</label>
+  <select id="sort">
+    <option>Name</option>
+    <option selected>Price</option>
+    <option>Rating</option>
+  </select></p>
+<div id="products"></div>
+<h2>Cart</h2>
+<ul id="cart"></ul>
+<p>Total: <span id="total">$0.00</span></p>
+<p><a href="#checkout">Checkout</a></p>
+<details><summary>Delivery options</summary><p>Same-day delivery in your area.</p></details>
+<script>
+  const products = [
+    {id: 'eggs', name: 'Eggs', price: 3.5},
+    {id: 'milk', name: 'Milk', price: 1.25},
+    {id: 'bread', name: 'Bread', price: 2.75},
+  ];
+  const cart = [];
+  const money = (n) => '$' + n.toFixed(2);
+  function renderProducts() {
+    document.getElementById('products').innerHTML = products.map((p) =>
+      '<div class="product"><h3>' + p.name + '</h3><p class="price">' + money(p.price) + '</p>' +
+      '<p><label for="qty-' + p.id + '">Quantity</label> <select id="qty-' + p.id + '">' +
+      '<option>1</option><option>2</option><option>3</option></select> ' +
+      '<button id="add-' + p.id + '" data-id="' + p.id + '">Add to cart</button></p></div>'
+    ).join('');
+  }
+  function renderCart() {
+    document.getElementById('cart').innerHTML = cart.map((line, i) =>
+      '<li>' + line.qty + ' x ' + line.name + ' <button data-remove="' + i + '">Remove ' + line.name + '</button></li>'
+    ).join('');
+    document.getElementById('total').textContent = money(cart.reduce((sum, l) => sum + l.qty * l.price, 0));
+  }
+  document.addEventListener('click', (event) => {
+    const add = event.target.closest('[data-id]');
+    if (add) {
+      const product = products.find((p) => p.id === add.dataset.id);
+      const qty = Number(document.getElementById('qty-' + product.id).value);
+      cart.push({name: product.name, price: product.price, qty});
+      renderCart();
+    }
+    const remove = event.target.closest('[data-remove]');
+    if (remove) {
+      cart.splice(Number(remove.dataset.remove), 1);
+      renderCart();
+    }
+  });
+  renderProducts();
+  renderCart();
+</script>
+</html>

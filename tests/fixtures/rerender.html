@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Re-render</title>
+<style>body { font: 16px sans-serif; margin: 40px; }</style>
+<h1>Tasks</h1>
+<p>Clicks: <span id="clicks">0</span></p>
+<p><button id="count">Count</button></p>
+<div id="app"></div>
+<script>
+  // Every change rebuilds #app from a template, as a framework without keys would: its elements are new each time.
+  const state = {tasks: ['Buy milk', 'Call mum'], likes: 0, renders: 0};
+  function render() {
+    state.renders += 1;
+    document.getElementById('app').innerHTML =
+      '<p>Renders: ' + state.renders + ', likes: ' + state.likes + '</p>' +
+      '<p><button id="rerender">Re-render</button></p>' +
+      '<ul>' + state.tasks.map((t, i) =>
+        '<li>' + t + ' <button data-delete="' + i + '">Delete ' + t + '</button></li>').join('') + '</ul>' +
+      '<p><button class="like">Like</button> <button class="like">Like</button></p>';
+  }
+  document.addEventListener('click', (event) => {
+    // #count survives: only its counter's text changes, never the button.
+    if (event.target.id === 'count') {
+      document.getElementById('clicks').textContent = String(Number(document.getElementById('clicks').textContent) + 1);
+      return;
+    }
+    if (event.target.id === 'rerender') render();
+    if (event.target.dataset.delete !== undefined) {
+      state.tasks.splice(Number(event.target.dataset.delete), 1);
+      render();
+    }
+    if (event.target.classList.contains('like')) {
+      state.likes += 1;
+      render();
+    }
+  });
+  render();
+</script>
+</html>

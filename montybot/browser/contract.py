@@ -38,8 +38,8 @@ class Selector:
 class Ref:
     """A reference the latest `snapshot()` printed, such as `12` for `[12] button "Add to cart"`.
 
-    The snapshot format and how long a ref stays valid belong to #13. A ref the backend cannot resolve raises
-    `TargetNotFound`, never a click on something else.
+    `montybot.browser.snapshot` defines the format and how long a ref stays valid. A ref the backend cannot resolve
+    raises `TargetNotFound`, never a click on something else.
     """
 
     ref: str
@@ -150,7 +150,7 @@ Action = Navigate | Click | Type | Press | Scroll | MouseDown | MouseMove | Mous
 
 @dataclass(frozen=True, kw_only=True)
 class Snapshot:
-    """The agent's view of the page. The format of `text` belongs to #13."""
+    """The agent's view of the page. `montybot.browser.snapshot` defines the format of `text`."""
 
     url: str
     title: str
