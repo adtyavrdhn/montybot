@@ -203,7 +203,9 @@ Considered:
   servers.
 - **Later, local hand-off:** download the `storageState`, the user finishes in a local Chromium, and the updated state
   is uploaded and merged into the cookie jar. It needs merge rules and only works with Chromium-based browsers, so it
-  waits until users ask for it.
+  waits until users ask for it. [`poc/`](poc/) shows the round trip working on one machine. HttpOnly cookies,
+  localStorage and the tab's sessionStorage all travel. Whether real sites accept a session that moves between
+  addresses is still untested.
 - **Timeouts:** a waiting browser costs memory. After N minutes, save the `storageState` and close the browser. When
   the user returns, launch a fresh Chromium from the cookie jar for them to drive.
 - **Return control:** the agent resumes with a short summary of what the user did, not screenshots.
