@@ -6,10 +6,9 @@ import asyncio
 import os
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
-from conftest import App, Client
 from dbos import DBOS, DBOSClient, SetWorkflowID
 from helpers import eventually
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolCallPart, ToolReturnPart
@@ -17,6 +16,9 @@ from pydantic_ai.models.function import FunctionModel
 
 from montybot import store, workflows
 from montybot.db import create_pool
+
+if TYPE_CHECKING:
+    from conftest import App, Client
 
 
 def model() -> FunctionModel:
