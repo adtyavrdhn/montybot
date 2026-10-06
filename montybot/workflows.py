@@ -49,23 +49,22 @@ async def run_thread(run_id: str) -> str:
     run, history_json, schedule = await DBOS.run_step_async({'name': 'run.start'}, start_run, resources, run_id)
     history = recent(ModelMessagesTypeAdapter.validate_json(history_json), resources.settings.history_limit)
     deps = RunDeps(resources=resources, run=run, schedule=schedule)
-    # The browser closes (saving the sign-ins and freeing the user's lease) before the run is marked finished, so
-    # once the user sees the reply, their browser and sign-ins are free again.
     try:
-        result = await resources.agent.run(run.prompt, deps=deps, message_history=history)
-    except Exception as error:  # any failure ends the run, and the user is told
-        logfire.error('Run {run_id} failed: {error_type}', run_id=run_id, error_type=type(error).__name__)
+        try:
+            result = await resources.agent.run(run.prompt, deps=deps, message_history=history)
+        except Exception as error:
+            logfire.error('Run {run_id} failed: {error_type}', run_id=run_id, error_type=type(error).__name__)
+            await DBOS.run_step_async({**RETRIED, 'name': 'run.failed'}, fail_run, resources, run, type(error).__name__)
+            if isinstance(error, DBOSException):
+                raise  # a replay that does not match its recording is a bug to see, not a failed task
+            return 'failed'
+        new_messages = ModelMessagesTypeAdapter.dump_json(result.new_messages())
+        await DBOS.run_step_async(
+            {**RETRIED, 'name': 'run.finish'}, finish_run, resources, run, new_messages, result.output
+        )
+        return 'done'
+    finally:
         await DBOS.run_step_async({**RETRIED, 'name': 'run.close'}, close_browser, resources, run)
-        await DBOS.run_step_async({**RETRIED, 'name': 'run.failed'}, fail_run, resources, run, type(error).__name__)
-        if isinstance(error, DBOSException):
-            raise  # a replay that does not match its recording is a bug to see, not a failed task
-        return 'failed'
-    new_messages = ModelMessagesTypeAdapter.dump_json(result.new_messages())
-    await DBOS.run_step_async({**RETRIED, 'name': 'run.close'}, close_browser, resources, run)
-    await DBOS.run_step_async(
-        {**RETRIED, 'name': 'run.finish'}, finish_run, resources, run, new_messages, result.output
-    )
-    return 'done'
 
 
 async def start(run_id: str) -> WorkflowHandleAsync[str]:
