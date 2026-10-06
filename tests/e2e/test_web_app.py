@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -129,7 +130,9 @@ def test_files_panel_downloads_browser_and_generated_csv(app: App, person: Page,
         async with files.lock:
             await files.write_bytes(PurePosixPath('/work/generated.csv'), generated)
 
-    asyncio.run(prepare())
+    # Sync Playwright already owns an event loop on this thread.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(lambda: asyncio.run(prepare())).result()
     person.click('#menu-button')
     person.get_by_role('button', name='Files', exact=True).click()
     expect(person.locator('#files')).to_be_visible()
