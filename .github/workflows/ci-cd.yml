@@ -1,0 +1,61 @@
+name: CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-retries 30
+        ports:
+          - 5432:5432
+    env:
+      MONTYBOT_TEST_POSTGRES: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run playwright install --with-deps chromium
+      - run: uv run ruff check montybot tests
+      - run: uv run ruff format --check montybot tests
+      - run: uv run pyright
+      - run: uv run pytest -q
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: SSH key and host
+        env:
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          VM_KNOWN_HOSTS: ${{ vars.VM_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/vm
+          chmod 600 ~/.ssh/vm
+          printf '%s\n' "$VM_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Deploy
+        run: SSH_KEY="$HOME/.ssh/vm" sh deploy/deploy.sh "${{ vars.VM_USER }}@${{ vars.VM_HOST }}"

@@ -1,0 +1,14 @@
+# HTTPS for the app, with a certificate from Let's Encrypt for $DOMAIN.
+# Everything but /healthz needs the basic-auth login in /opt/montybot/.env: the app has open sign-up, and its runs
+# spend a Claude Code subscription.
+{$DOMAIN} {
+	handle /healthz {
+		reverse_proxy app:8000
+	}
+	handle {
+		basic_auth {
+			{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+		}
+		reverse_proxy app:8000
+	}
+}
