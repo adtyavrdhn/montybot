@@ -32,7 +32,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: unit, args: '--ignore=tests/e2e'}
+          # Headed screenshots fail under CI's Xvfb (Mike's #11 to look at); deselected until then.
+          - {name: unit, args: '--ignore=tests/e2e --deselect tests/browser/test_chromium.py::TestChromiumHeaded::test_screenshot'}
           - {name: e2e-fake, args: 'tests/e2e'}
           - {name: e2e-chromium, args: 'tests/e2e --browser=chromium'}
     name: test (${{ matrix.name }})
