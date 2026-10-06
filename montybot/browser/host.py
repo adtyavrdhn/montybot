@@ -39,6 +39,7 @@ from montybot.browser.contract import (
     TargetNotFound,
 )
 from montybot.browser.jar import JarLease, SignInJar
+from montybot.browser.live import FrameSource, LiveViewBackend
 from montybot.browser.service import (
     ActionResult,
     Handoff,
@@ -56,6 +57,7 @@ from montybot.browser.service import (
     UserId,
 )
 from montybot.browser.state import BLANK_URL, BrowserState
+from montybot.liveview.polling import PollingFrameSource
 
 T = TypeVar('T')
 
@@ -96,6 +98,8 @@ class _Run:
     """Set by `close`, for calls that were waiting for the lock meanwhile."""
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     """Held for every call into the backend, which is not safe to use concurrently."""
+    sources: list[FrameSource] = field(default_factory=list[FrameSource])
+    """Live views of the active hand-off, closed when it ends or the browser closes."""
 
 
 class _Gone(Exception):
@@ -203,6 +207,7 @@ class BrowserHost:
         async with self._hold(run):
             if run.handoff is None or not secrets.compare_digest(run.handoff.handoff_id, handoff_id):
                 raise HandoffNotActive('that hand-off is not active')
+            await _close_sources(run)
             saved = await self._save_if_open(run)
             if not saved and run.backend is not None:  # a save would have read the URL
                 with contextlib.suppress(_Gone):
@@ -210,6 +215,21 @@ class BrowserHost:
             run.handoff = None
             _touch(run)
             return HandoffEnded(handoff_id=handoff_id, url=run.url, saved=saved)
+
+    async def live_view(self, *, run_id: RunId, user_id: UserId, handoff_id: HandoffId) -> FrameSource:
+        """A live view of the run's browser for the active hand-off's holder: the backend's own (a CDP screencast for
+        Chromium), else one that polls `screenshot()`. Added for the web app (#8), on #14's `FrameSource`."""
+        run = await self._find(run_id, user_id)
+        async with self._hold(run):
+            _check_handoff(run, handoff_id)
+            backend = await self._open(run)
+            if isinstance(backend, LiveViewBackend):
+                source = await backend.live_view()
+            else:
+                source = await PollingFrameSource.start(backend)
+            run.sources.append(source)
+            _touch(run)
+            return source
 
     async def save_state(self, *, run_id: RunId, user_id: UserId) -> None:
         run = await self._find(run_id, user_id)
@@ -402,6 +422,7 @@ class BrowserHost:
 
     async def _drop(self, run: _Run, reason: str | None = None) -> None:
         """Close the run's browser. With a `reason`, the next call restarts it and reports why."""
+        await _close_sources(run)
         backend, run.backend = run.backend, None
         if backend is not None:
             await _close_quietly(backend)
@@ -415,6 +436,13 @@ def _check_handoff(run: _Run, handoff_id: HandoffId | None) -> None:
             raise HandoffActive('the user is using the browser; wait until they hand it back')
     elif run.handoff is None or not secrets.compare_digest(run.handoff.handoff_id, handoff_id):
         raise HandoffNotActive('that hand-off is not active')
+
+
+async def _close_sources(run: _Run) -> None:
+    sources, run.sources = run.sources, []
+    for source in sources:
+        with contextlib.suppress(Exception):
+            await source.close()
 
 
 def _touch(run: _Run) -> None:

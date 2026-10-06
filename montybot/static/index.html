@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111318">
+  <title>monty-bot</title>
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div id="app">
+    <section id="signin" class="screen" hidden>
+      <div class="card narrow">
+        <h1>monty-bot</h1>
+        <p class="muted">Your assistant that does things on the web, in its own browser.</p>
+        <form id="signin-form">
+          <label>Email <input id="email" type="email" autocomplete="username" required></label>
+          <label>Password <input id="password" type="password" autocomplete="current-password" minlength="8" required></label>
+          <p id="signin-error" class="error" role="alert"></p>
+          <button type="submit" id="signin-button">Sign in</button>
+          <button type="button" id="signup-button" class="secondary">Create an account</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="main" class="screen" hidden>
+      <header class="bar">
+        <button id="menu-button" class="icon" aria-label="Chats">☰</button>
+        <h1 id="title">monty-bot</h1>
+        <button id="browser-button" class="icon" aria-label="Browser" hidden>🖥</button>
+      </header>
+      <nav id="drawer" class="drawer">
+        <button id="new-chat" class="primary">New chat</button>
+        <ul id="threads"></ul>
+        <hr>
+        <button id="open-signins" class="link">Saved sign-ins</button>
+        <button id="open-schedules" class="link">Schedules</button>
+        <button id="enable-notifications" class="link">Notify me when the bot needs me</button>
+        <button id="signout" class="link">Sign out</button>
+      </nav>
+      <div id="layout">
+        <main id="chat">
+          <div id="messages" aria-live="polite"></div>
+          <div id="status" class="status" hidden></div>
+          <div id="ask" class="ask" hidden></div>
+          <form id="composer">
+            <textarea id="message" rows="1" placeholder="Ask monty-bot to do something…" required></textarea>
+            <button type="submit" id="send">Send</button>
+          </form>
+        </main>
+        <aside id="browser" hidden>
+          <div class="panel-bar">
+            <span id="browser-label">The bot's browser</span>
+            <button id="close-browser" class="icon" aria-label="Close">✕</button>
+          </div>
+          <img id="screen" alt="The bot's browser">
+          <iframe id="live" title="Take over the browser" hidden></iframe>
+        </aside>
+      </div>
+      <section id="signins" class="page" hidden>
+        <h2>Saved sign-ins</h2>
+        <p class="muted">Sites the bot's browser is signed into for you. Forget one to sign out of it.</p>
+        <ul id="signin-list"></ul>
+        <button class="secondary back">Back</button>
+      </section>
+      <section id="schedules" class="page" hidden>
+        <h2>Schedules</h2>
+        <p class="muted">Tasks the bot runs for you on a schedule. Ask in a chat to add one ("every Tuesday at 9…").</p>
+        <ul id="schedule-list"></ul>
+        <button class="secondary back">Back</button>
+      </section>
+    </section>
+  </div>
+</body>
+</html>
