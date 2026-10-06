@@ -34,8 +34,16 @@ No invented tokenization or simulated streaming fallback is used.
 The original `montybot.run_thread` workflow and original agent/step names remain
 registered for existing in-flight workflows. New runs use `montybot.run_thread_stream`
 and a separately named streaming agent so recorded nonstream step sequences do not
-change during deployment. Existing queued workflow IDs are still harmless to start
-twice. Browser/tool durability, approval boundaries and the final database transaction
+change during deployment. Dispatch first looks up a recorded child's immutable
+workflow identity using DBOS's public status API in an explicitly empty context on
+a worker thread. This read-only management query deliberately does **not** insert
+a checkpoint into a scheduled parent's recorded child-start sequence (the async
+status API would do so). It preserves both legacy and streaming child names for
+parent replay and queued startup reconciliation; missing identities use the new
+streaming workflow. Merely retaining the legacy workflow registration was not
+sufficient: PR #56 initially omitted this routing and a delayed review identified
+the name-mismatch risk. The follow-up fixes it rather than claiming that switching
+names is harmless. Browser/tool durability, approval boundaries and the final database transaction
 are unchanged. `store.lock_finished` prevents duplicate history/final messages if a
 finish transaction commits before DBOS records its result.
 
@@ -103,3 +111,15 @@ commit-before-DBOS-record crash-window fault injection were not reproduced; lega
 compatibility and idempotent final writes are source/targeted-guard verified, not a
 claim of exhaustive upgrade/crash testing. No live-provider or measured latency
 benchmark was run.
+
+### Delayed-review follow-up
+
+A separate independent review arrived after the initial PR merged, finding the
+legacy parent/queued-ID routing defects above, a terminal history/status race, and
+additional inherited async submission races. The follow-up addresses these before
+its merge. Thread reads now use a read-only PostgreSQL REPEATABLE READ transaction:
+a final commit between history and status queries cannot produce old history plus
+terminal status and prematurely stop updates. A real-Postgres regression commits
+final history/status precisely between those reads and checks both snapshots.
+Message creation/submission and authentication callbacks also reject obsolete view
+and session generations. Neither correction changes model-event durability.

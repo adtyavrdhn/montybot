@@ -51,25 +51,40 @@ $('signup-button').addEventListener('click', () => {
 
 $('signin-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const view = ++state.view;
+  const thread = state.thread;
+  const current = () => state.view === view && state.thread === thread;
   $('signin-error').textContent = '';
   try {
     await api(state.signingUp ? '/api/signup' : '/api/signin', {
       method: 'POST', body: { email: $('email').value, password: $('password').value },
-    });
-    await start();
+    }, current);
+    if (!current()) return;
+    await start(current);
   } catch (error) {
+    if (!current()) return;
     $('signin-error').textContent = error.message;
   }
 });
 
 $('signout').addEventListener('click', async () => {
   signedOut();
+  const view = state.view;
+  const thread = state.thread;
+  const current = () => state.view === view && state.thread === thread;
   try {
-    await stopNotifications();
+    await stopNotifications(current);
   } catch (error) {
     console.error(error);
   }
-  await api('/api/signout', { method: 'POST', body: {} });
+  if (!current()) return;
+  try {
+    await api('/api/signout', { method: 'POST', body: {} }, current);
+  } catch (error) {
+    if (!current()) return;
+    throw error;
+  }
+  if (!current()) return;
   location.hash = '';
   location.reload();
 });
@@ -77,7 +92,17 @@ $('signout').addEventListener('click', async () => {
 // --- chats ---
 
 async function loadThreads() {
-  const threads = await api('/api/threads');
+  const view = state.view;
+  const thread = state.thread;
+  const current = () => state.view === view && state.thread === thread;
+  let threads;
+  try {
+    threads = await api('/api/threads', {}, current);
+  } catch (error) {
+    if (!current()) return;
+    throw error;
+  }
+  if (!current()) return;
   const list = $('threads');
   list.replaceChildren(...threads.map((thread) => {
     const item = document.createElement('li');
@@ -122,6 +147,7 @@ async function openThread(id) {
   $('ask').dataset.id = '';
   $('status').hidden = true;
   if (id === null) {
+    $('send').disabled = false;
     $('title').textContent = 'New chat';
     $('messages').replaceChildren(emptyChat());
     return;
@@ -448,12 +474,16 @@ $('composer').addEventListener('submit', async (event) => {
   event.preventDefault();
   const text = $('message').value.trim();
   if (!text) return;
+  const view = state.view;
+  const thread = state.thread;
+  const current = () => state.view === view && state.thread === thread;
   $('send').disabled = true;
   try {
-    const path = state.thread === null ? '/api/threads' : `/api/threads/${state.thread}/messages`;
-    const created = await api(path, { method: 'POST', body: { text } });
+    const path = thread === null ? '/api/threads' : `/api/threads/${thread}/messages`;
+    const created = await api(path, { method: 'POST', body: { text } }, current);
+    if (!current()) return;
     $('message').value = '';
-    if (state.thread === null) {
+    if (thread === null) {
       location.hash = `#/t/${created.thread_id}`;
       await loadThreads();
     } else {
@@ -461,6 +491,7 @@ $('composer').addEventListener('submit', async (event) => {
       await refresh();
     }
   } catch (error) {
+    if (!current()) return;
     alert(error.message);
     $('send').disabled = false;
   }
@@ -544,16 +575,17 @@ async function enableNotifications() {
   await api('/api/push/subscriptions', { method: 'POST', body: subscription.toJSON() });
   $('enable-notifications').textContent = 'Notifications are on';
 }
-async function stopNotifications() {
+async function stopNotifications(current = () => true) {
   // On sign-out, so this browser no longer gets this account's pushes.
   if (!('serviceWorker' in navigator)) return;
   const registration = await navigator.serviceWorker.getRegistration('/sw.js');
+  if (!current()) return;
   const subscription = registration && await registration.pushManager.getSubscription();
-  if (!subscription) return;
+  if (!current() || !subscription) return;
   try {
-    await api('/api/push/subscriptions', { method: 'DELETE', body: { endpoint: subscription.endpoint } });
+    await api('/api/push/subscriptions', { method: 'DELETE', body: { endpoint: subscription.endpoint } }, current);
   } finally {
-    await subscription.unsubscribe();
+    if (current()) await subscription.unsubscribe();
   }
 }
 
@@ -576,17 +608,28 @@ async function route() {
   if (hash === '#/sign-ins') return openSignins();
   if (hash === '#/schedules') return openSchedules();
   const match = hash.match(/^#\/t\/([0-9a-f-]{36})$/);
-  await openThread(match ? match[1] : null);
+  const opening = openThread(match ? match[1] : null);
+  const view = state.view;
+  const thread = state.thread;
+  await opening;
+  if (state.view !== view || state.thread !== thread) return;
   await loadThreads();
 }
 
-async function start() {
+async function start(current) {
+  if (!current) {
+    const view = state.view;
+    const thread = state.thread;
+    current = () => state.view === view && state.thread === thread;
+  }
   try {
-    await api('/api/me');
+    await api('/api/me', {}, current);
   } catch (error) {
+    if (!current()) return;
     show('signin');
     return;
   }
+  if (!current()) return;
   show('main');
   if (!state.routing) {  // once, though signing in again after a 401 calls start() again
     state.routing = true;

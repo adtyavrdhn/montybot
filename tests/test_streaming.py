@@ -337,6 +337,69 @@ async def test_tool_activity_is_generic_and_preserves_current_text(run_id: str) 
     assert completed['revision'] > running['revision']
 
 
+@pytest.mark.parametrize(
+    ('recorded_name', 'expected_name'),
+    [
+        ('montybot.run_thread', 'run_thread'),
+        ('montybot.run_thread_stream', 'run_thread_stream'),
+        (None, 'run_thread_stream'),
+    ],
+)
+async def test_start_preserves_recorded_identity_without_checkpointing_parent(
+    recorded_name: str | None, expected_name: str, run_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The management read must not consume a scheduled parent's next operation ID."""
+    from threading import get_ident
+    from unittest.mock import AsyncMock, Mock
+
+    from dbos import DBOS
+    from dbos._context import DBOSContextEnsure, get_local_dbos_context
+
+    from montybot import workflows
+
+    parent_thread = get_ident()
+
+    def read_status(workflow_id: str) -> Any:
+        assert workflow_id == run_id
+        assert get_ident() != parent_thread
+        assert get_local_dbos_context() is None
+        assert DBOS.workflow_id is None
+        return SimpleNamespace(name=recorded_name) if recorded_name is not None else None
+
+    status = Mock(side_effect=read_status)
+    async_status = AsyncMock(side_effect=AssertionError('Async status reads checkpoint the parent'))
+    step = AsyncMock(side_effect=AssertionError('Dispatch must not introduce a recorded step'))
+    handle = object()
+
+    with DBOSContextEnsure() as parent:
+        parent.workflow_id = 'scheduled-parent'
+        parent.function_id = 7
+
+        async def start_child(workflow: Any, workflow_id: str) -> Any:
+            assert workflow is getattr(workflows, expected_name)
+            assert workflow_id == run_id
+            assert get_local_dbos_context() is parent
+            assert DBOS.workflow_id == 'scheduled-parent'
+            assert parent.id_assigned_for_next_workflow == run_id
+            assert parent.function_id == 7
+            return handle
+
+        start = AsyncMock(side_effect=start_child)
+        monkeypatch.setattr(DBOS, 'get_workflow_status', status)
+        monkeypatch.setattr(DBOS, 'get_workflow_status_async', async_status)
+        monkeypatch.setattr(DBOS, 'run_step_async', step)
+        monkeypatch.setattr(DBOS, 'start_workflow_async', start)
+
+        assert await workflows.start(run_id) is handle
+        assert get_local_dbos_context() is parent
+        assert parent.function_id == 7
+
+    status.assert_called_once_with(run_id)
+    start.assert_awaited_once_with(getattr(workflows, expected_name), run_id)
+    async_status.assert_not_awaited()
+    step.assert_not_awaited()
+
+
 async def test_legacy_build_agent_has_no_stream_handler(deps: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     original = agent_module.DBOSDurability
     configured_handlers = []
