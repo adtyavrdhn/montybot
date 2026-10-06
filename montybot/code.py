@@ -43,6 +43,7 @@ from montybot.browser.service import UserBusy
 from montybot.browser.state import BLANK_URL
 from montybot.browsing import Session, host_of, refused_url, target_of
 from montybot.deps import RunDeps
+from montybot.observability import timed, timing
 from montybot.resources import Resources, current
 from montybot.settings import Settings
 from montybot.workspaces import DOWNLOADS, VIRTUAL_ROOT
@@ -141,6 +142,7 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
             last_page[0] = page
             return page
 
+    @timed('code.browser.goto')
     async def goto(url: str) -> str:
         async def use() -> str:
             refused = await refused_url(str(url), allow_private=allow_private)
@@ -152,9 +154,11 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
 
         return await guarded(use)
 
+    @timed('code.browser.read')
     async def read_page() -> str:
         return await guarded(session.read)
 
+    @timed('code.browser.click')
     async def click(target: str) -> str:
         if str(target).strip().strip('[]').isdigit() and not last_page[0]:
             await read_page()  # a ref from an earlier call: read what it names before deciding
@@ -171,6 +175,7 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
 
         return await guarded(use)
 
+    @timed('code.browser.type')
     async def type_text(target: str, text: str, press_enter: bool = False) -> str:
         async def use() -> str:
             await session.act(Type(text=str(text), target=target_of(str(target))))
@@ -180,6 +185,7 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
 
         return await guarded(use)
 
+    @timed('code.browser.press')
     async def press_key(key: str) -> str:
         async def use() -> str:
             await session.act(Press(key=str(key)))
@@ -230,43 +236,56 @@ async def run_snippet(
     set before the failing line. If the sandbox timed out, crashed or lost its connection, the session is dropped and
     the previous state stays, so the next call starts from before this one.
     """
-    session = Session(resources, run_id, user_id)
-    printed = Printed()
-    notes: list[str] = []
-    async with resources.monty.session() as monty:
-        if state is not None:
-            try:
-                await monty.load_session(state)
-            except MontyError:
-                notes.append(SESSION_LOST)
-                state = None
-        try:
-            async with asyncio.timeout(resources.settings.code_timeout_seconds):
-                result = await monty.feed_run(
-                    code,
-                    external_lookup=browser_functions(session),
-                    print_callback=printed,
-                    os=resources.workspaces.files(user_id),
-                    cwd=VIRTUAL_ROOT,
-                )
-        except MontySyntaxError as error:
-            return shown(printed, None, error.display('type-msg'), notes), state
-        except MontyTypingError as error:
-            return shown(printed, None, error.display(), notes), state
-        except MontyRuntimeError as error:
-            if isinstance(error.exception(), TimeoutError):
-                return shown(printed, None, f'{error.display("type-msg")} (the code ran too long)', notes), state
-            return shown(printed, None, error.display('type-msg'), notes), await monty.dump()
-        except (MontyError, TimeoutError) as error:  # crashed, disconnected, or over `code_timeout_seconds`
-            message = 'the code took too long' if isinstance(error, TimeoutError) else 'the code session stopped'
-            return shown(printed, None, f'{message}. {SESSION_LOST}', notes), state
-        return shown(printed, result, None, notes), await monty.dump()
+    with timing('monty.snippet'):
+        session = Session(resources, run_id, user_id)
+        printed = Printed()
+        notes: list[str] = []
+        with timing('monty.session'):
+            async with resources.monty.session() as monty:
+                if state is not None:
+                    try:
+                        with timing('monty.load'):
+                            await monty.load_session(state)
+                    except MontyError:
+                        notes.append(SESSION_LOST)
+                        state = None
+                try:
+                    with timing('monty.run'):
+                        async with asyncio.timeout(resources.settings.code_timeout_seconds):
+                            result = await monty.feed_run(
+                                code,
+                                external_lookup=browser_functions(session),
+                                print_callback=printed,
+                                os=resources.workspaces.files(user_id),
+                                cwd=VIRTUAL_ROOT,
+                            )
+                except MontySyntaxError as error:
+                    return shown(printed, None, error.display('type-msg'), notes), state
+                except MontyTypingError as error:
+                    return shown(printed, None, error.display(), notes), state
+                except MontyRuntimeError as error:
+                    if isinstance(error.exception(), TimeoutError):
+                        return shown(
+                            printed, None, f'{error.display("type-msg")} (the code ran too long)', notes
+                        ), state
+                    with timing('monty.dump'):
+                        new_state = await monty.dump()
+                    return shown(printed, None, error.display('type-msg'), notes), new_state
+                except (MontyError, TimeoutError) as error:  # crashed, disconnected, or over `code_timeout_seconds`
+                    message = (
+                        'the code took too long' if isinstance(error, TimeoutError) else 'the code session stopped'
+                    )
+                    return shown(printed, None, f'{message}. {SESSION_LOST}', notes), state
+                with timing('monty.dump'):
+                    new_state = await monty.dump()
+                return shown(printed, result, None, notes), new_state
 
 
 code_tools: FunctionToolset[RunDeps] = FunctionToolset(id='code')
 
 
 @code_tools.tool
+@timed('code.run')
 async def run_code(ctx: RunContext[RunDeps], code: str) -> str:
     """Run Python in your session, with your browser as async functions inside it (see the instructions). Returns
     what the code printed and the value of its last expression, or the error."""

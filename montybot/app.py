@@ -18,6 +18,7 @@ from starlette.types import Receive, Scope, Send
 
 from montybot import api, approvals, workflows
 from montybot.live import live_app
+from montybot.observability import HTTPtimings
 from montybot.resources import Resources, open_resources
 from montybot.settings import Settings
 
@@ -66,6 +67,7 @@ def create_app(settings: Settings) -> Starlette:
             Route('/api/memories/{memory_id:uuid}', api.remove_memory, methods=['DELETE']),
         ],
         middleware=[
+            Middleware(HTTPtimings),
             Middleware(
                 SessionMiddleware,
                 secret_key=settings.session_secret.get_secret_value(),
@@ -73,7 +75,7 @@ def create_app(settings: Settings) -> Starlette:
                 same_site='lax',
                 https_only=settings.secure_cookies,
                 max_age=30 * 24 * 60 * 60,
-            )
+            ),
         ],
         lifespan=lifespan,
         exception_handlers={ValidationError: invalid_body},

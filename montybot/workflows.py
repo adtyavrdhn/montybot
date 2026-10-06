@@ -35,6 +35,7 @@ from montybot.browser.contract import BrowserError
 from montybot.browser.service import UnknownRun
 from montybot.deps import RunDeps
 from montybot.models import Run, Schedule
+from montybot.observability import timed, timing
 from montybot.resources import Resources, current
 
 RETRIED: StepOptions = {'retries_allowed': True, 'max_attempts': 5, 'interval_seconds': 1.0}
@@ -45,28 +46,33 @@ FAILURE_NOTICE = 'Something went wrong while working on this, and I could not fi
 
 @DBOS.workflow(name='montybot.run_thread')
 async def run_thread(run_id: str) -> str:
-    resources = current()
-    run, history_json, schedule = await DBOS.run_step_async({'name': 'run.start'}, start_run, resources, run_id)
-    history = recent(ModelMessagesTypeAdapter.validate_json(history_json), resources.settings.history_limit)
-    deps = RunDeps(resources=resources, run=run, schedule=schedule)
-    try:
+    with timing('run.lifecycle'):
+        resources = current()
+        run, history_json, schedule = await DBOS.run_step_async({'name': 'run.start'}, start_run, resources, run_id)
+        history = recent(ModelMessagesTypeAdapter.validate_json(history_json), resources.settings.history_limit)
+        deps = RunDeps(resources=resources, run=run, schedule=schedule)
         try:
-            result = await resources.agent.run(run.prompt, deps=deps, message_history=history)
-        except Exception as error:
-            logfire.error('Run {run_id} failed: {error_type}', run_id=run_id, error_type=type(error).__name__)
-            await DBOS.run_step_async({**RETRIED, 'name': 'run.failed'}, fail_run, resources, run, type(error).__name__)
-            if isinstance(error, DBOSException):
-                raise  # a replay that does not match its recording is a bug to see, not a failed task
-            return 'failed'
-        new_messages = ModelMessagesTypeAdapter.dump_json(result.new_messages())
-        await DBOS.run_step_async(
-            {**RETRIED, 'name': 'run.finish'}, finish_run, resources, run, new_messages, result.output
-        )
-        return 'done'
-    finally:
-        await DBOS.run_step_async({**RETRIED, 'name': 'run.close'}, close_browser, resources, run)
+            try:
+                with timing('run.agent'):
+                    result = await resources.agent.run(run.prompt, deps=deps, message_history=history)
+            except Exception as error:
+                logfire.error('Run {run_id} failed: {error_type}', run_id=run_id, error_type=type(error).__name__)
+                await DBOS.run_step_async(
+                    {**RETRIED, 'name': 'run.failed'}, fail_run, resources, run, type(error).__name__
+                )
+                if isinstance(error, DBOSException):
+                    raise  # a replay that does not match its recording is a bug to see, not a failed task
+                return 'failed'
+            new_messages = ModelMessagesTypeAdapter.dump_json(result.new_messages())
+            await DBOS.run_step_async(
+                {**RETRIED, 'name': 'run.finish'}, finish_run, resources, run, new_messages, result.output
+            )
+            return 'done'
+        finally:
+            await DBOS.run_step_async({**RETRIED, 'name': 'run.close'}, close_browser, resources, run)
 
 
+@timed('run.dispatch')
 async def start(run_id: str) -> WorkflowHandleAsync[str]:
     """Start the run's workflow. Starting it twice is harmless: the second start finds the first."""
     with SetWorkflowID(run_id):
@@ -74,47 +80,51 @@ async def start(run_id: str) -> WorkflowHandleAsync[str]:
 
 
 async def start_run(resources: Resources, run_id: str) -> tuple[Run, bytes, Schedule | None]:
-    async with resources.pool.connection() as connection, connection.transaction():
-        run = await store.load_run(connection, run_id)
-        await store.set_run_status(connection, run_id, 'running')
-        history = await store.load_history(connection, run.thread_id)
-        schedule = await store.schedule_of_thread(connection, run.thread_id) if run.trigger == 'schedule' else None
-    return run, ModelMessagesTypeAdapter.dump_json(history), schedule
+    with timing('run.start'):
+        async with resources.pool.connection() as connection, connection.transaction():
+            run = await store.load_run(connection, run_id)
+            await store.set_run_status(connection, run_id, 'running')
+            history = await store.load_history(connection, run.thread_id)
+            schedule = await store.schedule_of_thread(connection, run.thread_id) if run.trigger == 'schedule' else None
+        return run, ModelMessagesTypeAdapter.dump_json(history), schedule
 
 
 async def finish_run(resources: Resources, run: Run, new_messages: bytes, output: str) -> None:
-    async with resources.pool.connection() as connection, connection.transaction():
-        if await store.lock_finished(connection, run.id):
-            return  # this step ran before and committed, but DBOS had not recorded it
-        await store.append_history(connection, run.thread_id, ModelMessagesTypeAdapter.validate_json(new_messages))
-        await store.finish_run(connection, run.id, 'done', output=output)
+    with timing('run.finish'):
+        async with resources.pool.connection() as connection, connection.transaction():
+            if await store.lock_finished(connection, run.id):
+                return  # this step ran before and committed, but DBOS had not recorded it
+            await store.append_history(connection, run.thread_id, ModelMessagesTypeAdapter.validate_json(new_messages))
+            await store.finish_run(connection, run.id, 'done', output=output)
 
 
 async def fail_run(resources: Resources, run: Run, error_type: str) -> None:
-    async with resources.pool.connection() as connection, connection.transaction():
-        if await store.lock_finished(connection, run.id):
-            return
-        await store.append_history(
-            connection,
-            run.thread_id,
-            [
-                ModelRequest(parts=[UserPromptPart(content=run.prompt)]),
-                ModelResponse(parts=[TextPart(content=FAILURE_NOTICE)]),
-            ],
-        )
-        await store.finish_run(connection, run.id, 'failed', output=FAILURE_NOTICE, error=error_type)
+    with timing('run.fail'):
+        async with resources.pool.connection() as connection, connection.transaction():
+            if await store.lock_finished(connection, run.id):
+                return
+            await store.append_history(
+                connection,
+                run.thread_id,
+                [
+                    ModelRequest(parts=[UserPromptPart(content=run.prompt)]),
+                    ModelResponse(parts=[TextPart(content=FAILURE_NOTICE)]),
+                ],
+            )
+            await store.finish_run(connection, run.id, 'failed', output=FAILURE_NOTICE, error=error_type)
 
 
 async def close_browser(resources: Resources, run: Run) -> None:
     """Save the user's sign-ins and close the run's browser, if it opened one."""
-    try:
-        await resources.browser.close(run_id=run.id, user_id=run.user_id)
-    except UnknownRun:
-        pass
-    except BrowserError as error:  # the browser is closed either way; the lease is released
-        logfire.warn(
-            'Closing the browser of run {run_id}: {error_type}', run_id=run.id, error_type=type(error).__name__
-        )
+    with timing('run.close'):
+        try:
+            await resources.browser.close(run_id=run.id, user_id=run.user_id)
+        except UnknownRun:
+            pass
+        except BrowserError as error:  # the browser is closed either way; the lease is released
+            logfire.warn(
+                'Closing the browser of run {run_id}: {error_type}', run_id=run.id, error_type=type(error).__name__
+            )
 
 
 def recent(history: list[ModelMessage], limit: int) -> list[ModelMessage]:
@@ -131,6 +141,7 @@ def recent(history: list[ModelMessage], limit: int) -> list[ModelMessage]:
     return history[within[0] if within else starts[-1] :]
 
 
+@timed('run.start_queued')
 async def start_queued(resources: Resources) -> int:
     """Start the workflow of every run still queued, in case the app stopped between recording a run and starting
     it. Starting a workflow that exists is harmless."""
