@@ -17,13 +17,12 @@ on macOS and `~/.cache/montybot/servo/servo/servoshell` on Linux.
 ## Conformance
 
 All 16 tests of `BrowserBackendConformance` pass against a real servoshell 0.7.0, with
-`not_supported = {'export', 'ref'}`:
+`not_supported = {'export'}`:
 
 | Feature | Status | Fix it needs |
 |---|---|---|
 | `export`, `release` | `NotSupported` on a stock build: Get All Cookies hides HttpOnly cookies | Upstream: `patches/servo-webdriver-httponly.patch`. With a build that has it, `http_only_export=True` turns export on |
-| `ref` targets | `NotSupported` | Local: refs come with the snapshot format in #13 |
-| everything else | Passes: open, seeding (HttpOnly too), storage, every action, screenshots | |
+| everything else | Passes: open, seeding (HttpOnly too), storage, every action, refs (#13's `SnapshotWalker`), screenshots | |
 
 ## Decisions on the known gaps
 

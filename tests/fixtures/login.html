@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Sign in</title>
+<style>
+  body { font: 16px sans-serif; margin: 40px; }
+  .hidden { display: none; }
+</style>
+<h1>Sign in</h1>
+<p>Use your <b>shop</b> account.</p>
+<form id="form">
+  <p><label for="username">Username</label> <input id="username" name="username" autocomplete="username"></p>
+  <p><label>Password <input id="password" name="password" type="password"></label></p>
+  <p><label><input id="remember" type="checkbox" checked> Remember me</label></p>
+  <p><input id="email" type="email" placeholder="Email for receipts"></p>
+  <p><button type="submit">Sign in</button> <a href="#forgot">Forgot password?</a></p>
+</form>
+<p class="hidden">You should not see this.</p>
+<p id="status" role="status"></p>
+<script>
+  document.getElementById('form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const user = document.getElementById('username').value;
+    const ok = document.getElementById('password').value === 'hunter2';
+    document.getElementById('status').textContent = ok ? 'Signed in as ' + user : 'Wrong password';
+  });
+</script>
+</html>

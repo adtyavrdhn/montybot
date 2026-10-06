@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Shadow</title>
+<style>body { font: 16px sans-serif; margin: 40px; }</style>
+<h1>Components</h1>
+<p>Light text before.</p>
+<product-card id="card"><span slot="title">Coffee beans</span>Fresh from the roaster.</product-card>
+<p>Light text after.</p>
+<secret-box></secret-box>
+<p id="log"></p>
+<script>
+  customElements.define('product-card', class extends HTMLElement {
+    constructor() {
+      super();
+      const root = this.attachShadow({mode: 'open'});
+      root.innerHTML =
+        '<style>.box { border: 1px solid #ccc; padding: 8px; }</style>' +
+        '<div class="box"><h3><slot name="title"></slot></h3><p><slot></slot></p>' +
+        'Shadow text <b>bold</b>.' +
+        '<p><label for="note">Gift note</label> <input id="note"></p>' +
+        '<quantity-picker></quantity-picker>' +
+        '<button id="buy">Buy now</button></div>';
+      root.getElementById('buy').addEventListener('click', () => {
+        document.getElementById('log').textContent = 'Bought with note: ' + root.getElementById('note').value;
+      });
+    }
+  });
+  customElements.define('quantity-picker', class extends HTMLElement {
+    constructor() {
+      super();
+      const root = this.attachShadow({mode: 'open'});
+      root.innerHTML = '<span>Nested shadow</span> <button aria-label="More">+</button>';
+      root.querySelector('button').addEventListener('click', () => {
+        document.getElementById('log').textContent = 'More clicked';
+      });
+    }
+  });
+  customElements.define('secret-box', class extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({mode: 'closed'}).innerHTML = '<button>Hidden in a closed root</button>';
+    }
+  });
+</script>
+</html>

@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Newsletter</title>
+<style>body { font: 14px sans-serif; margin: 8px; }</style>
+<p>Get the weekly deals.</p>
+<p><label>Email <input id="email" type="email"></label> <button id="subscribe">Subscribe</button></p>
+<p id="result"></p>
+<script>
+  document.getElementById('subscribe').addEventListener('click', () => {
+    document.getElementById('result').textContent = 'Subscribed ' + document.getElementById('email').value;
+  });
+</script>
+</html>

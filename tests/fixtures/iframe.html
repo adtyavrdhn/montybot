@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Frames</title>
+<style>
+  body { font: 16px sans-serif; margin: 40px; }
+  iframe { width: 500px; height: 200px; border: 2px solid #999; }
+</style>
+<h1>News</h1>
+<p>Before the frames.</p>
+<iframe id="newsletter" title="Newsletter" src="frame-inner.html"></iframe>
+<p>Between the frames.</p>
+<iframe id="ads" title="Ads"></iframe>
+<p>After the frames.</p>
+<script>
+  // The same server on another host name is another origin, so its document cannot be read.
+  const other = location.hostname === '127.0.0.1' ? 'localhost' : '127.0.0.1';
+  document.getElementById('ads').src = location.protocol + '//' + other + ':' + location.port + '/frame-inner.html';
+</script>
+</html>

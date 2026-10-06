@@ -7,6 +7,7 @@ Import from the modules directly; this package re-exports nothing, so each name 
 - `montybot.browser.service`: `BrowserService`, the API the agent and the web app call.
 - `montybot.browser.host`: `BrowserHost`, the browser service itself, over any backend.
 - `montybot.browser.jar`: `SignInJar` and `JarLease`, where saved sign-ins go, with in-memory stand-ins.
+- `montybot.browser.snapshot`: `SnapshotWalker`, the snapshot text and refs, from `snapshot.js`, for every engine.
 - `montybot.browser.fake`: `FakeBrowser`, an in-memory `BrowserBackend`.
 - `montybot.browser.conformance`: `BrowserBackendConformance`, the tests every backend passes (needs pytest).
 - `montybot.browser.chromium`: `ChromiumBackend`, real Chrome through Playwright (`chromium_linux`: Xvfb and bwrap).

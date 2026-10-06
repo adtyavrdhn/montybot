@@ -59,8 +59,8 @@ server setup (#7) adds it.
 
 - **`act` waits for the page an action opens.** After a click, key press, typed text or mouse release, it watches
   50 ms for a main-frame navigation, and if one starts, waits for the new page's `load`.
-- **`snapshot()`** is the minimal form: URL, title and the page's `innerText`. Typed values are never in it, so
-  passwords stay out. Refs belong to #13; until then a `Ref` raises `TargetNotFound`.
+- **`snapshot()` and refs** come from #13's `SnapshotWalker` (see `README.md`): the same text and refs as Servo for
+  the same page, typed passwords masked. A click on a ref is a mouse click at the element's centre.
 - **Selectors are CSS only** (`css=` in Playwright), and an invalid one raises `TargetNotFound`.
 - **No automation giveaways in the page:** `--enable-automation` is dropped (no "controlled by automated software"
   bar) and `navigator.webdriver` is false. A test checks both, headed.
