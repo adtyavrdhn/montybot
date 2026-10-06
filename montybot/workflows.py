@@ -90,6 +90,9 @@ async def start_run(resources: Resources, run_id: str) -> tuple[Run, bytes, Sche
 
 
 async def finish_run(resources: Resources, run: Run, new_messages: bytes, output: str) -> None:
+    # A visible reply promises the user's lease is free. Keep existing DBOS step order for paused-run replay;
+    # cleanup belongs to this retried terminal step, and the final run.close remains idempotent.
+    await close_browser(resources, run)
     with timing('run.finish'):
         async with resources.pool.connection() as connection, connection.transaction():
             if await store.lock_finished(connection, run.id):
@@ -99,6 +102,7 @@ async def finish_run(resources: Resources, run: Run, new_messages: bytes, output
 
 
 async def fail_run(resources: Resources, run: Run, error_type: str) -> None:
+    await close_browser(resources, run)
     with timing('run.fail'):
         async with resources.pool.connection() as connection, connection.transaction():
             if await store.lock_finished(connection, run.id):
