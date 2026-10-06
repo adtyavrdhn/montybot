@@ -8,6 +8,7 @@ from pydantic_ai import Agent, FunctionToolset, RunContext
 from pydantic_ai.capabilities import HandleDeferredToolCalls
 from pydantic_ai.durable_exec.dbos import DBOSDurability
 from pydantic_ai.models import Model
+from pydantic_ai.models.anthropic import AnthropicModelSettings
 
 from montybot import approvals
 from montybot.browsing import browser_tools
@@ -42,6 +43,16 @@ async def ask_user(ctx: RunContext[RunDeps], question: str) -> str:
     return str(reply.get('text', ''))
 
 
+CACHE = AnthropicModelSettings(
+    anthropic_cache=True,
+    anthropic_cache_instructions=True,
+    anthropic_cache_tool_definitions=True,
+    anthropic_cache_messages=True,
+)
+"""Anthropic prompt caching on everything that repeats between a run's model calls: the instructions, the tool
+definitions and the conversation so far (page snapshots included). Other providers ignore these keys."""
+
+
 def build_agent(model: Model | str) -> Agent[RunDeps, str]:
     """Tools run one at a time: they number their DBOS steps as they go, and an ask must be the run's only one."""
     return Agent[RunDeps, str](
@@ -54,4 +65,5 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
             HandleDeferredToolCalls(handler=approvals.handle_approvals),
             DBOSDurability(parallel_execution_mode='sequential'),
         ],
+        model_settings=CACHE,
     )
