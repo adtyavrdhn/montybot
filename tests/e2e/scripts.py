@@ -137,6 +137,44 @@ def todays_offer(turn: Turn) -> ModelResponse:
     return say(offer.strip(' -') if offer else f'I could not get past the check. {turn.last}')
 
 
+# U5: the browser downloads the newest three CSVs into the user's files, and the same snippet reads them with pathlib.
+DOWNLOAD_INVOICES = """
+import re
+from pathlib import Path
+page = await goto(site + '/')
+saved = []
+for ref in re.findall(r'\\[(\\d+)\\] link "CSV"', page)[:3]:
+    page = await click(ref)
+    saved += re.findall(r'Downloaded: (\\S+)', page)
+total = 0
+for name in saved:
+    for line in Path(name).read_text().splitlines()[1:]:
+        item, quantity, price = line.split(',')
+        total += int(quantity) * float(price)
+print(f'{len(saved)} invoices, total {total:.2f}')
+"""
+
+
+def total_invoices(turn: Turn) -> ModelResponse:
+    if not turn.returns:
+        return run(f'site = {turn.url!r}' + DOWNLOAD_INVOICES)
+    found = re.search(r'(\d+) invoices, total (\d+\.\d\d)', turn.last)
+    if found is None:
+        return say(f'I could not total them. {turn.last}')
+    return say(f'Your last {found.group(1)} invoices come to €{found.group(2)}.')
+
+
+def show_file(turn: Turn) -> ModelResponse:
+    """Lists the user's files, then reads the path at the end of the message, wherever it points."""
+    if not turn.returns:
+        path = turn.prompt.split()[-1]
+        return run(
+            f"from pathlib import Path\nprint(sorted(p.name for p in Path('/work').iterdir()))\n"
+            f'print(Path({path!r}).read_text())'
+        )
+    return say(turn.last)
+
+
 def fail(turn: Turn) -> ModelResponse:
     raise RuntimeError('the model provider is down')
 
@@ -252,6 +290,8 @@ SCRIPTS: dict[str, Script] = {
     'Order eggs from': order_eggs,
     'Find the three cheapest flights to Lisbon next Friday': cheapest_flights,
     'What is on offer today at': todays_offer,
+    'Download my last three invoices from': total_invoices,
+    'Show me my files and the file': show_file,
 }
 
 

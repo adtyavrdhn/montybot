@@ -1,9 +1,16 @@
 """`run_code` on local Monty: what the model sees when code fails, times out or floods output, and that the session's
-variables survive what they should. The browser functions are not called here; the end-to-end tests cover them."""
+variables survive what they should. The browser functions are not called here; the end-to-end tests cover them.
+
+The user's files (#21) are checked on local Monty and, with `MONTYBOT_TEST_MONTY_URL`, on Full Monty, whose OS calls
+come back over the WebSocket.
+"""
 
 from __future__ import annotations
 
+import os
+import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,8 +19,11 @@ from pydantic import SecretStr
 
 from montybot.code import OUTPUT_LIMIT, SESSION_LOST, looks_irreversible, open_monty, run_snippet
 from montybot.settings import Settings
+from montybot.workspaces import Workspaces
 
 pytestmark = pytest.mark.anyio
+USER = str(uuid.uuid4())
+FULL_MONTY = os.environ.get('MONTYBOT_TEST_MONTY_URL')
 
 
 @pytest.fixture
@@ -21,21 +31,75 @@ def anyio_backend() -> str:
     return 'asyncio'
 
 
-@pytest.fixture
-async def resources() -> AsyncIterator[Any]:
-    settings = Settings(
+def settings_on(monty_url: str | None, workspaces_dir: Path) -> Settings:
+    return Settings(
         database_url='postgresql://unused',
         session_secret=SecretStr('x'),
         encryption_key=SecretStr('x'),
         code_compute_seconds=1,
         code_timeout_seconds=30,
+        monty_url=monty_url,
+        workspaces_dir=workspaces_dir,
     )
+
+
+@pytest.fixture
+async def resources(tmp_path: Path) -> AsyncIterator[Any]:
+    settings = settings_on(None, tmp_path)
     async with open_monty(settings) as monty:
-        yield SimpleNamespace(settings=settings, monty=monty, browser=None, pool=None, lease=None)
+        yield SimpleNamespace(settings=settings, monty=monty, workspaces=Workspaces(tmp_path), browser=None, pool=None)
 
 
-async def run(resources: Any, state: bytes | None, code: str) -> tuple[str, bytes | None]:
-    return await run_snippet(resources, 'run-1', 'user-1', state, code)
+@pytest.fixture(params=['local', 'full'])
+async def any_monty(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[Any]:
+    """Local Monty, and Full Monty when the test run names one."""
+    if request.param == 'full' and not FULL_MONTY:
+        pytest.skip('Full Monty: set MONTYBOT_TEST_MONTY_URL')
+    settings = settings_on(FULL_MONTY if request.param == 'full' else None, tmp_path)
+    async with open_monty(settings) as monty:
+        yield SimpleNamespace(settings=settings, monty=monty, workspaces=Workspaces(tmp_path), browser=None, pool=None)
+
+
+async def run(resources: Any, state: bytes | None, code: str, user_id: str = USER) -> tuple[str, bytes | None]:
+    return await run_snippet(resources, 'run-1', user_id, state, code)
+
+
+FILES = """
+from pathlib import Path
+Path('notes').mkdir()
+Path('/work/notes/todo.txt').write_text('eggs\\n')
+with open('notes/todo.txt', 'a') as f:
+    f.write('milk\\n')
+print(Path('/work/notes/todo.txt').read_text().split(), [p.name for p in Path('/work/notes').iterdir()])
+print(Path('notes/todo.txt').stat().st_size, Path('/work/notes').is_dir(), Path('/work/nothing').exists())
+"""
+
+
+async def test_code_uses_the_users_files(any_monty: Any) -> None:
+    out, _ = await run(any_monty, None, FILES)
+    assert out == "['eggs', 'milk'] ['todo.txt']\n10 True False"
+    directory = any_monty.workspaces.directory(USER)
+    assert (directory / 'notes' / 'todo.txt').read_text() == 'eggs\nmilk\n'  # on our server, in the user's folder
+
+    # Errors name the path code used, never the folder on our server.
+    out, _ = await run(any_monty, None, "from pathlib import Path\nPath('/work/missing.csv').read_text()")
+    assert out == "Error: FileNotFoundError: [Errno 2] No such file or directory: '/work/missing.csv'"
+    assert str(directory) not in out
+
+
+async def test_code_sees_only_its_users_files(any_monty: Any) -> None:
+    other = str(uuid.uuid4())
+    await run(any_monty, None, "from pathlib import Path\nPath('/work/secret.txt').write_text('A only')", other)
+
+    out, _ = await run(any_monty, None, "from pathlib import Path\nPath('/work/secret.txt').exists()")
+    assert out == 'False'
+    for path in [
+        f'/work/../{other}/secret.txt',
+        str(any_monty.workspaces.directory(other) / 'secret.txt'),
+        '/etc/hosts',
+    ]:
+        out, _ = await run(any_monty, None, f'from pathlib import Path\nPath({path!r}).read_text()')
+        assert out.startswith('Error: PermissionError:'), out
 
 
 async def test_variables_last_and_errors_keep_what_ran_before(resources: Any) -> None:

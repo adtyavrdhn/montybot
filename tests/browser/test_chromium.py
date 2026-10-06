@@ -17,6 +17,7 @@ from urllib.parse import parse_qs
 
 import pytest
 from playwright.async_api import async_playwright
+from sites.invoices import INVOICES, Invoices, csv_of, pdf_of
 
 from montybot.browser.chromium import ChromiumBackend, ChromiumOptions
 from montybot.browser.conformance import BrowserBackendConformance, Site
@@ -24,6 +25,7 @@ from montybot.browser.contract import (
     ActionFailed,
     BrowserBackend,
     Click,
+    Download,
     Navigate,
     Press,
     Ref,
@@ -187,6 +189,26 @@ async def test_click_waits_for_the_page_it_opens(shop: str) -> None:
         await browser.act(Type(text='hunter2', target=Selector(css='#password')))
         await browser.act(Click(target=Selector(css='#submit')))
         assert 'Signed in as ada' in (await browser.snapshot()).text
+
+
+async def test_downloads_are_kept_until_taken() -> None:
+    """#21: a link or an address that is a file downloads it, the page stays, and the file is taken once."""
+    site = Invoices()
+    site.start()
+    try:
+        async with chromium(HEADLESS) as browser:
+            await browser.open(BrowserState(url=f'{site.url}/'))
+            await browser.act(Click(target=Selector(css='#csv-2026-10')))
+            await browser.act(Navigate(url=f'{site.url}/invoices/2026-09.pdf'))
+            assert (await browser.snapshot()).title == 'Your invoices'
+            month, lines = INVOICES[-1]
+            assert await browser.take_downloads() == [
+                Download(name=f'invoice-{month}.csv', data=csv_of(lines).encode()),
+                Download(name='invoice-2026-09.pdf', data=pdf_of(*INVOICES[-2])),
+            ]
+            assert await browser.take_downloads() == []
+    finally:
+        site.stop()
 
 
 async def test_close_deletes_the_profile(shop: str) -> None:

@@ -35,6 +35,7 @@ from montybot.browser.host import BrowserHost
 from montybot.browser.service import HandoffNotActive, Restarted, UnknownRun, UserBusy
 from montybot.deps import RunDeps
 from montybot.resources import Resources, current
+from montybot.workspaces import MAX_DOWNLOAD_BYTES, download_name, save_download
 
 SNAPSHOT_LIMIT = 12_000
 
@@ -56,6 +57,8 @@ class Session:
         self.run_id = run_id
         self.user_id = user_id
         self.notes: list[str] = []
+        self.downloaded: list[str] = []
+        """What the browser downloaded since the last `read()`, saved in the user's files (#21)."""
         self.url = ''
         """The page the browser was on at the last `read()`."""
 
@@ -78,10 +81,27 @@ class Session:
         await self.start()
         result = await self.browser.snapshot(run_id=self.run_id, user_id=self.user_id)
         self._note(result.restarted)
+        await self.save_downloads()
         snapshot = result.snapshot
         self.url = snapshot.url
         text = snapshot.text if len(snapshot.text) <= SNAPSHOT_LIMIT else snapshot.text[:SNAPSHOT_LIMIT] + '\n[cut]'
-        return '\n'.join([*self.notes, f'URL: {snapshot.url}', f'Title: {snapshot.title}', '', text])
+        downloaded, self.downloaded = self.downloaded, []
+        return '\n'.join([*self.notes, *downloaded, f'URL: {snapshot.url}', f'Title: {snapshot.title}', '', text])
+
+    async def save_downloads(self) -> None:
+        """Save what the browser downloaded into the user's files, and say where in the next `read()`."""
+        downloads = await self.browser.take_downloads(run_id=self.run_id, user_id=self.user_id)
+        if not downloads:
+            return
+        workspace = self.resources.workspaces.of(self.user_id)
+        for download in downloads:
+            if len(download.data) > MAX_DOWNLOAD_BYTES:
+                self.downloaded.append(
+                    f'Download not saved: {download_name(download.name)} is over {MAX_DOWNLOAD_BYTES >> 20} MB.'
+                )
+                continue
+            path = await save_download(workspace, download.name, download.data)
+            self.downloaded.append(f'Downloaded: {path}')
 
     async def activity(self, text: str) -> None:
         async with self.resources.pool.connection() as connection:

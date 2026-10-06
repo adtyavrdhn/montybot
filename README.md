@@ -19,7 +19,8 @@ uv run montybot serve         # http://127.0.0.1:8000
 The app is Starlette plus DBOS in one process (`montybot/app.py`, `montybot/workflows.py`). A run is a DBOS workflow:
 model requests and browser calls are steps, and questions, approvals and hand-offs wait in `DBOS.recv`
 (`montybot/approvals.py`). The agent's code runs in Monty through `run_code` (`montybot/code.py`), with the browser
-as host functions; with `MONTY_URL` set it runs on Full Monty. The browser contract and service are in [`montybot/browser/`](montybot/browser/README.md).
+as host functions; with `MONTY_URL` set it runs on Full Monty. Its file calls (`pathlib`, `open`) reach the user's
+own directory under `WORKSPACES_DIR` at `/work`, where browser downloads land too (`montybot/workspaces.py`). The browser contract and service are in [`montybot/browser/`](montybot/browser/README.md).
 
 ## Tests
 

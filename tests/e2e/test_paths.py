@@ -1,5 +1,6 @@
 """The user paths that need only a browser: U1 read the web and U6 a bot check the user solves. U2 and U3 are in
-`test_sign_ins.py` and `test_skeleton.py`; U4 (schedules) and U5 (files) come with #9 and #21."""
+`test_sign_ins.py` and `test_skeleton.py`; U4 (schedules) comes with #9, and U5 (files) is in
+`test_files.py`."""
 
 from __future__ import annotations
 

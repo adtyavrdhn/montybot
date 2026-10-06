@@ -30,8 +30,9 @@ It agrees with that note on:
 
 It differs on purpose:
 
-- **No persistent workspace per user.** Logins live in an encrypted cookie jar (Playwright `storageState`) in
-  Postgres, not on a VM's disk.
+- **No VM per user.** Logins live in an encrypted cookie jar (Playwright `storageState`) in Postgres, not on a VM's
+  disk. A user's files are a plain directory on our server (`WORKSPACES_DIR`), which Monty code sees at `/work` and
+  browser downloads land in (#21).
 - **No computer use.** There is no E2B desktop and no router choosing between Monty and computer use. monty-bot only
   drives a browser. A task that needs a desktop app is out of scope. (Decided 2026-10-06.)
 - **Agents are the clients, not chat channels.** Users reach monty-bot through the agent they already use. That agent

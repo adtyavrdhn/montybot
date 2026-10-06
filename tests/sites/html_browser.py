@@ -15,6 +15,7 @@ one, and nothing else), no scripts.
 
 from __future__ import annotations
 
+import re
 import time
 import urllib.error
 import urllib.request
@@ -24,7 +25,7 @@ from html.parser import HTMLParser
 from http.cookies import SimpleCookie
 from urllib.parse import urlencode, urljoin, urlsplit
 
-from montybot.browser.contract import Action, Click, MouseDown, MouseUp, Press, Ref, Selector
+from montybot.browser.contract import Action, Click, Download, MouseDown, MouseUp, Press, Ref, Selector
 from montybot.browser.fake import VIEWPORT_HEIGHT, VIEWPORT_WIDTH, FakeBrowser, FakeElement, FakePage
 from montybot.browser.state import BLANK_URL, Cookie
 
@@ -192,9 +193,15 @@ _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedire
 
 class HtmlBrowser(FakeBrowser):
     def __init__(self) -> None:
-        self.downloads: list[tuple[str, bytes]] = []
-        """What links and forms downloaded instead of showing, in order. Downloads into the run's files are #21."""
+        self.downloads: list[Download] = []
+        """What links and forms downloaded instead of showing, in order."""
+        self._untaken = 0
         super().__init__(engine=ENGINE)
+
+    async def take_downloads(self) -> list[Download]:
+        """`DownloadsBackend`: the downloads since the last call, which the service saves in the run's files."""
+        taken, self._untaken = self.downloads[len(self.downloads) - self._untaken :], 0
+        return taken
 
     def _reset(self) -> None:
         super()._reset()
@@ -233,7 +240,9 @@ class HtmlBrowser(FakeBrowser):
                 continue
             kind = headers.get('Content-Type', '').split(';')[0].strip()
             if 'attachment' in headers.get('Content-Disposition', '') or kind not in ('text/html', ''):
-                self.downloads.append((url, body))  # a browser saves it and stays on the page
+                # A browser saves it, under the name the site suggests, and stays on the page.
+                self.downloads.append(Download(name=_file_name(url, headers.get('Content-Disposition', '')), data=body))
+                self._untaken += 1
                 return
             self._show(url, body.decode(errors='replace'))
             return
@@ -357,6 +366,12 @@ class HtmlBrowser(FakeBrowser):
                 if left <= fx <= right and top <= fy <= bottom:
                     return element
         return None
+
+
+def _file_name(url: str, disposition: str) -> str:
+    """The `filename` of a `Content-Disposition` header, else the last part of the URL's path."""
+    match = re.search(r'filename="?([^";]+)"?', disposition)
+    return match.group(1) if match else urlsplit(url).path.rsplit('/', 1)[-1]
 
 
 def new_backend() -> HtmlBrowser:

@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from montybot.browser.contract import Action, BrowserError, Screenshot, Snapshot
+from montybot.browser.contract import Action, BrowserError, Download, Screenshot, Snapshot
 from montybot.browser.live import FrameSource
 
 RunId = str
@@ -156,6 +156,11 @@ class BrowserService(Protocol):
     async def save_state(self, *, run_id: RunId, user_id: UserId) -> None:
         """Save the browser's state to the user's jar now, without closing it. Allowed during a hand-off. Raises
         `NotSupported('export')` for an engine that cannot export."""
+        ...
+
+    async def take_downloads(self, *, run_id: RunId, user_id: UserId) -> list[Download]:
+        """What the run's browser downloaded since the last call, for the run's files (#21). Empty for an engine
+        that does not keep downloads (`DownloadsBackend`), and while the browser is not open."""
         ...
 
     async def close(self, *, run_id: RunId, user_id: UserId) -> bool:

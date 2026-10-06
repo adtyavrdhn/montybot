@@ -35,6 +35,8 @@ from montybot.browser.contract import (
     Action,
     ActionFailed,
     BrowserBackend,
+    Download,
+    DownloadsBackend,
     NotSupported,
     TargetNotFound,
 )
@@ -247,6 +249,14 @@ class BrowserHost:
                 raise ActionFailed(_STOPPED_DURING_CALL) from gone
             await self._store(run, state)
             _touch(run)
+
+    async def take_downloads(self, *, run_id: RunId, user_id: UserId) -> list[Download]:
+        """Added for the run's files (#21). Allowed during a hand-off, so what the user downloads is kept too."""
+        run = await self._find(run_id, user_id)
+        async with self._hold(run):
+            if not isinstance(run.backend, DownloadsBackend):
+                return []
+            return await run.backend.take_downloads()
 
     async def close(self, *, run_id: RunId, user_id: UserId) -> bool:
         run = await self._find(run_id, user_id)

@@ -39,6 +39,7 @@ from starlette.types import ASGIApp
 from montybot.browser.contract import (
     Action,
     BrowserBackend,
+    Download,
     LifecycleError,
     Navigate,
     NotSupported,
@@ -143,6 +144,10 @@ class StubBrowserService:
     async def save_state(self, *, run_id: RunId, user_id: UserId) -> None:
         run = self._run(run_id, user_id)
         self.jar[user_id] = await run.backend.export()
+
+    async def take_downloads(self, *, run_id: RunId, user_id: UserId) -> list[Download]:
+        self._run(run_id, user_id)
+        return []  # the live view does not use downloads
 
     async def close(self, *, run_id: RunId, user_id: UserId) -> bool:
         run = self._run(run_id, user_id)

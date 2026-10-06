@@ -24,6 +24,7 @@ from montybot.db import Pool, create_pool, migrate
 from montybot.imports import import_object
 from montybot.settings import Settings
 from montybot.signins import PostgresJar, PostgresLease
+from montybot.workspaces import Workspaces
 
 if TYPE_CHECKING:
     from montybot.code import MontyRunner
@@ -38,6 +39,7 @@ class Resources:
     lease: PostgresLease
     agent: Agent[Any, str]
     monty: MontyRunner
+    workspaces: Workspaces
 
 
 _current: Resources | None = None
@@ -97,7 +99,14 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
     agent = build_agent(load_model(settings.model))
     async with browser, open_monty(settings) as monty:
         _current = Resources(
-            settings=settings, pool=pool, browser=browser, jar=jar, lease=lease, agent=agent, monty=monty
+            settings=settings,
+            pool=pool,
+            browser=browser,
+            jar=jar,
+            lease=lease,
+            agent=agent,
+            monty=monty,
+            workspaces=Workspaces(settings.workspaces_dir),
         )
         try:
             DBOS.launch()

@@ -28,7 +28,7 @@ import sys
 import tempfile
 from collections.abc import AsyncGenerator, Awaitable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
@@ -42,6 +42,7 @@ from playwright.async_api import (
     StorageState,
     StorageStateCookie,
 )
+from playwright.async_api import Download as PlaywrightDownload
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -50,6 +51,7 @@ from montybot.browser.contract import (
     Action,
     ActionFailed,
     Click,
+    Download,
     ElementTarget,
     LifecycleError,
     MouseDown,
@@ -146,13 +148,21 @@ class _Chrome:
     screen: VirtualScreen | None = None
     failed_url: str = BLANK_URL
     """The last page that failed to load. Chrome shows an error page for it, at `chrome-error://chromewebdata/`."""
+    downloads: list[asyncio.Task[Download | None]] = field(default_factory=list[asyncio.Task[Download | None]])
+    """Downloads started and not yet taken (#21)."""
+    download_started: asyncio.Event = field(default_factory=asyncio.Event)
 
     def __post_init__(self) -> None:
         def on_request_failed(request: Request) -> None:
             if request.is_navigation_request() and request.frame == self.page.main_frame:
                 self.failed_url = request.url
 
+        def on_download(download: PlaywrightDownload) -> None:
+            self.downloads.append(asyncio.ensure_future(_read_download(download)))
+            self.download_started.set()
+
         self.page.on('requestfailed', on_request_failed)
+        self.page.on('download', on_download)
 
     @property
     def url(self) -> str:
@@ -161,6 +171,8 @@ class _Chrome:
         return self.failed_url if url.startswith('chrome-error:') else url
 
     async def stop(self) -> None:
+        for task in self.downloads:
+            task.cancel()
         with contextlib.suppress(PlaywrightError, TimeoutError):
             await asyncio.wait_for(self.context.close(), 15)
         if self.screen is not None:
@@ -172,6 +184,8 @@ async def _launch(playwright: Playwright, options: ChromiumOptions) -> _Chrome:
     workdir = Path(tempfile.mkdtemp(prefix='montybot-chrome-'))
     profile = workdir / 'profile'
     profile.mkdir()
+    downloads = profile / 'downloads'
+    downloads.mkdir()
     screen: VirtualScreen | None = None
     try:
         executable = options.executable_path
@@ -204,7 +218,10 @@ async def _launch(playwright: Playwright, options: ChromiumOptions) -> _Chrome:
             ignore_default_args=_IGNORED_DEFAULT_ARGS,
             args=[*_ARGS, f'--window-size={options.window_width},{options.window_height}', *options.extra_args],
             no_viewport=True,
-            accept_downloads=False,
+            # #21: downloads are kept for the run's files. They land in the profile folder, the one Chrome can write
+            # to inside bwrap, and `take_downloads` reads and deletes them.
+            accept_downloads=True,
+            downloads_path=downloads,
             env=env,
             timeout=options.navigation_timeout * 1000,
         )
@@ -370,6 +387,23 @@ class ChromiumBackend:
         if chrome is not None:
             await chrome.stop()
 
+    # --- DownloadsBackend (#21) ---
+
+    async def take_downloads(self) -> list[Download]:
+        """The downloads finished since the last call. One still running gets up to `navigation_timeout` to finish,
+        else it is left for the next call. A failed download is dropped."""
+        chrome = self._require_open()
+        pending, chrome.downloads = chrome.downloads, []
+        if pending:
+            await asyncio.wait(pending, timeout=self.options.navigation_timeout)
+        taken: list[Download] = []
+        for task in pending:
+            if not task.done():
+                chrome.downloads.append(task)
+            elif not task.cancelled() and task.exception() is None and (download := task.result()) is not None:
+                taken.append(download)
+        return taken
+
     # --- internals ---
 
     def _require_open(self) -> _Chrome:
@@ -378,7 +412,9 @@ class ChromiumBackend:
         return self._chrome
 
     async def _goto(self, url: str) -> None:
-        page = self._require_open().page
+        chrome = self._require_open()
+        page = chrome.page
+        chrome.download_started.clear()
         error_page = asyncio.Event()
 
         def on_frame(frame: Frame) -> None:
@@ -391,6 +427,11 @@ class ChromiumBackend:
         except PlaywrightTimeoutError as error:
             raise ActionFailed(f'{url} did not finish loading in {self.options.navigation_timeout:g} s') from error
         except PlaywrightError as error:
+            if 'Download is starting' in str(error):
+                # #21: the URL is a file. Chrome downloads it and stays on the page, as for a click; the download's
+                # event may come just after this error, so `take_downloads` sees it.
+                await _wait(chrome.download_started.wait(), 5)
+                return
             reason = _net_error(error)
             shows_error_page = reason.startswith('net::') and reason != 'net::ERR_ABORTED'
             # Let Chrome's error page load, or it interrupts the next navigation.
@@ -505,6 +546,17 @@ async def _first(*awaitables: Awaitable[object]) -> None:
     finally:
         for task in tasks:
             task.cancel()
+
+
+async def _read_download(download: PlaywrightDownload) -> Download | None:
+    """The finished download's bytes, its file deleted (#21). None if it failed."""
+    try:
+        path = await download.path()
+        data = await asyncio.to_thread(path.read_bytes)
+        await download.delete()
+    except (PlaywrightError, OSError):
+        return None
+    return Download(name=download.suggested_filename, data=data)
 
 
 def _to_playwright(state: BrowserState) -> StorageState:
