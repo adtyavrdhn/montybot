@@ -131,6 +131,13 @@ async def set_run_status(connection: Connection, run_id: str, status: RunStatus)
     )
 
 
+async def lock_finished(connection: Connection, run_id: str) -> bool:
+    """Lock the run's row for this transaction; True if it is done or failed already."""
+    cursor = await connection.execute('SELECT status FROM montybot.runs WHERE id = %s FOR UPDATE', (run_id,))
+    row = await cursor.fetchone()
+    return row is not None and row['status'] in ('done', 'failed')
+
+
 async def finish_run(
     connection: Connection, run_id: str, status: RunStatus, *, output: str | None = None, error: str | None = None
 ) -> None:
@@ -212,6 +219,19 @@ async def get_ask(connection: Connection, user_id: str, ask_id: str) -> Ask | No
     return None if row is None else ask_from(row)
 
 
+async def handoff_of(connection: Connection, ask_id: str) -> str | None:
+    cursor = await connection.execute("SELECT details->>'handoff_id' AS id FROM montybot.asks WHERE id = %s", (ask_id,))
+    row = await cursor.fetchone()
+    return None if row is None else row['id']
+
+
+async def set_handoff(connection: Connection, ask_id: str, handoff_id: str) -> None:
+    await connection.execute(
+        "UPDATE montybot.asks SET details = jsonb_set(details, '{handoff_id}', to_jsonb(%s::text)) WHERE id = %s",
+        (handoff_id, ask_id),
+    )
+
+
 async def answer_ask(connection: Connection, user_id: str, ask_id: str, answer: dict[str, Any]) -> Ask | None:
     """Record the answer once. None if the ask is not the user's or was answered already."""
     cursor = await connection.execute(
@@ -223,11 +243,18 @@ async def answer_ask(connection: Connection, user_id: str, ask_id: str, answer: 
     return None if row is None else ask_from(row)
 
 
-async def expire_ask(connection: Connection, ask_id: str) -> None:
-    await connection.execute(
-        'UPDATE montybot.asks SET answer = \'{"expired": true}\', answered_at = now() WHERE id = %s AND answer IS NULL',
+async def expire_ask(connection: Connection, ask_id: str) -> dict[str, Any] | None:
+    """Mark the ask expired, unless the user answered it meanwhile: then return that answer."""
+    cursor = await connection.execute(
+        'UPDATE montybot.asks SET answer = \'{"expired": true}\', answered_at = now() '
+        'WHERE id = %s AND answer IS NULL RETURNING id',
         (ask_id,),
     )
+    if await cursor.fetchone() is not None:
+        return None
+    cursor = await connection.execute('SELECT answer FROM montybot.asks WHERE id = %s', (ask_id,))
+    row = await cursor.fetchone()
+    return None if row is None else row['answer']
 
 
 # --- activity ---

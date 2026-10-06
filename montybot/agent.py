@@ -39,11 +39,15 @@ async def ask_user(ctx: RunContext[RunDeps], question: str) -> str:
 
 
 def build_agent(model: Model | str) -> Agent[RunDeps, str]:
+    """Tools run one at a time: they number their DBOS steps as they go, and an ask must be the run's only one."""
     return Agent[RunDeps, str](
         model,
         name='montybot',
         deps_type=RunDeps,
         instructions=[INSTRUCTIONS, recall],
         toolsets=[browser_tools, user_tools, memory_tools],
-        capabilities=[HandleDeferredToolCalls(handler=approvals.handle_approvals), DBOSDurability()],
+        capabilities=[
+            HandleDeferredToolCalls(handler=approvals.handle_approvals),
+            DBOSDurability(parallel_execution_mode='sequential'),
+        ],
     )

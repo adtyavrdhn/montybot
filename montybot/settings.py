@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     browser_backend: str = 'montybot.browser.fake:FakeBrowser'
     """`module:attribute` of a callable that makes a closed `BrowserBackend` for one run."""
     browser_idle_timeout_seconds: float = 10 * 60
+    allow_private_networks: bool = False
+    """Let the agent open loopback and private addresses. Only for local fixture sites in tests."""
 
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""

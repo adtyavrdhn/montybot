@@ -19,7 +19,8 @@ step returns its recorded result instead of running again.
 from __future__ import annotations
 
 import logfire
-from dbos import DBOS, SetWorkflowID
+from dbos import DBOS, SetWorkflowID, StepOptions
+from dbos._error import DBOSException
 from pydantic_ai.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
@@ -30,10 +31,14 @@ from pydantic_ai.messages import (
 )
 
 from montybot import store
+from montybot.browser.contract import BrowserError
 from montybot.browser.service import UnknownRun
 from montybot.deps import RunDeps
 from montybot.models import Run
 from montybot.resources import Resources, current
+
+RETRIED: StepOptions = {'retries_allowed': True, 'max_attempts': 5, 'interval_seconds': 1.0}
+"""For the steps that end a run: a passing database error must not leave a run unfinished and the browser open."""
 
 FAILURE_NOTICE = 'Something went wrong while working on this, and I could not finish. Please try again.'
 
@@ -45,16 +50,21 @@ async def run_thread(run_id: str) -> str:
     history = recent(ModelMessagesTypeAdapter.validate_json(history_json), resources.settings.history_limit)
     deps = RunDeps(resources=resources, run=run)
     try:
-        result = await resources.agent.run(run.prompt, deps=deps, message_history=history)
-    except Exception as error:  # noqa: BLE001  any failure ends the run, and the user is told
-        logfire.error('Run {run_id} failed: {error_type}', run_id=run_id, error_type=type(error).__name__)
-        await DBOS.run_step_async({'name': 'run.failed'}, fail_run, resources, run, type(error).__name__)
-        await DBOS.run_step_async({'name': 'run.close'}, close_browser, resources, run)
-        return 'failed'
-    new_messages = ModelMessagesTypeAdapter.dump_json(result.new_messages())
-    await DBOS.run_step_async({'name': 'run.finish'}, finish_run, resources, run, new_messages, result.output)
-    await DBOS.run_step_async({'name': 'run.close'}, close_browser, resources, run)
-    return 'done'
+        try:
+            result = await resources.agent.run(run.prompt, deps=deps, message_history=history)
+        except Exception as error:
+            logfire.error('Run {run_id} failed: {error_type}', run_id=run_id, error_type=type(error).__name__)
+            await DBOS.run_step_async({**RETRIED, 'name': 'run.failed'}, fail_run, resources, run, type(error).__name__)
+            if isinstance(error, DBOSException):
+                raise  # a replay that does not match its recording is a bug to see, not a failed task
+            return 'failed'
+        new_messages = ModelMessagesTypeAdapter.dump_json(result.new_messages())
+        await DBOS.run_step_async(
+            {**RETRIED, 'name': 'run.finish'}, finish_run, resources, run, new_messages, result.output
+        )
+        return 'done'
+    finally:
+        await DBOS.run_step_async({**RETRIED, 'name': 'run.close'}, close_browser, resources, run)
 
 
 async def start(run_id: str) -> None:
@@ -73,12 +83,16 @@ async def start_run(resources: Resources, run_id: str) -> tuple[Run, bytes]:
 
 async def finish_run(resources: Resources, run: Run, new_messages: bytes, output: str) -> None:
     async with resources.pool.connection() as connection, connection.transaction():
+        if await store.lock_finished(connection, run.id):
+            return  # this step ran before and committed, but DBOS had not recorded it
         await store.append_history(connection, run.thread_id, ModelMessagesTypeAdapter.validate_json(new_messages))
         await store.finish_run(connection, run.id, 'done', output=output)
 
 
 async def fail_run(resources: Resources, run: Run, error_type: str) -> None:
     async with resources.pool.connection() as connection, connection.transaction():
+        if await store.lock_finished(connection, run.id):
+            return
         await store.append_history(
             connection,
             run.thread_id,
@@ -96,14 +110,32 @@ async def close_browser(resources: Resources, run: Run) -> None:
         await resources.browser.close(run_id=run.id, user_id=run.user_id)
     except UnknownRun:
         pass
+    except BrowserError as error:  # the browser is closed either way; the lease is released
+        logfire.warn(
+            'Closing the browser of run {run_id}: {error_type}', run_id=run.id, error_type=type(error).__name__
+        )
 
 
 def recent(history: list[ModelMessage], limit: int) -> list[ModelMessage]:
-    """The last `limit` messages or so, starting at a user's message so no tool call is cut from its return."""
-    if len(history) <= limit:
+    """About the last `limit` messages, starting at a user's message so no tool call is cut from its return. If the
+    last turn alone is longer than `limit`, all of it."""
+    starts = [
+        index
+        for index, message in enumerate(history)
+        if isinstance(message, ModelRequest) and any(isinstance(p, UserPromptPart) for p in message.parts)
+    ]
+    if len(history) <= limit or not starts:
         return history
-    for index in range(len(history) - limit, len(history)):
-        message = history[index]
-        if isinstance(message, ModelRequest) and any(isinstance(p, UserPromptPart) for p in message.parts):
-            return history[index:]
-    return []
+    within = [index for index in starts if index >= len(history) - limit]
+    return history[within[0] if within else starts[-1] :]
+
+
+async def start_queued(resources: Resources) -> int:
+    """Start the workflow of every run still queued, in case the app stopped between recording a run and starting
+    it. Starting a workflow that exists is harmless."""
+    async with resources.pool.connection() as connection:
+        cursor = await connection.execute("SELECT id FROM montybot.runs WHERE status = 'queued'")
+        run_ids = [str(row['id']) for row in await cursor.fetchall()]
+    for run_id in run_ids:
+        await start(run_id)
+    return len(run_ids)

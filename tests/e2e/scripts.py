@@ -91,7 +91,12 @@ def order_eggs(turn: Turn) -> ModelResponse:
     return say(f'Done. {line_with(result, "Order #")}')
 
 
+def fail(turn: Turn) -> ModelResponse:
+    raise RuntimeError('the model provider is down')
+
+
 SCRIPTS: dict[str, Script] = {
+    'Fail please': fail,
     'Say hello': hello,
     'Ask me my favourite colour': favourite_colour,
     'Order eggs from': order_eggs,

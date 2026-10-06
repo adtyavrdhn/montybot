@@ -10,6 +10,8 @@ trace; only the host of a page the agent opens goes into the run's activity, whi
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit
 
@@ -28,7 +30,7 @@ from montybot.browser.contract import (
     Type,
 )
 from montybot.browser.host import BrowserHost
-from montybot.browser.service import HandoffNotActive, Restarted, UserBusy
+from montybot.browser.service import HandoffNotActive, Restarted, UnknownRun, UserBusy
 from montybot.deps import RunDeps
 from montybot.resources import Resources, current
 
@@ -99,11 +101,34 @@ def host_of(url: str) -> str:
     return urlsplit(url).hostname or url
 
 
+async def refused_url(url: str, *, allow_private: bool) -> str | None:
+    """Why the agent may not open `url`, or None. Only http(s), and only public addresses, so a page cannot steer the
+    agent into our own network. The browser's own network namespace (#7) blocks the same ranges for redirects and
+    subresources; this check gives the model a clear answer first."""
+    parts = urlsplit(url)
+    if parts.scheme not in ('http', 'https') or not parts.hostname:
+        return 'Error: only http and https addresses can be opened.'
+    if allow_private:
+        return None
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(parts.hostname, parts.port or 443)
+    except OSError:
+        return None  # the browser reports the failed lookup itself
+    for info in infos:
+        address = ipaddress.ip_address(info[4][0])
+        if not address.is_global:
+            return 'Error: that address is on a private network, which you cannot open.'
+    return None
+
+
 @browser_tools.tool
 async def open_page(ctx: RunContext[RunDeps], url: str) -> str:
     """Open `url` (absolute, with https://) in your browser and return what the page shows."""
 
     async def use(session: Session) -> str:
+        refused = await refused_url(url, allow_private=session.resources.settings.allow_private_networks)
+        if refused is not None:
+            return refused
         await session.activity(f'Opening {host_of(url)}')
         await session.act(Navigate(url=url))
         return await session.read()
@@ -185,12 +210,17 @@ async def hand_off(ctx: RunContext[RunDeps], reason: str) -> str:
     if handoff_id.startswith('Error: '):
         return handoff_id
     reply = await approvals.ask(ctx, 'handoff', reason, {'handoff_id': handoff_id})
+    the_ask = approvals.ask_id(ctx.deps.run_id, ctx.deps.asked.count)
 
     async def end(session: Session) -> str:
+        # The live view starts a new hand-off if the browser service lost this one in a restart, and records its id
+        # on the ask, so end whichever is current.
+        async with session.resources.pool.connection() as connection:
+            current_id = await store.handoff_of(connection, the_ask) or handoff_id
         try:
-            await session.browser.end_handoff(run_id=session.run_id, user_id=session.user_id, handoff_id=handoff_id)
-        except HandoffNotActive:
-            pass  # ended already, by an earlier attempt of this step
+            await session.browser.end_handoff(run_id=session.run_id, user_id=session.user_id, handoff_id=current_id)
+        except (HandoffNotActive, UnknownRun):
+            pass  # ended already by an earlier attempt of this step, or lost in a restart
         return await session.read()
 
     page = await browser_step(ctx, 'handoff.end', end)

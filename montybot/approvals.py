@@ -60,10 +60,10 @@ async def ask(
         details or {},
     )
     answer = await DBOS.recv_async(topic(occurrence), timeout_seconds=deps.resources.settings.ask_timeout_seconds)
-    await DBOS.run_step_async(
+    late = await DBOS.run_step_async(
         {'name': f'ask.close.{occurrence}'}, close_ask, deps.resources, the_id, deps.run_id, answer is None
     )
-    return answer
+    return answer if answer is not None else late
 
 
 async def open_ask(
@@ -90,19 +90,25 @@ async def open_ask(
         await store.set_run_status(connection, run_id, 'waiting')
 
 
-async def close_ask(resources: Resources, the_id: str, run_id: str, expired: bool) -> None:
+async def close_ask(resources: Resources, the_id: str, run_id: str, timed_out: bool) -> dict[str, Any] | None:
+    """Back to running. After a timeout, the ask expires, unless the user answered just as the wait ended: that
+    answer is returned, so the run does what the user was told it would."""
     async with resources.pool.connection() as connection, connection.transaction():
-        if expired:
-            await store.expire_ask(connection, the_id)
+        late = await store.expire_ask(connection, the_id) if timed_out else None
         await store.set_run_status(connection, run_id, 'running')
+    return late
 
 
 async def answer(resources: Resources, user_id: str, the_id: str, value: dict[str, Any]) -> bool:
     """Record the user's answer and wake the run. False if the ask is not theirs, or was answered already."""
     async with resources.pool.connection() as connection:
         answered = await store.answer_ask(connection, user_id, the_id, value)
-    if answered is None:
-        return False
+        if answered is None:
+            # Answered already. The same answer again is a retry after a failed send: send it again (the idempotency
+            # key makes that harmless). A different answer is too late.
+            answered = await store.get_ask(connection, user_id, the_id)
+            if answered is None or answered.answer != value:
+                return False
     await deliver(answered.run_id, answered.occurrence, answered.id, value)
     return True
 
@@ -131,7 +137,7 @@ async def handle_approvals(ctx: RunContext[RunDeps], requests: DeferredToolReque
     for call in requests.approvals:
         args = call.args_as_dict()
         what = str(args.get('description') or call.tool_name)
-        reply = await ask(ctx, 'approval', what, {'tool': call.tool_name})
+        reply = await ask(ctx, 'approval', what, {'tool': call.tool_name, 'target': str(args.get('target', ''))})
         if reply is None:
             verdicts[call.tool_call_id] = ToolDenied('The user did not answer in time, so this was not done.')
         elif reply.get('approved'):

@@ -6,9 +6,10 @@ another user's thread, run or ask answers 404, the same as one that does not exi
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Any
+from collections.abc import Awaitable, Callable
+from typing import Annotated, Any, TypeVar
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, StringConstraints, TypeAdapter
 from pydantic_ai.messages import ModelMessage, ModelRequest, TextPart, UserPromptPart
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -22,13 +23,16 @@ from montybot.browser.contract import (
     MouseUp,
     Point,
     Press,
+    Screenshot,
     Scroll,
     Type,
 )
+from montybot.browser.service import HandoffNotActive, UnknownRun
 from montybot.memory import delete_memory, list_memories
 from montybot.models import ACTIVE, Ask, Run, User
 from montybot.resources import Resources
 
+T = TypeVar('T')
 NOT_FOUND = JSONResponse({'detail': 'not found'}, status_code=404)
 
 
@@ -39,7 +43,7 @@ class Credentials(BaseModel):
 
 
 class NewMessage(BaseModel):
-    text: str = Field(min_length=1, max_length=20_000)
+    text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20_000)]
 
 
 class Answer(BaseModel):
@@ -61,6 +65,8 @@ def resources_of(request: Request) -> Resources:
 
 
 async def sign_up(request: Request) -> Response:
+    if (refused := auth.refuse_non_json(request)) is not None:
+        return refused
     body = Credentials.model_validate_json(await request.body())
     async with resources_of(request).pool.connection() as connection:
         user = await store.create_user(
@@ -73,6 +79,8 @@ async def sign_up(request: Request) -> Response:
 
 
 async def sign_in(request: Request) -> Response:
+    if (refused := auth.refuse_non_json(request)) is not None:
+        return refused
     body = Credentials.model_validate_json(await request.body())
     async with resources_of(request).pool.connection() as connection:
         found = await store.find_login(connection, body.email.strip().lower())
@@ -83,6 +91,8 @@ async def sign_in(request: Request) -> Response:
 
 
 async def sign_out(request: Request) -> Response:
+    if (refused := auth.refuse_non_json(request)) is not None:
+        return refused
     auth.sign_out(request)
     return JSONResponse({'ok': True})
 
@@ -101,7 +111,7 @@ async def create_thread(request: Request, user: User) -> Response:
     resources = resources_of(request)
     run_id = str(uuid.uuid4())
     async with resources.pool.connection() as connection, connection.transaction():
-        thread = await store.create_thread(connection, user.id, body.text.strip().splitlines()[0])
+        thread = await store.create_thread(connection, user.id, body.text.splitlines()[0])
         await store.create_run(
             connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt=body.text, trigger='message'
         )
@@ -206,8 +216,8 @@ LiveAction = Click | Type | Press | Scroll | MouseDown | MouseMove | MouseUp
 live_action: TypeAdapter[LiveAction] = TypeAdapter(Annotated[LiveAction, Field(discriminator='kind')])
 
 
-async def open_handoff(request: Request, user: User) -> tuple[Run, str] | None:
-    """The run and the active hand-off id, if the run is the user's and waits for them to hand the browser back."""
+async def open_handoff(request: Request, user: User) -> tuple[Run, Ask] | None:
+    """The run and its hand-off ask, if the run is the user's and waits for them to hand the browser back."""
     async with resources_of(request).pool.connection() as connection:
         run = await store.get_run(connection, user.id, str(request.path_params['run_id']))
         if run is None or run.status != 'waiting':
@@ -215,20 +225,40 @@ async def open_handoff(request: Request, user: User) -> tuple[Run, str] | None:
         ask = await store.open_ask(connection, user.id, run.id)
     if ask is None or ask.kind != 'handoff':
         return None
-    return run, str(ask.details['handoff_id'])
+    return run, ask
+
+
+async def on_handoff(request: Request, user: User, use: Callable[[Run, str], Awaitable[T]]) -> T | Response:
+    """Call `use` with the run's active hand-off id. If the browser service lost the hand-off (it restarted), start
+    a new one for the same run, from the user's saved sign-ins, and record its id on the ask."""
+    found = await open_handoff(request, user)
+    if found is None:
+        return NOT_FOUND
+    run, ask = found
+    resources = resources_of(request)
+    try:
+        try:
+            return await use(run, str(ask.details['handoff_id']))
+        except (UnknownRun, HandoffNotActive):
+            await resources.browser.start(run_id=run.id, user_id=user.id)
+            handoff = await resources.browser.start_handoff(run_id=run.id, user_id=user.id, reason=ask.prompt)
+            async with resources.pool.connection() as connection:
+                await store.set_handoff(connection, ask.id, handoff.handoff_id)
+            return await use(run, handoff.handoff_id)
+    except BrowserError as error:
+        return JSONResponse({'detail': str(error)}, status_code=409)
 
 
 @auth.signed_in
 async def read_screen(request: Request, user: User) -> Response:
-    found = await open_handoff(request, user)
-    if found is None:
-        return NOT_FOUND
-    run, handoff_id = found
-    try:
-        result = await resources_of(request).browser.screenshot(run_id=run.id, user_id=user.id, handoff_id=handoff_id)
-    except BrowserError as error:
-        return JSONResponse({'detail': str(error)}, status_code=409)
-    screen = result.screenshot
+    browser = resources_of(request).browser
+
+    async def shoot(run: Run, handoff_id: str) -> Screenshot:
+        return (await browser.screenshot(run_id=run.id, user_id=user.id, handoff_id=handoff_id)).screenshot
+
+    screen = await on_handoff(request, user, shoot)
+    if isinstance(screen, Response):
+        return screen
     headers = {'X-Viewport': f'{screen.width}x{screen.height}', 'Cache-Control': 'no-store'}
     return Response(screen.png, media_type='image/png', headers=headers)
 
@@ -241,15 +271,13 @@ async def act_on_screen(request: Request, user: User) -> Response:
         return JSONResponse({'detail': 'the live view clicks at a point'}, status_code=422)
     if isinstance(action, Type) and action.target is not None:
         return JSONResponse({'detail': 'the live view types at the caret'}, status_code=422)
-    found = await open_handoff(request, user)
-    if found is None:
-        return NOT_FOUND
-    run, handoff_id = found
-    try:
-        await resources_of(request).browser.act(run_id=run.id, user_id=user.id, action=action, handoff_id=handoff_id)
-    except BrowserError as error:
-        return JSONResponse({'detail': str(error)}, status_code=409)
-    return JSONResponse({'ok': True})
+    browser = resources_of(request).browser
+
+    async def act(run: Run, handoff_id: str) -> Response:
+        await browser.act(run_id=run.id, user_id=user.id, action=action, handoff_id=handoff_id)
+        return JSONResponse({'ok': True})
+
+    return await on_handoff(request, user, act)
 
 
 # --- memory ---

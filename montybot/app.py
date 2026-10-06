@@ -13,7 +13,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from montybot import api, approvals
+from montybot import api, approvals, workflows
 from montybot.resources import Resources, open_resources
 from montybot.settings import Settings
 
@@ -27,6 +27,7 @@ def create_app(settings: Settings) -> Starlette:
     async def lifespan(app: Starlette) -> AsyncGenerator[State]:
         async with open_resources(settings) as resources:
             await approvals.redeliver_answers(resources)
+            await workflows.start_queued(resources)
             yield {'resources': resources}
 
     return Starlette(

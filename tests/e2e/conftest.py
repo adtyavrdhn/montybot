@@ -169,6 +169,7 @@ def app(database_url: str, request: pytest.FixtureRequest, tmp_path: Path) -> It
         'BROWSER_BACKEND': backend,
         'PYTHONPATH': os.pathsep.join([str(TESTS), os.environ.get('PYTHONPATH', '')]),
         'EXECUTOR_ID': 'local',
+        'ALLOW_PRIVATE_NETWORKS': 'true',  # the fixture sites are on 127.0.0.1
     }
     app = App(env=env, log=tmp_path / 'app.log')
     app.start()

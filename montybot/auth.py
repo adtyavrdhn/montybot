@@ -70,18 +70,23 @@ Handler = Callable[[Request, User], Awaitable[Response]]
 
 
 def signed_in(handler: Handler) -> Callable[[Request], Awaitable[Response]]:
-    """Answer 401 unless a user is signed in; refuse writes that are not JSON."""
+    """Answer 401 unless a user is signed in; refuse writes that are not JSON (`refuse_non_json`)."""
 
     async def endpoint(request: Request) -> Response:
         user = await signed_in_user(request)
         if user is None:
             return JSONResponse({'detail': 'sign in first'}, status_code=401)
-        if request.method not in ('GET', 'HEAD') and not _is_json(request):
-            return JSONResponse({'detail': 'send JSON'}, status_code=415)
-        return await handler(request, user)
+        refused = refuse_non_json(request)
+        return refused if refused is not None else await handler(request, user)
 
     return endpoint
 
 
-def _is_json(request: Request) -> bool:
-    return request.headers.get('content-type', '').split(';')[0].strip() == 'application/json'
+def refuse_non_json(request: Request) -> Response | None:
+    """POST, PUT and PATCH must carry JSON. A form on another site can send a JSON-looking body as `text/plain`,
+    but not as `application/json` without a CORS preflight, which this app never answers."""
+    if request.method not in ('POST', 'PUT', 'PATCH'):
+        return None
+    if request.headers.get('content-type', '').split(';')[0].strip() == 'application/json':
+        return None
+    return JSONResponse({'detail': 'send JSON'}, status_code=415)
