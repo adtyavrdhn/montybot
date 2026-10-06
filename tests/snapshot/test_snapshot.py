@@ -471,7 +471,13 @@ async def test_default_budget_preserves_oversized_prose(engine: Engine, length: 
         assert small.text == 'x' * 11_920 + (
             '\n[cut at 12000 characters: first line truncated; 1 more lines, 1 more refs]'
         )
-    # Cutting text does not discard or renumber refs. A larger explicit budget can reveal them.
+    # Check assignment before a larger snapshot can mutate shared ref state. Internal preservation is not
+    # agent-visible completeness: code must not guess a ref omitted from its returned page.
+    assert (
+        await engine.run_script("() => document.querySelector('button').getAttribute('data-montybot-ref')", None) == '1'
+    )
+    await act(engine, walker, Click(target=Ref(ref='1')))
+    # A larger explicit budget can reveal the same internally retained ref.
     full = await SnapshotWalker(run_script=engine.run_script, budget=30_000).snapshot()
     assert full.text == 'x' * length + '\n[1] button "More"'
     await act(engine, walker, Click(target=Ref(ref='1')))

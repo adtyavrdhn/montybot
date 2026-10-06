@@ -19,7 +19,10 @@ This is not a claim that all of #47 is complete. Streaming, model routing and cl
 - `run_code` is **one DBOS step**. Completed steps replay their recorded result; an interrupted snippet can
   repeat from its beginning, including actions already performed. Batching is appropriate for read-only or
   safely repeatable work, not a substitute for approval or idempotence checks. The lexical irreversible-click
-  guard is not a complete classifier of irreversible actions, and Enter can also submit forms.
+  guard is not a complete classifier of irreversible actions, and Enter can also submit forms. In particular,
+  a numeric ref absent from the returned text has no label for this heuristic to inspect; it does not fail closed.
+  Ref preservation inside the walker is not agent-visible completeness or approval safety. The prompt prohibits
+  guessed/stale refs, but an enforcement change needs a separate safety investigation; none is made here.
 - Browser functions serialize actions on one tab. Do not promise parallel browsing from `asyncio.gather`.
 
 ## Browser Use: verified approach, not an API to assume
