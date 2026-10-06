@@ -35,11 +35,12 @@ from montybot.browser.contract import (
 )
 from montybot.browser.host import BrowserHost
 from montybot.browser.service import HandoffNotActive, Restarted, UnknownRun, UserBusy
+from montybot.browser.snapshot import DEFAULT_BUDGET
 from montybot.deps import RunDeps
 from montybot.resources import Resources, current
 from montybot.workspaces import download_name, save_download
 
-SNAPSHOT_LIMIT = 12_000
+SNAPSHOT_LIMIT = DEFAULT_BUDGET
 
 browser_tools: FunctionToolset[RunDeps] = FunctionToolset(id='browser')
 

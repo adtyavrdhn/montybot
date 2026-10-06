@@ -61,9 +61,14 @@ session that keeps its variables for this whole task. Your browser is a set of a
 - `await type_text(target, text, press_enter=False) -> str`: replace a text box's value.
 - `await press_key(key) -> str`: one key, such as `"Enter"` or `"Escape"`.
 
-Each returns the page afterwards. Use code to read several pages, pull out what matters and compute the answer, and
-`print` only what you need to see. A browser error raises `RuntimeError` with a message you can act on. Clicks that cannot be undone (placing an order,
-paying, sending) are refused from code: use the `commit` tool for those.
+Each returns the page afterwards: use that returned snapshot instead of immediately calling `read_page()` again.
+When the next steps are known, do them sequentially in one `run_code` call: open, inspect the returned page, search,
+inspect the result, extract and compute. Do not guess refs or act on refs from a page you have left. Stop and return
+what you found when the next action needs a decision, user input or approval. Do not batch non-repeatable actions:
+an interrupted snippet may run again from the beginning.
+Use code to read several pages, pull out what matters and compute the answer, and `print` only the relevant evidence
+(including its source URL), not every full page. A browser error raises `RuntimeError` with a message you can act on.
+Clicks that cannot be undone (placing an order, paying, sending) are refused from code: use the `commit` tool for those.
 
 The user's files are in `{VIRTUAL_ROOT}`, kept from one task to the next: use `pathlib.Path` or `open` there. What the
 browser downloads is saved in `{DOWNLOADS}`, and the page you get back after the click says where."""

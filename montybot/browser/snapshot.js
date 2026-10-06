@@ -400,8 +400,14 @@
     const reserve = 80;
     while (kept < lines.length && size + lines[kept].length + 1 <= budget - reserve) size += lines[kept++].length + 1;
     const refs = items.slice(kept).filter((item) => item.el).length;
-    const note = '[cut at ' + budget + ' characters: ' + (lines.length - kept) + ' more lines, ' + refs + ' more refs]';
-    return lines.slice(0, kept).concat([note]).join('\n');
+    const prefix = lines.slice(0, kept);
+    // Preserve useful evidence when the first prose line alone exceeds the budget. Never expose a partial
+    // control line: its ref/name/states must stay together. Reserve room for the notice, as above.
+    const partial = kept === 0 && lines.length > 0 && !items[0].el;
+    const note = '[cut at ' + budget + ' characters: ' + (partial ? 'first line truncated; ' : '') +
+      (lines.length - kept - (partial ? 1 : 0)) + ' more lines, ' + refs + ' more refs]';
+    if (partial) prefix.push(lines[0].slice(0, Math.max(0, budget - Math.max(reserve, note.length + 1))));
+    return prefix.concat([note]).join('\n');
   }
 
   function snapshot(budget) {
