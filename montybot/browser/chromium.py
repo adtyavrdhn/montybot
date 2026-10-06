@@ -26,6 +26,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 from collections.abc import AsyncGenerator, Awaitable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -48,6 +49,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from montybot.browser.chromium_linux import VirtualScreen, start_virtual_screen, write_bwrap_script
 from montybot.browser.contract import (
+    MAX_DOWNLOAD_BYTES,
     Action,
     ActionFailed,
     Click,
@@ -139,6 +141,15 @@ so this only covers the event reaching us."""
 
 
 @dataclass(kw_only=True)
+class _Downloading:
+    """A download Chrome started (#21)."""
+
+    download: PlaywrightDownload
+    task: asyncio.Task[Download | None]
+    started: float
+
+
+@dataclass(kw_only=True)
 class _Chrome:
     """One running Chrome and everything started for it."""
 
@@ -148,7 +159,7 @@ class _Chrome:
     screen: VirtualScreen | None = None
     failed_url: str = BLANK_URL
     """The last page that failed to load. Chrome shows an error page for it, at `chrome-error://chromewebdata/`."""
-    downloads: list[asyncio.Task[Download | None]] = field(default_factory=list[asyncio.Task[Download | None]])
+    downloads: list[_Downloading] = field(default_factory=list['_Downloading'])
     """Downloads started and not yet taken (#21)."""
     download_started: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -158,11 +169,14 @@ class _Chrome:
                 self.failed_url = request.url
 
         def on_download(download: PlaywrightDownload) -> None:
-            self.downloads.append(asyncio.ensure_future(_read_download(download)))
+            task = asyncio.ensure_future(_read_download(download))
+            self.downloads.append(_Downloading(download=download, task=task, started=time.monotonic()))
             self.download_started.set()
 
         self.page.on('requestfailed', on_request_failed)
         self.page.on('download', on_download)
+        # A link with `target=_blank` downloads in a new tab, which fires the event there.
+        self.context.on('page', lambda page: page.on('download', on_download))
 
     @property
     def url(self) -> str:
@@ -171,8 +185,8 @@ class _Chrome:
         return self.failed_url if url.startswith('chrome-error:') else url
 
     async def stop(self) -> None:
-        for task in self.downloads:
-            task.cancel()
+        for downloading in self.downloads:
+            downloading.task.cancel()
         with contextlib.suppress(PlaywrightError, TimeoutError):
             await asyncio.wait_for(self.context.close(), 15)
         if self.screen is not None:
@@ -390,16 +404,21 @@ class ChromiumBackend:
     # --- DownloadsBackend (#21) ---
 
     async def take_downloads(self) -> list[Download]:
-        """The downloads finished since the last call. One still running gets up to `navigation_timeout` to finish,
-        else it is left for the next call. A failed download is dropped."""
+        """The downloads finished since the last call. One still running gets up to `navigation_timeout` from its
+        start to finish, else it is cancelled. A failed download is dropped."""
         chrome = self._require_open()
         pending, chrome.downloads = chrome.downloads, []
-        if pending:
-            await asyncio.wait(pending, timeout=self.options.navigation_timeout)
+        if not pending:
+            return []
+        deadline = max(d.started for d in pending) + self.options.navigation_timeout
+        await asyncio.wait([d.task for d in pending], timeout=max(0, deadline - time.monotonic()))
         taken: list[Download] = []
-        for task in pending:
+        for downloading in pending:
+            task = downloading.task
             if not task.done():
-                chrome.downloads.append(task)
+                task.cancel()
+                with contextlib.suppress(PlaywrightError):
+                    await downloading.download.cancel()
             elif not task.cancelled() and task.exception() is None and (download := task.result()) is not None:
                 taken.append(download)
         return taken
@@ -552,11 +571,12 @@ async def _read_download(download: PlaywrightDownload) -> Download | None:
     """The finished download's bytes, its file deleted (#21). None if it failed."""
     try:
         path = await download.path()
-        data = await asyncio.to_thread(path.read_bytes)
+        too_large = (await asyncio.to_thread(path.stat)).st_size > MAX_DOWNLOAD_BYTES
+        data = b'' if too_large else await asyncio.to_thread(path.read_bytes)
         await download.delete()
     except (PlaywrightError, OSError):
         return None
-    return Download(name=download.suggested_filename, data=data)
+    return Download(name=download.suggested_filename, data=data, too_large=too_large)
 
 
 def _to_playwright(state: BrowserState) -> StorageState:

@@ -19,9 +19,11 @@ from urllib.parse import urlsplit
 
 from dbos import DBOS
 from pydantic_ai import FunctionToolset, RunContext
+from pydantic_ai.workspaces import WorkspaceError
 
 from montybot import approvals, store
 from montybot.browser.contract import (
+    MAX_DOWNLOAD_BYTES,
     BrowserError,
     Click,
     ElementTarget,
@@ -35,7 +37,7 @@ from montybot.browser.host import BrowserHost
 from montybot.browser.service import HandoffNotActive, Restarted, UnknownRun, UserBusy
 from montybot.deps import RunDeps
 from montybot.resources import Resources, current
-from montybot.workspaces import MAX_DOWNLOAD_BYTES, download_name, save_download
+from montybot.workspaces import download_name, save_download
 
 SNAPSHOT_LIMIT = 12_000
 
@@ -95,12 +97,16 @@ class Session:
             return
         workspace = self.resources.workspaces.of(self.user_id)
         for download in downloads:
-            if len(download.data) > MAX_DOWNLOAD_BYTES:
-                self.downloaded.append(
-                    f'Download not saved: {download_name(download.name)} is over {MAX_DOWNLOAD_BYTES >> 20} MB.'
-                )
+            name = download_name(download.name)
+            if download.too_large or len(download.data) > MAX_DOWNLOAD_BYTES:
+                self.downloaded.append(f'Download not saved: {name} is over {MAX_DOWNLOAD_BYTES >> 20} MB.')
                 continue
-            path = await save_download(workspace, download.name, download.data)
+            try:
+                path = await save_download(workspace, download.name, download.data)
+            except (OSError, WorkspaceError) as error:  # such as a file the code made where the folder goes
+                reason = error.strerror if isinstance(error, OSError) and error.strerror else 'it could not be written'
+                self.downloaded.append(f'Download not saved: {name}: {reason}.')
+                continue
             self.downloaded.append(f'Downloaded: {path}')
 
     async def activity(self, text: str) -> None:

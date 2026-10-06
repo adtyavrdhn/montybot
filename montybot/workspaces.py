@@ -14,12 +14,18 @@ which Monty awaits on our event loop, so the async workspace is called directly,
 
 Code sees the files at `/work`, never the directory on our server. A path outside `/work`, or one that leads out of
 the user's directory through a symlink, raises `PermissionError`, and errors name the `/work` path, not ours.
+
+The `Workspace` API has no append and no modification time, so appends and `stat` use the checked path on our server
+directly; everything else goes through the workspace.
 """
 
 from __future__ import annotations
 
+import asyncio
 import errno
+import os
 import posixpath
+import stat as stat_module
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePosixPath
@@ -33,7 +39,6 @@ VIRTUAL_ROOT = '/work'
 """Where code sees the user's files."""
 DOWNLOADS = f'{VIRTUAL_ROOT}/downloads'
 """Where browser downloads are saved."""
-MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
 
 
 class Workspaces:
@@ -66,6 +71,12 @@ _ERRORS: dict[int, type[OSError]] = {
 
 def _error(code: int, message: str, path: str) -> OSError:
     return _ERRORS.get(code, OSError)(code, message, path)
+
+
+def _shown(error: OSError, path: str) -> OSError:
+    """The same kind of error about `path`. Some carry no errno (`IsADirectoryError(path)`), so the kind wins."""
+    code = error.errno or next((c for c, kind in _ERRORS.items() if isinstance(error, kind)), errno.EIO)
+    return _error(code, error.strerror or os.strerror(code), path)
 
 
 class WorkspaceFiles:
@@ -114,7 +125,9 @@ class WorkspaceFiles:
         except OSError as error:
             if error.filename == shown and error.errno is not None:
                 raise  # one of ours, already about the /work path
-            raise _error(error.errno or errno.EIO, error.strerror or 'the file cannot be used', shown) from None
+            raise _shown(error, shown) from None
+        except UnicodeDecodeError:
+            raise  # `read_text` of a file that is not UTF-8; it names no path
         except (WorkspaceError, ValueError):
             raise _error(errno.EIO, 'the file cannot be used', shown) from None
 
@@ -194,9 +207,20 @@ class WorkspaceFiles:
         return len(data)
 
     async def _append(self, path: PurePosixPath | MontyFileHandle, data: bytes) -> None:
-        host = await self._host(path)
-        before = await self.workspace.read_bytes(host) if await self.workspace.exists(host) else b''
-        await self._write(path, before + data)
+        """Monty sends every `write` after the first as an append, so this adds to the file rather than rewriting it."""
+        host = await self._not_root(path_from_arg(path))
+        if not await self.workspace.exists(posixpath.dirname(host)):
+            raise _error(errno.ENOENT, 'No such file or directory', self._virtual(path))
+
+        def append() -> None:
+            # `host` has its links resolved; O_NOFOLLOW refuses one planted since.
+            fd = os.open(host, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            try:
+                os.write(fd, data)
+            finally:
+                os.close(fd)
+
+        await asyncio.to_thread(append)
 
     async def append_bytes(self, path: PurePosixPath | MontyFileHandle, data: bytes) -> int:
         await self._append(path, data)
@@ -236,14 +260,18 @@ class WorkspaceFiles:
         return [virtual / entry.name for entry in entries]
 
     async def stat(self, path: PurePosixPath) -> StatResult:
-        entry = await self.workspace.stat(await self._host(path))
-        return StatResult.dir_stat() if entry.is_dir else StatResult.file_stat(entry.size or 0)
+        found = await asyncio.to_thread(os.stat, await self._host(path))
+        if stat_module.S_ISDIR(found.st_mode):
+            return StatResult.dir_stat(mtime=found.st_mtime)
+        return StatResult.file_stat(found.st_size, mtime=found.st_mtime)
 
     async def rename(self, path: PurePosixPath, target: PurePosixPath) -> None:
         """Files only: the workspace has no rename, so it is a copy and a delete."""
         host = await self._not_root(path)
         if (await self.workspace.stat(host)).is_dir:
             raise _error(errno.EISDIR, 'only files can be renamed', str(path))
+        if await self._host(target) == host:
+            return
         data = await self.workspace.read_bytes(host)
         await self._write(target, data)
         await self.workspace.remove(host)
@@ -254,17 +282,28 @@ class WorkspaceFiles:
 
 
 def download_name(name: str) -> str:
-    """A safe file name from the one a site suggested: no folders, no hidden files, nothing unprintable."""
+    """A safe file name from the one a site suggested: no folders, no hidden files, nothing unprintable, and short
+    enough for any file system once a ` (2)` is added."""
     name = posixpath.basename(name.replace('\\', '/'))
     name = ''.join(c for c in name if c.isprintable()).strip().lstrip('.')
-    return name[-120:] or 'download'
+    while len(name.encode()) > 200:
+        name = name[1:]  # the end has the extension
+    return name or 'download'
 
 
 async def save_download(workspace: Workspace, name: str, data: bytes) -> str:
-    """Save a browser download in the user's files; returns the path code sees it at. A file of the same name is
-    replaced, so a download repeated after a restart leaves one copy."""
+    """Save a browser download in the user's files; returns the path code sees it at. A file of the same name and
+    content is kept, so a download repeated after a restart leaves one copy; another with the same name gets ` (2)`,
+    ` (3)`... as in a browser."""
     files = WorkspaceFiles(workspace)
-    path = PurePosixPath(DOWNLOADS, download_name(name))
-    await files.mkdir(path.parent, parents=True, exist_ok=True)
-    await files.write_bytes(path, data)
-    return str(path)
+    name = download_name(name)
+    await files.mkdir(PurePosixPath(DOWNLOADS), parents=True, exist_ok=True)
+    stem, dot, extension = name.rpartition('.') if '.' in name else (name, '', '')
+    for number in range(1, 1000):
+        path = PurePosixPath(DOWNLOADS, name if number == 1 else f'{stem} ({number}){dot}{extension}')
+        if not await files.exists(path):
+            await files.write_bytes(path, data)
+            return str(path)
+        if await files.is_file(path) and await files.read_bytes(path) == data:
+            return str(path)
+    raise _error(errno.EEXIST, 'too many downloads of this name', f'{DOWNLOADS}/{name}')

@@ -171,6 +171,10 @@ class Screenshot:
     """Viewport height in CSS pixels."""
 
 
+MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+"""The largest download a backend keeps (#21)."""
+
+
 @dataclass(frozen=True, kw_only=True)
 class Download:
     """A file a page made the browser download. Added for the run's files (#21)."""
@@ -178,6 +182,8 @@ class Download:
     name: str
     """The file name the site suggested; not safe to use as a path as it is."""
     data: bytes
+    too_large: bool = False
+    """The file was over `MAX_DOWNLOAD_BYTES`, so it was not kept and `data` is empty."""
 
 
 # --- errors ---
