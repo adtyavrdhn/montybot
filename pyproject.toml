@@ -32,6 +32,7 @@ dev = [
     "playwright>=1.63",
     "pyright>=1.1.400",
     "pytest>=8.3",
+    "pytest-xdist>=3.6",
     "ruff>=0.12",
 ]
 

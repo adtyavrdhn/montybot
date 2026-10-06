@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_PYTHON: '3.14'
+  MONTYBOT_TEST_POSTGRES: postgresql://postgres:postgres@localhost:5432/postgres
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: {enable-cache: true}
+      - run: uv sync --locked
+      - run: uv run ruff check montybot tests
+      - run: uv run ruff format --check montybot tests
+      - run: uv run pyright
+
+  test:
+    # Unit tests, and the end-to-end suite on the fake engine and on headless Chromium, sharded in parallel.
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: unit, args: '--ignore=tests/e2e'}
+          - {name: e2e-fake, args: 'tests/e2e'}
+          - {name: e2e-chromium, args: 'tests/e2e --browser=chromium'}
+    name: test (${{ matrix.name }})
+    services:
+      postgres:
+        image: postgres:17
+        env: {POSTGRES_PASSWORD: postgres}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: {enable-cache: true}
+      - run: uv sync --locked
+      - run: uv run playwright install --with-deps chromium
+      - run: uv run pytest -q -p no:cacheprovider -n 4 --durations=10 ${{ matrix.args }}
