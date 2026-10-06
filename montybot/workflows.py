@@ -30,7 +30,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from montybot import store
+from montybot import store, streaming
 from montybot.browser.contract import BrowserError
 from montybot.browser.service import UnknownRun
 from montybot.deps import RunDeps
@@ -46,15 +46,30 @@ FAILURE_NOTICE = 'Something went wrong while working on this, and I could not fi
 
 @DBOS.workflow(name='montybot.run_thread')
 async def run_thread(run_id: str) -> str:
+    """Keep the original step sequence for pre-streaming, in-flight workflows."""
+    return await _run_thread(run_id, stream=False)
+
+
+@DBOS.workflow(name='montybot.run_thread_stream')
+async def run_thread_stream(run_id: str) -> str:
+    return await _run_thread(run_id, stream=True)
+
+
+async def _run_thread(run_id: str, *, stream: bool) -> str:
     with timing('run.lifecycle'):
         resources = current()
+        if stream:
+            streaming.reset(run_id)
         run, history_json, schedule = await DBOS.run_step_async({'name': 'run.start'}, start_run, resources, run_id)
         history = recent(ModelMessagesTypeAdapter.validate_json(history_json), resources.settings.history_limit)
         deps = RunDeps(resources=resources, run=run, schedule=schedule)
         try:
             try:
+                agent = (
+                    resources.streaming_agent if stream and resources.streaming_agent is not None else resources.agent
+                )
                 with timing('run.agent'):
-                    result = await resources.agent.run(run.prompt, deps=deps, message_history=history)
+                    result = await agent.run(run.prompt, deps=deps, message_history=history)
             except Exception as error:
                 logfire.error('Run {run_id} failed', run_id=run_id)
                 await DBOS.run_step_async(
@@ -69,14 +84,18 @@ async def run_thread(run_id: str) -> str:
             )
             return 'done'
         finally:
-            await DBOS.run_step_async({**RETRIED, 'name': 'run.close'}, close_browser, resources, run)
+            try:
+                await DBOS.run_step_async({**RETRIED, 'name': 'run.close'}, close_browser, resources, run)
+            finally:
+                if stream:
+                    streaming.discard(run_id)
 
 
 @timed('run.dispatch')
 async def start(run_id: str) -> WorkflowHandleAsync[str]:
     """Start the run's workflow. Starting it twice is harmless: the second start finds the first."""
     with SetWorkflowID(run_id):
-        return await DBOS.start_workflow_async(run_thread, run_id)
+        return await DBOS.start_workflow_async(run_thread_stream, run_id)
 
 
 async def start_run(resources: Resources, run_id: str) -> tuple[Run, bytes, Schedule | None]:

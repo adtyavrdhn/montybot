@@ -9,8 +9,9 @@ from pydantic_ai.capabilities import HandleDeferredToolCalls
 from pydantic_ai.durable_exec.dbos import DBOSDurability
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModelSettings
+from pydantic_ai.models.function import FunctionModel
 
-from montybot import approvals
+from montybot import approvals, streaming
 from montybot.browsing import browser_tools
 from montybot.code import INSTRUCTIONS as CODE_INSTRUCTIONS
 from montybot.code import code_tools
@@ -55,11 +56,11 @@ CACHE = AnthropicModelSettings(
 definitions and the conversation so far (page snapshots included). Other providers ignore these keys."""
 
 
-def build_agent(model: Model | str) -> Agent[RunDeps, str]:
+def build_agent(model: Model | str, *, stream: bool = False) -> Agent[RunDeps, str]:
     """Tools run one at a time: they number their DBOS steps as they go, and an ask must be the run's only one."""
     return Agent[RunDeps, str](
         model,
-        name='montybot',
+        name='montybot_stream' if stream else 'montybot',
         deps_type=RunDeps,
         instructions=[
             INSTRUCTIONS,
@@ -72,7 +73,16 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
         toolsets=[code_tools, cpython_tools, browser_tools, user_tools, memory_tools, schedule_tools],
         capabilities=[
             HandleDeferredToolCalls(handler=approvals.handle_approvals),
-            DBOSDurability(parallel_execution_mode='sequential'),
+            DBOSDurability(
+                parallel_execution_mode='sequential',
+                # Function-only scripted models deliberately retain agent.run's
+                # nonstream request path; they have no request_stream implementation.
+                event_stream_handler=(
+                    streaming.handler
+                    if stream and not (isinstance(model, FunctionModel) and model.stream_function is None)
+                    else None
+                ),
+            ),
         ],
         model_settings=CACHE,
     )

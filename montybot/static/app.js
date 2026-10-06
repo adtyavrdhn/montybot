@@ -2,9 +2,10 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const state = { thread: null, run: null, poll: null, screenTimer: null, liveAsk: null, signingUp: false, routing: false };
+const state = { thread: null, run: null, poll: null, screenTimer: null, liveAsk: null, signingUp: false, routing: false,
+  events: null, streamRun: null, preview: null, previewBubble: null, streamError: false, view: 0, refresh: 0 };
 
-async function api(path, options = {}) {
+async function api(path, options = {}, current = () => true) {
   const init = { credentials: 'same-origin', ...options, headers: { ...(options.headers || {}) } };
   if (init.body !== undefined) {
     init.headers['Content-Type'] = 'application/json';
@@ -13,7 +14,7 @@ async function api(path, options = {}) {
   const response = await fetch(path, init);
   const type = response.headers.get('Content-Type') || '';
   const data = type.includes('application/json') ? await response.json() : null;
-  if (response.status === 401 && path !== '/api/signin') signedOut();
+  if (response.status === 401 && path !== '/api/signin' && current()) signedOut();
   if (!response.ok) {
     const detail = data && typeof data.detail === 'string' ? data.detail : `Request failed (${response.status})`;
     const error = new Error(detail);
@@ -30,6 +31,10 @@ function show(id) {
 function signedOut() {
   // The session ended (signed out elsewhere, or expired): stop asking the server and offer to sign in again.
   stopPolling();
+  stopStream();
+  state.view++;
+  state.thread = null;
+  state.run = null;
   state.liveAsk = null;
   stopWatching();
   show('signin');
@@ -58,6 +63,7 @@ $('signin-form').addEventListener('submit', async (event) => {
 });
 
 $('signout').addEventListener('click', async () => {
+  signedOut();
   try {
     await stopNotifications();
   } catch (error) {
@@ -105,6 +111,8 @@ function emptyChat() {
 
 async function openThread(id) {
   stopPolling();
+  stopStream();
+  state.view++;
   state.thread = id;
   state.run = null;
   state.liveAsk = null;
@@ -123,29 +131,33 @@ async function openThread(id) {
 
 async function refresh() {
   const id = state.thread;
+  const view = state.view;
+  const refreshId = ++state.refresh;
+  const current = () => state.thread === id && state.view === view && state.refresh === refreshId;
   if (id === null) return;
   let thread;
   try {
-    thread = await api(`/api/threads/${id}`);
+    thread = await api(`/api/threads/${id}`, {}, current);
   } catch (error) {
-    if (state.thread !== id) return;
+    if (!current()) return;
     if (error.status === 404) { location.hash = '#/new'; return; }
     throw error;
   }
-  if (state.thread !== id) return;  // the user opened another chat meanwhile
+  if (!current()) return;  // another chat, sign-out, or a newer refresh meanwhile
   $('title').textContent = thread.title || 'monty-bot';
   const box = $('messages');
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
   box.replaceChildren(...thread.messages.map((m) => message(m.role, m.text)));
-  if (atBottom) box.scrollTop = box.scrollHeight;
   renderRun(thread.run);
+  renderPreview();
+  if (atBottom) box.scrollTop = box.scrollHeight;
   const active = thread.run && ['queued', 'running', 'waiting'].includes(thread.run.status);
   if (active) schedulePoll(); else stopPolling();
 }
 
 function schedulePoll() {
   // One refresh at a time: the next is scheduled when this one has finished.
-  if (state.poll !== null) return;
+  if (state.poll !== null || state.thread === null) return;
   state.poll = setTimeout(() => {
     state.poll = null;
     refresh().catch((error) => {
@@ -164,11 +176,12 @@ function renderRun(run) {
   state.run = run;
   const working = run && (run.status === 'queued' || run.status === 'running');
   $('status').hidden = !working;
-  if (working) $('status').textContent = run.activity.length ? run.activity[run.activity.length - 1] : 'Working…';
+  if (working) renderActivity();
   $('send').disabled = Boolean(run && ['queued', 'running', 'waiting'].includes(run.status));
   renderAsk(run && run.status === 'waiting' ? run.ask : null);
   if (working && run.activity.length) watchBrowser(); else stopWatching();
   updateBrowserButton();
+  followRun(run);
 }
 
 function updateBrowserButton() {
@@ -176,6 +189,92 @@ function updateBrowserButton() {
   const run = state.run;
   const working = run && (run.status === 'queued' || run.status === 'running') && run.activity.length;
   $('browser-button').hidden = !(working && $('browser').hidden);
+}
+
+// --- provisional assistant text: full replacement snapshots, never durable history ---
+
+function stopStream() {
+  if (state.events !== null) state.events.close();
+  state.events = null;
+  state.streamRun = null;
+  state.streamError = false;
+  state.preview = null;
+  if (state.previewBubble !== null) state.previewBubble.remove();
+  state.previewBubble = null;
+}
+
+function renderActivity() {
+  const run = state.run;
+  if (!run || !['queued', 'running'].includes(run.status)) return;
+  const activity = state.preview && state.preview.activity;
+  const saved = run.activity.length ? run.activity[run.activity.length - 1] : 'Working…';
+  $('status').textContent = state.streamError ? `${saved} · Live preview unavailable; checking for updates…` : activity || saved;
+}
+
+function renderPreview() {
+  if (state.previewBubble !== null) state.previewBubble.remove();
+  state.previewBubble = null;
+  if (!state.preview || !state.preview.text) return;
+  const box = $('messages');
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  const bubble = document.createElement('div');
+  bubble.className = 'msg assistant';
+  const label = document.createElement('small');
+  label.textContent = state.streamError ? 'Live draft · connection lost; may be incomplete' : 'Live draft · not saved yet';
+  const text = document.createElement('div');
+  text.textContent = state.preview.text;  // assistant text only, never HTML or tool payloads
+  bubble.append(label, text);
+  box.append(bubble);
+  state.previewBubble = bubble;
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+function followRun(run) {
+  if (!run || !['queued', 'running', 'waiting'].includes(run.status)) { stopStream(); return; }
+  if (state.streamRun === run.id) return;
+  stopStream();
+  if (typeof EventSource === 'undefined') return;  // polling still follows asks and completion
+  const view = state.view;
+  const thread = state.thread;
+  const source = new EventSource(`/api/runs/${run.id}/events`);
+  state.events = source;
+  state.streamRun = run.id;
+  const current = () => state.events === source && state.view === view && state.thread === thread;
+  source.onopen = () => {
+    if (!current()) return;
+    state.streamError = false;
+    renderActivity();
+    renderPreview();
+  };
+  source.addEventListener('preview', (event) => {
+    if (!current()) return;
+    let preview;
+    try { preview = JSON.parse(event.data); } catch { return; }
+    if (!Number.isInteger(preview.revision) || typeof preview.text !== 'string' || typeof preview.activity !== 'string') return;
+    state.preview = { revision: preview.revision, text: preview.text, activity: preview.activity };
+    renderPreview();
+    renderActivity();
+  });
+  source.addEventListener('status', (event) => {
+    if (!current()) return;
+    let status;
+    try { status = JSON.parse(event.data); } catch { return; }
+    if (status.id !== run.id || status.thread_id !== thread) return;
+    state.refresh++;  // discard any poll response captured before this authoritative SSE update
+    renderRun(status);
+    if (!['queued', 'running', 'waiting'].includes(status.status)) {
+      // renderRun closes the source and removes the draft BEFORE loading committed history.
+      refresh().catch(() => { if (state.view === view && state.thread === thread) schedulePoll(); });
+    }
+  });
+  source.onerror = () => {
+    if (!current()) return;
+    // EventSource retries automatically. Do not present the draft as complete or log event data.
+    state.streamError = true;
+    renderActivity();
+    renderPreview();
+    schedulePoll();  // also detects expired auth/ownership, which EventSource cannot expose
+  };
 }
 
 // --- what the bot asks ---
@@ -236,7 +335,18 @@ function button(text, kind, onClick) {
 }
 
 async function answer(ask, body) {
-  await api(`/api/asks/${ask.id}`, { method: 'POST', body });
+  const view = state.view;
+  const thread = state.thread;
+  const runId = state.run && state.run.id;
+  const current = () => state.view === view && state.thread === thread && state.run &&
+    state.run.id === runId && state.run.ask && state.run.ask.id === ask.id;
+  try {
+    await api(`/api/asks/${ask.id}`, { method: 'POST', body }, current);
+  } catch (error) {
+    if (!current()) return;
+    throw error;
+  }
+  if (!current()) return;
   $('ask').hidden = true;
   $('ask').dataset.id = '';
   schedulePoll();
@@ -244,7 +354,20 @@ async function answer(ask, body) {
 }
 
 async function takeOver(ask) {
-  const link = await api(`/api/runs/${state.run.id}/live`, { method: 'POST', body: {} });
+  const view = state.view;
+  const thread = state.thread;
+  const runId = state.run && state.run.id;
+  const current = () => state.view === view && state.thread === thread && state.run &&
+    state.run.id === runId && state.run.status === 'waiting' && state.run.ask && state.run.ask.id === ask.id;
+  if (!current()) return;
+  let link;
+  try {
+    link = await api(`/api/runs/${runId}/live`, { method: 'POST', body: {} }, current);
+  } catch (error) {
+    if (!current()) return;  // an old request must not alert or sign out a newer view
+    throw error;
+  }
+  if (!current()) return;
   state.liveAsk = ask.id;
   stopWatching();
   $('browser-label').textContent = 'You have the browser. Give it back when you are done.';
@@ -259,11 +382,23 @@ async function takeOver(ask) {
 
 function watchBrowser() {
   if (state.screenTimer !== null || state.liveAsk !== null) return;
+  const view = state.view;
+  const thread = state.thread;
+  const runId = state.run && state.run.id;
+  const askId = state.run && state.run.ask ? state.run.ask.id : null;
   const tick = async () => {
-    if (state.run === null || $('browser').hidden) return;
-    const response = await fetch(`/api/runs/${state.run.id}/screen`, { credentials: 'same-origin' });
-    if (!response.ok) return;
-    const url = URL.createObjectURL(await response.blob());
+    const timer = state.screenTimer;
+    const current = () => state.view === view && state.thread === thread && state.run &&
+      state.run.id === runId && ['queued', 'running'].includes(state.run.status) &&
+      (state.run.ask ? state.run.ask.id : null) === askId && state.liveAsk === null &&
+      state.screenTimer === timer && !$('browser').hidden;
+    if (!current()) return;
+    const response = await fetch(`/api/runs/${runId}/screen`, { credentials: 'same-origin' });
+    if (!current() || !response.ok) return;
+    const blob = await response.blob();
+    if (!current()) return;
+    const url = URL.createObjectURL(blob);
+    if (!current()) { URL.revokeObjectURL(url); return; }
     const old = $('screen').src;
     $('screen').src = url;
     if (old.startsWith('blob:')) URL.revokeObjectURL(old);
@@ -297,6 +432,10 @@ function stopWatching() {
 function hideBrowser() {
   $('browser').hidden = true;
   $('live').src = 'about:blank';
+  const old = $('screen').src || '';
+  $('screen').removeAttribute('src');
+  $('screen').hidden = true;
+  if (old.startsWith('blob:')) URL.revokeObjectURL(old);
   updateBrowserButton();
 }
 
