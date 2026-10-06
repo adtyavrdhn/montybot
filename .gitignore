@@ -1,2 +1,18 @@
 __pycache__/
+*.pyc
 .venv/
+.env
+.pytest_cache/
+.ruff_cache/
+
+# Live session state: identities, profiles, storage states. Never commit these.
+identities*/
+profiles/
+*storage-state*.json
+*.storage.json
+
+# Spike artefacts: binaries, builds, raw logs and outputs (screenshots may show signed-in pages)
+spikes/**/bin/
+spikes/**/target/
+spikes/**/logs/
+spikes/**/out/

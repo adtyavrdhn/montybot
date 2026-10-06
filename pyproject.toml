@@ -3,12 +3,15 @@ name = "montybot"
 version = "0.0.0"
 description = "An always-on agent built on Monty and Pydantic AI, with a browser it can hand to the user."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "playwright>=1.63",
+]
 
 [dependency-groups]
 dev = [
     "anyio>=4.4",
     "e2b-desktop>=2.6.1",
+    "playwright>=1.63",
     "pyright>=1.1.400",
     "pytest>=8.3",
     "ruff>=0.12",
