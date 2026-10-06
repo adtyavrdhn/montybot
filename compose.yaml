@@ -1,0 +1,20 @@
+# Local development: Postgres for the app and DBOS. `docker compose up -d`, then `uv run montybot serve`
+# with the settings in `.env` (copy `.env.example`). #7 grows this into the whole product on one server.
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: montybot
+      POSTGRES_PASSWORD: montybot
+      POSTGRES_DB: montybot
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U montybot']
+      interval: 2s
+      retries: 30
+
+volumes:
+  postgres: {}
