@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     browser_backend: str = 'montybot.browser.fake:FakeBrowser'
     """`module:attribute` of a callable that makes a closed `BrowserBackend` for one run."""
     browser_idle_timeout_seconds: float = 10 * 60
+    monty_url: str | None = None
+    """Full Monty: monty-server's WebSocket URL, such as `ws://monty-server:8000`. Unset: Monty in local
+    subprocesses."""
+    code_timeout_seconds: float = 600
+    """The longest one `run_code` call may take, browser calls included."""
+    code_compute_seconds: float = 60
+    """The longest one `run_code` call may compute, not counting time waiting on the browser."""
     allow_private_networks: bool = False
     """Let the agent open loopback and private addresses. Only for local fixture sites in tests."""
 

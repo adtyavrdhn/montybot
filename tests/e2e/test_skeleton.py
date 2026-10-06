@@ -111,3 +111,16 @@ def test_writes_must_be_json(app: App) -> None:
         assert browser.post('/api/threads', json={'text': '   '}).status_code == 401
         browser.post('/api/signup', content=body, headers={'content-type': 'application/json'})
         assert browser.post('/api/threads', json={'text': '   '}).status_code == 422
+
+
+@pytest.mark.u3
+@pytest.mark.scripted
+def test_code_cannot_skip_the_approval(client: Client, shop: Shop) -> None:
+    client.sign_up()
+    thread = client.ask(f'Order eggs straight from code at {shop.url}')
+    handoff = client.wait_for_ask(thread, 'handoff')
+    Human(client, client.thread(thread)['run']['id']).sign_in('alice', 'hunter2')
+    client.answer(handoff, done=True)
+    reply = client.wait_for_reply(thread)
+    assert 'Use the `commit` tool' in reply
+    assert shop.orders == []

@@ -1,5 +1,8 @@
-# Local development: Postgres for the app and DBOS. `docker compose up -d`, then `uv run montybot serve`
-# with the settings in `.env` (copy `.env.example`). #7 grows this into the whole product on one server.
+# Local development: Postgres, and Full Monty (monty-server relaying to monty-worker). `docker compose up -d`, then
+# `uv run montybot serve` with the settings in `.env` (copy `.env.example`). #7 grows this into the whole product on
+# one server.
+#
+# Monty's images build from a checkout of monty-private, `../monty-private` unless MONTY_PRIVATE_DIR says otherwise.
 services:
   postgres:
     image: postgres:17
@@ -16,5 +19,31 @@ services:
       interval: 2s
       retries: 30
 
+  monty-server:
+    build:
+      context: ${MONTY_PRIVATE_DIR:-../monty-private}
+      dockerfile: crates/monty-server/Dockerfile
+    environment:
+      MONTY_SERVER_WORKER_URL: ws://monty-worker:8000/
+      # Sessions are parked here while a run waits, so they outlive a restart.
+      MONTY_SERVER_OBJECT_STORE_URI: file:///var/lib/monty-server
+      MONTY_SERVER_DEFAULT_PERSISTENCE: stored
+    volumes:
+      - monty-sessions:/var/lib/monty-server
+    ports:
+      - '127.0.0.1:8100:8000'
+    depends_on:
+      - monty-worker
+
+  monty-worker:
+    build:
+      context: ${MONTY_PRIVATE_DIR:-../monty-private}
+      dockerfile: crates/monty-worker/Dockerfile
+    environment:
+      MONTY_WORKER_MAX_SESSIONS: '16'
+      MONTY_WORKER_MAX_MEMORY_MIB: '256'
+    # no ports: only monty-server reaches the worker
+
 volumes:
   postgres: {}
+  monty-sessions: {}
