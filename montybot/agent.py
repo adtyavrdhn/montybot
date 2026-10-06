@@ -14,6 +14,8 @@ from montybot import approvals
 from montybot.browsing import browser_tools
 from montybot.code import INSTRUCTIONS as CODE_INSTRUCTIONS
 from montybot.code import code_tools
+from montybot.cpython import INSTRUCTIONS as CPYTHON_INSTRUCTIONS
+from montybot.cpython import cpython_tools
 from montybot.deps import RunDeps
 from montybot.memory import memory_tools, recall
 from montybot.schedule_tools import INSTRUCTIONS as SCHEDULE_INSTRUCTIONS
@@ -59,8 +61,15 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
         model,
         name='montybot',
         deps_type=RunDeps,
-        instructions=[INSTRUCTIONS, CODE_INSTRUCTIONS, SCHEDULE_INSTRUCTIONS, recall, scheduled_run],
-        toolsets=[code_tools, browser_tools, user_tools, memory_tools, schedule_tools],
+        instructions=[
+            INSTRUCTIONS,
+            CODE_INSTRUCTIONS,
+            CPYTHON_INSTRUCTIONS,
+            SCHEDULE_INSTRUCTIONS,
+            recall,
+            scheduled_run,
+        ],
+        toolsets=[code_tools, cpython_tools, browser_tools, user_tools, memory_tools, schedule_tools],
         capabilities=[
             HandleDeferredToolCalls(handler=approvals.handle_approvals),
             DBOSDurability(parallel_execution_mode='sequential'),

@@ -45,7 +45,7 @@ from montybot.browsing import Session, host_of, refused_url, target_of
 from montybot.deps import RunDeps
 from montybot.resources import Resources, current
 from montybot.settings import Settings
-from montybot.workspaces import DOWNLOADS, VIRTUAL_ROOT, WorkspaceFiles
+from montybot.workspaces import DOWNLOADS, VIRTUAL_ROOT
 
 OUTPUT_LIMIT = 20_000
 
@@ -246,7 +246,7 @@ async def run_snippet(
                     code,
                     external_lookup=browser_functions(session),
                     print_callback=printed,
-                    os=WorkspaceFiles(resources.workspaces.of(user_id)),
+                    os=resources.workspaces.files(user_id),
                     cwd=VIRTUAL_ROOT,
                 )
         except MontySyntaxError as error:

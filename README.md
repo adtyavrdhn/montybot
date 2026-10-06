@@ -20,7 +20,9 @@ The app is Starlette plus DBOS in one process (`montybot/app.py`, `montybot/work
 model requests and browser calls are steps, and questions, approvals and hand-offs wait in `DBOS.recv`
 (`montybot/approvals.py`). The agent's code runs in Monty through `run_code` (`montybot/code.py`), with the browser
 as host functions; with `MONTY_URL` set it runs on Full Monty. Its file calls (`pathlib`, `open`) reach the user's
-own directory under `WORKSPACES_DIR` at `/work`, where browser downloads land too (`montybot/workspaces.py`). The browser contract and service are in [`montybot/browser/`](montybot/browser/README.md).
+own directory under `WORKSPACES_DIR` at `/work`, where browser downloads land too (`montybot/workspaces.py`). Heavy
+Python (pandas, PDFs) runs through `run_python` in real CPython, in a bubblewrap jail per call on the same files
+(`montybot/cpython.py`, Linux only). The browser contract and service are in [`montybot/browser/`](montybot/browser/README.md).
 
 ## Tests
 
@@ -29,12 +31,15 @@ uv run pytest                                   # unit tests, and end-to-end tes
 uv run pytest tests/e2e --browser=chromium      # the same end-to-end tests in real (headless) Chrome
 uv run pytest -m u2                             # one user path (u1 ... u6)
 MONTYBOT_TEST_MODEL=anthropic:claude-sonnet-4-5 uv run pytest tests/e2e --browser=chromium --live   # nightly
+tests/linux/run.sh tests/test_cpython.py tests/e2e/test_files.py   # the tests that need Linux and bwrap, in Docker
 ```
 
 End-to-end tests run the real app in its own process against Postgres (`MONTYBOT_TEST_POSTGRES`, or a container they
 start with Docker), the fixture sites in `tests/sites` (one per user path), a scripted model (`tests/e2e/scripts.py`)
 and a scripted human who drives hand-offs through the live-view API. With `MONTYBOT_TEST_MODEL` the same tests run
-against a real model; `--live` adds real sites (`tests/e2e/test_live.py`).
+against a real model; `--live` adds real sites (`tests/e2e/test_live.py`). The CPython tier's tests need Linux with
+bwrap and are skipped elsewhere; `tests/linux/run.sh` runs them in an Ubuntu container on any Docker host (colima on a
+Mac), reaching `MONTYBOT_TEST_POSTGRES` and `MONTYBOT_TEST_MONTY_URL` on the Docker host's network.
 
 ## Notes
 

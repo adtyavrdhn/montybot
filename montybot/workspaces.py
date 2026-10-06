@@ -17,6 +17,10 @@ the user's directory through a symlink, raises `PermissionError`, and errors nam
 
 The `Workspace` API has no append and no modification time, so appends and `stat` use the checked path on our server
 directly; everything else goes through the workspace.
+
+The CPython tier (#6) runs code that can make symlinks and FIFOs in the user's directory. Calls here take the user's
+lock, which `run_python` holds while its jail runs, so nothing changes a path between the check and its use; links
+that lead out are refused, and only regular files are read or written.
 """
 
 from __future__ import annotations
@@ -46,6 +50,14 @@ class Workspaces:
 
     def __init__(self, root: Path) -> None:
         self.root = root.expanduser().absolute()
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def lock(self, user_id: str) -> asyncio.Lock:
+        """Held by each file call and by `run_python` for its whole run, so they never overlap for one user."""
+        return self._locks.setdefault(str(uuid.UUID(user_id)), asyncio.Lock())
+
+    def files(self, user_id: str) -> WorkspaceFiles:
+        return WorkspaceFiles(self.of(user_id), self.lock(user_id))
 
     def directory(self, user_id: str) -> Path:
         return self.root / str(uuid.UUID(user_id))  # a user id is a UUID, so it cannot name another directory
@@ -85,8 +97,9 @@ class WorkspaceFiles:
     Calls that are not about files (the clock, the environment) are left to Monty, as without a handler.
     """
 
-    def __init__(self, workspace: Workspace) -> None:
+    def __init__(self, workspace: Workspace, lock: asyncio.Lock | None = None) -> None:
         self.workspace = workspace
+        self.lock = lock or asyncio.Lock()
         self._calls: dict[str, Callable[..., Awaitable[Any]]] = {
             'Path.exists': self.exists,
             'Path.is_file': self.is_file,
@@ -121,7 +134,8 @@ class WorkspaceFiles:
         """Run one call, with errors that name the `/work` path and never the directory on our server."""
         shown = str(path_from_arg(args[0])) if args else VIRTUAL_ROOT
         try:
-            return await call(*args, **kwargs)
+            async with self.lock:
+                return await call(*args, **kwargs)
         except OSError as error:
             if error.filename == shown and error.errno is not None:
                 raise  # one of ours, already about the /work path
@@ -191,12 +205,23 @@ class WorkspaceFiles:
     async def read_text(self, path: PurePosixPath | MontyFileHandle) -> str:
         return (await self.read_bytes(path)).decode()
 
-    async def _write(self, path: PurePosixPath | MontyFileHandle, data: bytes) -> None:
+    async def _writable(self, path: PurePosixPath | MontyFileHandle) -> str:
+        """The checked path of a file to write: its folder exists, and it is a regular file or nothing yet."""
         host = await self._not_root(path_from_arg(path))
-        parent = posixpath.dirname(host)
-        if not await self.workspace.exists(parent):  # pathlib does not make missing folders; the workspace would
+        if not await self.workspace.exists(posixpath.dirname(host)):  # pathlib does not make missing folders
             raise _error(errno.ENOENT, 'No such file or directory', self._virtual(path))
-        await self.workspace.write_bytes(host, data)
+        try:
+            mode = (await asyncio.to_thread(os.lstat, host)).st_mode
+        except FileNotFoundError:
+            return host
+        if stat_module.S_ISDIR(mode):
+            raise _error(errno.EISDIR, 'Is a directory', self._virtual(path))
+        if not stat_module.S_ISREG(mode):  # such as a FIFO, which would block the write
+            raise _error(errno.EINVAL, 'not a regular file', self._virtual(path))
+        return host
+
+    async def _write(self, path: PurePosixPath | MontyFileHandle, data: bytes) -> None:
+        await self.workspace.write_bytes(await self._writable(path), data)
 
     async def write_bytes(self, path: PurePosixPath | MontyFileHandle, data: bytes) -> int:
         await self._write(path, data)
@@ -208,13 +233,11 @@ class WorkspaceFiles:
 
     async def _append(self, path: PurePosixPath | MontyFileHandle, data: bytes) -> None:
         """Monty sends every `write` after the first as an append, so this adds to the file rather than rewriting it."""
-        host = await self._not_root(path_from_arg(path))
-        if not await self.workspace.exists(posixpath.dirname(host)):
-            raise _error(errno.ENOENT, 'No such file or directory', self._virtual(path))
+        host = await self._writable(path)
 
         def append() -> None:
-            # `host` has its links resolved; O_NOFOLLOW refuses one planted since.
-            fd = os.open(host, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+            fd = os.open(host, flags, 0o600)
             try:
                 os.write(fd, data)
             finally:
@@ -291,12 +314,15 @@ def download_name(name: str) -> str:
     return name or 'download'
 
 
-async def save_download(workspace: Workspace, name: str, data: bytes) -> str:
+async def save_download(files: WorkspaceFiles, name: str, data: bytes) -> str:
     """Save a browser download in the user's files; returns the path code sees it at. A file of the same name and
     content is kept, so a download repeated after a restart leaves one copy; another with the same name gets ` (2)`,
     ` (3)`... as in a browser."""
-    files = WorkspaceFiles(workspace)
-    name = download_name(name)
+    async with files.lock:
+        return await _save_download(files, download_name(name), data)
+
+
+async def _save_download(files: WorkspaceFiles, name: str, data: bytes) -> str:
     await files.mkdir(PurePosixPath(DOWNLOADS), parents=True, exist_ok=True)
     stem, dot, extension = name.rpartition('.') if '.' in name else (name, '', '')
     for number in range(1, 1000):
