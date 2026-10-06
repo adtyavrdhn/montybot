@@ -61,6 +61,7 @@ from montybot.browser.service import (
 )
 from montybot.browser.state import BLANK_URL, BrowserState
 from montybot.liveview.polling import PollingFrameSource
+from montybot.observability import timed, timing
 
 T = TypeVar('T')
 
@@ -143,6 +144,7 @@ class BrowserHost:
     ) -> None:
         await self.aclose()
 
+    @timed('browser.shutdown')
     async def aclose(self) -> None:
         """Stop the reaper, then save and close every browser. Runs keep their leases, so if the service starts again
         with the same lease store, each run's next call restarts its browser and says so."""
@@ -157,6 +159,7 @@ class BrowserHost:
 
     # --- BrowserService ---
 
+    @timed('browser.start')
     async def start(self, *, run_id: RunId, user_id: UserId) -> Started:
         run = self._runs.get(run_id)
         if run is None:
@@ -169,6 +172,7 @@ class BrowserHost:
             reused = before is not None and run.backend is before
             return Started(url=url, reused=reused, restarted=restarted)
 
+    @timed('browser.act')
     async def act(
         self, *, run_id: RunId, user_id: UserId, action: Action, handoff_id: HandoffId | None = None
     ) -> ActionResult:
@@ -178,6 +182,7 @@ class BrowserHost:
             _, restarted = await self._use(run, lambda backend: backend.act(action), replay=False)
             return ActionResult(restarted=restarted)
 
+    @timed('browser.snapshot')
     async def snapshot(self, *, run_id: RunId, user_id: UserId) -> SnapshotResult:
         run = await self._find(run_id, user_id)
         async with self._hold(run):
@@ -186,6 +191,7 @@ class BrowserHost:
             run.url = snapshot.url
             return SnapshotResult(snapshot=snapshot, restarted=restarted)
 
+    @timed('browser.screenshot')
     async def screenshot(
         self, *, run_id: RunId, user_id: UserId, handoff_id: HandoffId | None = None
     ) -> ScreenshotResult:
@@ -195,6 +201,7 @@ class BrowserHost:
             screenshot, restarted = await self._use(run, lambda backend: backend.screenshot(), replay=True)
             return ScreenshotResult(screenshot=screenshot, restarted=restarted)
 
+    @timed('browser.peek_screenshot')
     async def peek_screenshot(self, *, run_id: RunId, user_id: UserId) -> Screenshot:
         """The viewport of the run's open browser, for the user watching the run. Read only: it never opens, restarts
         or keeps a browser alive, and does not wait for a call in progress. `UnknownRun` if there is no open browser
@@ -210,6 +217,7 @@ class BrowserHost:
             except Exception as error:  # a watcher gets the next frame instead, whatever went wrong with this one
                 raise UnknownRun('no browser to watch for this run') from error
 
+    @timed('browser.handoff.start')
     async def start_handoff(self, *, run_id: RunId, user_id: UserId, reason: str) -> Handoff:
         run = await self._find(run_id, user_id)
         async with self._hold(run):
@@ -220,6 +228,7 @@ class BrowserHost:
             _touch(run)
             return run.handoff
 
+    @timed('browser.handoff.end')
     async def end_handoff(self, *, run_id: RunId, user_id: UserId, handoff_id: HandoffId) -> HandoffEnded:
         run = await self._find(run_id, user_id)
         async with self._hold(run):
@@ -234,6 +243,7 @@ class BrowserHost:
             _touch(run)
             return HandoffEnded(handoff_id=handoff_id, url=run.url, saved=saved)
 
+    @timed('browser.live_view')
     async def live_view(self, *, run_id: RunId, user_id: UserId, handoff_id: HandoffId) -> FrameSource:
         """A live view of the run's browser for the active hand-off's holder: the backend's own (a CDP screencast for
         Chromium), else one that polls `screenshot()`. Added for the web app (#8), on #14's `FrameSource`."""
@@ -249,6 +259,7 @@ class BrowserHost:
             _touch(run)
             return source
 
+    @timed('browser.state.save')
     async def save_state(self, *, run_id: RunId, user_id: UserId) -> None:
         run = await self._find(run_id, user_id)
         async with self._hold(run):
@@ -266,6 +277,7 @@ class BrowserHost:
             await self._store(run, state)
             _touch(run)
 
+    @timed('browser.downloads')
     async def take_downloads(self, *, run_id: RunId, user_id: UserId) -> list[Download]:
         """Added for the run's files (#21). Allowed during a hand-off, so what the user downloads is kept too."""
         run = await self._find(run_id, user_id)
@@ -274,6 +286,7 @@ class BrowserHost:
                 return []
             return await run.backend.take_downloads()
 
+    @timed('browser.close')
     async def close(self, *, run_id: RunId, user_id: UserId) -> bool:
         run = await self._find(run_id, user_id)
         async with self._hold(run):
@@ -292,6 +305,7 @@ class BrowserHost:
 
     # --- the idle reaper ---
 
+    @timed('browser.reap_idle')
     async def reap_idle(self) -> int:
         """Save and close every browser not used for `idle_timeout` seconds. Returns how many it closed."""
         reaped = 0
@@ -373,10 +387,12 @@ class BrowserHost:
     async def _open(self, run: _Run) -> BrowserBackend:
         if run.backend is not None:
             return run.backend
-        state = await self._jar.load(user_id=run.user_id)
+        with timing('browser.state.load'):
+            state = await self._jar.load(user_id=run.user_id)
         backend = self._new_backend()
         try:
-            await backend.open(state)
+            with timing('browser.launch_restore'):
+                await backend.open(state)
         except ActionFailed:
             pass  # the saved page did not load; the browser is open anyway, and the next snapshot shows the error
         except BaseException:
@@ -390,6 +406,7 @@ class BrowserHost:
             run.restart_reason = None
         return backend
 
+    @timed('browser.backend.call')
     async def _call(self, run: _Run, backend: BrowserBackend, use: Callable[[BrowserBackend], Awaitable[T]]) -> T:
         """Call `use`. If it fails and the browser no longer answers, drop it and raise `_Gone`."""
         try:
@@ -410,6 +427,7 @@ class BrowserHost:
 
         return url_now
 
+    @timed('browser.state.save_if_open')
     async def _save_if_open(self, run: _Run) -> bool:
         """Save the open browser's state. Returns whether the jar now holds the browser's latest state: False if the
         engine cannot export, or the browser was lost before it could."""
@@ -428,6 +446,7 @@ class BrowserHost:
         await self._store(run, state)
         return True
 
+    @timed('browser.state.store')
     async def _store(self, run: _Run, state: BrowserState) -> None:
         if await self._lease.holder(user_id=run.user_id) != run.run_id:
             raise UserBusy("this run no longer holds the user's saved sign-ins, so it cannot save them")
@@ -446,6 +465,7 @@ class BrowserHost:
         if run.backend is not None:
             await self._drop(run, reason if saved else reason + _NOT_SAVED)
 
+    @timed('browser.drop')
     async def _drop(self, run: _Run, reason: str | None = None) -> None:
         """Close the run's browser. With a `reason`, the next call restarts it and reports why."""
         await _close_sources(run)
@@ -475,6 +495,7 @@ def _touch(run: _Run) -> None:
     run.last_used = time.monotonic()
 
 
+@timed('browser.health')
 async def _answers(backend: BrowserBackend) -> bool:
     """Whether the browser is still alive: it answers `snapshot()`, or says it cannot."""
     try:
@@ -486,6 +507,7 @@ async def _answers(backend: BrowserBackend) -> bool:
     return True
 
 
+@timed('browser.backend.close')
 async def _close_quietly(backend: BrowserBackend) -> None:
     """Close a backend that may already be dead. `close()` is safe in any state, but a crashed engine may still
     raise."""

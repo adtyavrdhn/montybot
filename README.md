@@ -24,6 +24,20 @@ own directory under `WORKSPACES_DIR` at `/work`, where browser downloads land to
 Python (pandas, PDFs) runs through `run_python` in real CPython, in a bubblewrap jail per call on the same files
 (`montybot/cpython.py`, Linux only). The browser contract and service are in [`montybot/browser/`](montybot/browser/README.md).
 
+## Observability
+
+`LOGFIRE_TOKEN` is optional: without it, no telemetry is sent to Logfire. With it, the app exports fixed-label
+HTTP, database pool/query, run, browser and Monty durations, HTTP response status, and numeric model token usage
+(including prompt-cache reads/writes). Cache usage is part of the model request span: providers do not expose a
+separate cache duration. Trace/span IDs correlate operations; user content is not needed for tracing.
+
+Pydantic AI keeps `include_content=False` and passes through an allowlist adapter before export. Messages, tool
+arguments/results, code, page contents, typed input, cookies/storage state, credentials, hand-off IDs/links, full
+URLs and exception text are excluded. Exported resources carry only the fixed `service.name=montybot` label;
+environment/detector resource metadata is discarded. HTTP/SQL auto-instrumentation and model metrics are deliberately
+disabled because they can expose URL, query or provider metadata. Keep operation names literal and do not add argument
+capture when extending instrumentation. `tests/e2e/test_traces.py` checks the exported privacy boundary.
+
 ## Tests
 
 ```bash

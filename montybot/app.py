@@ -14,10 +14,11 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
-from starlette.types import Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from montybot import api, approvals, workflows
 from montybot.live import live_app
+from montybot.observability import HTTPtimings
 from montybot.resources import Resources, open_resources
 from montybot.settings import Settings
 
@@ -26,7 +27,7 @@ class State(TypedDict):
     resources: Resources
 
 
-def create_app(settings: Settings) -> Starlette:
+def create_app(settings: Settings) -> ASGIApp:
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncGenerator[State]:
         async with open_resources(settings) as resources:
@@ -34,7 +35,7 @@ def create_app(settings: Settings) -> Starlette:
             await workflows.start_queued(resources)
             yield {'resources': resources}
 
-    return Starlette(
+    app = Starlette(
         routes=[
             Route('/healthz', healthz),
             Route('/api/signup', api.sign_up, methods=['POST']),
@@ -73,11 +74,13 @@ def create_app(settings: Settings) -> Starlette:
                 same_site='lax',
                 https_only=settings.secure_cookies,
                 max_age=30 * 24 * 60 * 60,
-            )
+            ),
         ],
         lifespan=lifespan,
         exception_handlers={ValidationError: invalid_body},
     )
+    # Include Starlette's outer ServerErrorMiddleware: generated 500 responses count too.
+    return HTTPtimings(app)
 
 
 STATIC = Path(__file__).parent / 'static'
