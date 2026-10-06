@@ -15,6 +15,8 @@ from montybot.code import INSTRUCTIONS as CODE_INSTRUCTIONS
 from montybot.code import code_tools
 from montybot.deps import RunDeps
 from montybot.memory import memory_tools, recall
+from montybot.schedule_tools import INSTRUCTIONS as SCHEDULE_INSTRUCTIONS
+from montybot.schedule_tools import schedule_tools, scheduled_run
 
 INSTRUCTIONS = """\
 You are monty-bot, a personal assistant that does things for the user on the web, in your own browser.
@@ -46,8 +48,8 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
         model,
         name='montybot',
         deps_type=RunDeps,
-        instructions=[INSTRUCTIONS, CODE_INSTRUCTIONS, recall],
-        toolsets=[code_tools, browser_tools, user_tools, memory_tools],
+        instructions=[INSTRUCTIONS, CODE_INSTRUCTIONS, SCHEDULE_INSTRUCTIONS, recall, scheduled_run],
+        toolsets=[code_tools, browser_tools, user_tools, memory_tools, schedule_tools],
         capabilities=[
             HandleDeferredToolCalls(handler=approvals.handle_approvals),
             DBOSDurability(parallel_execution_mode='sequential'),

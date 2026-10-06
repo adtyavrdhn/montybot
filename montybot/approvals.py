@@ -148,12 +148,20 @@ async def redeliver_answers(resources: Resources) -> int:
     return len(rows)
 
 
+def describe(tool: str, args: dict[str, Any]) -> str:
+    """What the user is asked to approve."""
+    if tool == 'schedule_task':
+        kind = 'Watch' if args.get('watch') else 'Run'
+        return f'{kind} "{args.get("name")}" {args.get("when")} ({args.get("timezone")}): {args.get("prompt")}'
+    return str(args.get('description') or tool)
+
+
 async def handle_approvals(ctx: RunContext[RunDeps], requests: DeferredToolRequests) -> DeferredToolResults:
     """Ask the user to approve each call that needs it, one card per call, and wait."""
     verdicts: dict[str, bool | ToolDenied] = {}
     for call in requests.approvals:
         args = call.args_as_dict()
-        what = str(args.get('description') or call.tool_name)
+        what = describe(call.tool_name, args)
         reply = await ask(ctx, 'approval', what, {'tool': call.tool_name, 'target': str(args.get('target', ''))})
         if reply is None:
             verdicts[call.tool_call_id] = ToolDenied('The user did not answer in time, so this was not done.')

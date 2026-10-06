@@ -152,7 +152,99 @@ def order_from_code(turn: Turn) -> ModelResponse:
     return say(turn.last)
 
 
+# --- schedules (U4) ---
+
+
+def schedule(**args: object) -> Script:
+    """Set up a schedule (the user approves it), then say what the tool said. The task's prompt names the site."""
+
+    def script(turn: Turn) -> ModelResponse:
+        if not turn.called('schedule_task'):
+            prompt = str(args['prompt']).format(url=turn.url)
+            return call('schedule_task', **{**args, 'prompt': prompt})
+        return say(turn.result_of('schedule_task'))
+
+    return script
+
+
+def fill_cart(turn: Turn) -> ModelResponse:
+    """A scheduled run: put eggs and milk in the cart, signing in through a hand-off only if the shop asks."""
+    if not turn.returns:
+        return run(f"shop = {turn.url!r}\nawait goto(shop + '/')\nprint(await click('#add-eggs'))")
+    if 'Title: Sign in' in turn.last:
+        if turn.called('hand_off'):
+            return say('You are still not signed in, so I stopped.')
+        return call('hand_off', reason='Please sign in to the shop, then hand the browser back.')
+    if 'In cart: eggs, milk' not in turn.last and turn.called('run_code') < 3:
+        return run(
+            "for item in ('eggs', 'milk'):\n    await goto(shop + '/')\n    page = await click('#add-' + item)\nprint(page)"
+        )
+    return say(line_with(turn.last, 'In cart:') or f'I could not fill the cart. {turn.last}')
+
+
+def check_slot(turn: Turn) -> ModelResponse:
+    """A scheduled run of a watch: notify only when a slot is there."""
+    if not turn.returns:
+        return run(f'print(await goto({turn.url + "/"!r}))')
+    slot = line_with(turn.result_of('run_code'), 'Available:')
+    if not slot:
+        return say('Not yet.')
+    if not turn.called('notify_user'):
+        return call('notify_user')
+    return say(f'A delivery slot opened. {slot.strip(" -")}')
+
+
+def schedule_id(turn: Turn) -> str:
+    match = re.search(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', turn.prompt)
+    assert match, f'the message names no schedule: {turn.prompt!r}'
+    return match.group(0)
+
+
+def on_schedule(tool: str) -> Script:
+    def script(turn: Turn) -> ModelResponse:
+        if not turn.called(tool):
+            return call(tool, schedule_id=schedule_id(turn))
+        return say(turn.last)
+
+    return script
+
+
+def my_schedules(turn: Turn) -> ModelResponse:
+    if not turn.called('list_schedules'):
+        return call('list_schedules')
+    return say(turn.last)
+
+
 SCRIPTS: dict[str, Script] = {
+    'Every Monday at 9, fill my cart at': schedule(
+        name='Weekly groceries',
+        cron='0 9 * * 1',
+        timezone='Europe/London',
+        when='Mondays at 09:00',
+        prompt='Fill my cart at {url} with eggs and milk',
+    ),
+    'Fill my cart at': fill_cart,
+    'Tell me when a delivery slot opens at': schedule(
+        name='Delivery slot',
+        cron='*/30 * * * *',
+        timezone='UTC',
+        when='every 30 minutes',
+        prompt='Check for a delivery slot at {url}',
+        watch=True,
+    ),
+    'Check every minute for a delivery slot at': schedule(
+        name='Delivery slot, every minute',
+        cron='* * * * *',
+        timezone='UTC',
+        when='every minute',
+        prompt='Check for a delivery slot at {url}',
+        watch=True,
+    ),
+    'Check for a delivery slot at': check_slot,
+    'Pause the schedule': on_schedule('pause_schedule'),
+    'Resume the schedule': on_schedule('resume_schedule'),
+    'Delete the schedule': on_schedule('delete_schedule'),
+    'What are my schedules': my_schedules,
     'Order eggs straight from code at': order_from_code,
     'Fail please': fail,
     'Say hello': hello,

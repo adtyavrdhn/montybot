@@ -19,7 +19,7 @@ step returns its recorded result instead of running again.
 from __future__ import annotations
 
 import logfire
-from dbos import DBOS, SetWorkflowID, StepOptions
+from dbos import DBOS, SetWorkflowID, StepOptions, WorkflowHandleAsync
 from dbos._error import DBOSException
 from pydantic_ai.messages import (
     ModelMessage,
@@ -34,7 +34,7 @@ from montybot import store
 from montybot.browser.contract import BrowserError
 from montybot.browser.service import UnknownRun
 from montybot.deps import RunDeps
-from montybot.models import Run
+from montybot.models import Run, Schedule
 from montybot.resources import Resources, current
 
 RETRIED: StepOptions = {'retries_allowed': True, 'max_attempts': 5, 'interval_seconds': 1.0}
@@ -46,9 +46,9 @@ FAILURE_NOTICE = 'Something went wrong while working on this, and I could not fi
 @DBOS.workflow(name='montybot.run_thread')
 async def run_thread(run_id: str) -> str:
     resources = current()
-    run, history_json = await DBOS.run_step_async({'name': 'run.start'}, start_run, resources, run_id)
+    run, history_json, schedule = await DBOS.run_step_async({'name': 'run.start'}, start_run, resources, run_id)
     history = recent(ModelMessagesTypeAdapter.validate_json(history_json), resources.settings.history_limit)
-    deps = RunDeps(resources=resources, run=run)
+    deps = RunDeps(resources=resources, run=run, schedule=schedule)
     try:
         try:
             result = await resources.agent.run(run.prompt, deps=deps, message_history=history)
@@ -67,18 +67,19 @@ async def run_thread(run_id: str) -> str:
         await DBOS.run_step_async({**RETRIED, 'name': 'run.close'}, close_browser, resources, run)
 
 
-async def start(run_id: str) -> None:
+async def start(run_id: str) -> WorkflowHandleAsync[str]:
     """Start the run's workflow. Starting it twice is harmless: the second start finds the first."""
     with SetWorkflowID(run_id):
-        await DBOS.start_workflow_async(run_thread, run_id)
+        return await DBOS.start_workflow_async(run_thread, run_id)
 
 
-async def start_run(resources: Resources, run_id: str) -> tuple[Run, bytes]:
+async def start_run(resources: Resources, run_id: str) -> tuple[Run, bytes, Schedule | None]:
     async with resources.pool.connection() as connection, connection.transaction():
         run = await store.load_run(connection, run_id)
         await store.set_run_status(connection, run_id, 'running')
         history = await store.load_history(connection, run.thread_id)
-    return run, ModelMessagesTypeAdapter.dump_json(history)
+        schedule = await store.schedule_of_thread(connection, run.thread_id) if run.trigger == 'schedule' else None
+    return run, ModelMessagesTypeAdapter.dump_json(history), schedule
 
 
 async def finish_run(resources: Resources, run: Run, new_messages: bytes, output: str) -> None:

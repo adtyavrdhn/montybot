@@ -10,7 +10,7 @@ import pytest
 from cryptography.exceptions import InvalidTag
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-from montybot import crypto, memory, signins, store
+from montybot import crypto, memory, schedules, signins, store
 from montybot.browser.state import BrowserState, Cookie
 from montybot.db import Pool, create_pool, migrate
 
@@ -48,6 +48,17 @@ async def test_user_b_sees_nothing_of_user_a(pool: Pool) -> None:
         )
         await store.add_activity(c, run_id, 'Opening shop.test')
         memory_id = await memory.add_memory(c, a.id, 'likes brown eggs')
+        schedule = await store.create_schedule(
+            c,
+            schedule_id=str(uuid.uuid4()),
+            user_id=a.id,
+            name='groceries',
+            cron='0 9 * * 1',
+            timezone='UTC',
+            when='Mondays at 09:00',
+            prompt='fill my cart',
+            watch=False,
+        )
 
         assert await store.get_thread(c, b.id, thread.id) is None
         assert await store.list_threads(c, b.id) == []
@@ -61,11 +72,25 @@ async def test_user_b_sees_nothing_of_user_a(pool: Pool) -> None:
         assert await memory.search_memories(c, b.id, 'eggs') == []
         assert await memory.list_memories(c, b.id) == []
         assert await memory.delete_memory(c, b.id, memory_id) is False
+        assert await store.get_schedule(c, b.id, schedule.id) is None
+        assert await store.list_schedules(c, b.id) == []
+        assert await store.delete_schedule(c, b.id, schedule.id) is False
+        assert await store.get_thread(c, b.id, schedule.thread_id) is None
 
         # and A still sees all of it
         assert await store.get_thread(c, a.id, thread.id) is not None
         assert await store.open_ask(c, a.id, run_id) is not None
         assert await memory.search_memories(c, a.id, 'eggs') == ['likes brown eggs']
+        assert await store.list_schedules(c, a.id) == [schedule]
+
+    # Pausing, resuming and deleting check the owner before they reach DBOS.
+    assert await schedules.list_for(pool, b.id) == []
+    assert await schedules.set_paused(pool, b.id, schedule.id, True) is None
+    assert await schedules.set_paused(pool, b.id, schedule.id, False) is None
+    assert await schedules.delete(pool, b.id, schedule.id) is False
+    assert await schedules.set_paused(pool, b.id, 'not-a-uuid', True) is None
+    async with pool.connection() as c:
+        assert await store.get_schedule(c, a.id, schedule.id) == schedule
 
 
 async def test_sign_ins_are_encrypted_per_user(pool: Pool) -> None:

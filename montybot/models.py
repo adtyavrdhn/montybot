@@ -7,6 +7,8 @@ from typing import Any, Literal
 RunStatus = Literal['queued', 'running', 'waiting', 'done', 'failed']
 Trigger = Literal['message', 'schedule']
 AskKind = Literal['question', 'approval', 'handoff']
+NoticeKind = AskKind | Literal['finished', 'failed', 'found']
+"""What a notification tells the user: an ask, a scheduled task that ended, or a watch that found something."""
 ACTIVE: tuple[RunStatus, ...] = ('queued', 'running', 'waiting')
 
 
@@ -34,6 +36,20 @@ class Run:
     status: RunStatus
     output: str | None = None
     error: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class Schedule:
+    id: str
+    user_id: str
+    thread_id: str
+    name: str
+    cron: str
+    timezone: str
+    when: str
+    """The schedule in plain words, as the agent put it to the user: "Mondays at 09:00"."""
+    prompt: str
+    watch: bool
 
 
 @dataclass(frozen=True, kw_only=True)
