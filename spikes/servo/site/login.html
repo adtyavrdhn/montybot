@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Spike login</title>
+<style>body{font:16px sans-serif;margin:40px} input{display:block;margin:8px 0;padding:6px;width:240px;font-size:16px}</style>
+</head>
+<body>
+<h1>Sign in</h1>
+<form id="f" onsubmit="event.preventDefault(); document.getElementById('status').textContent='submitted as ' + document.getElementById('user').value;">
+  <label for="user">Username</label>
+  <input id="user" name="user" type="text" autocomplete="off">
+  <label for="pass">Password</label>
+  <input id="pass" name="pass" type="password">
+  <button id="go" type="submit">Log in</button>
+</form>
+<p id="status">not submitted</p>
+<p><a href="https://example.com/">A link</a></p>
+</body>
+</html>
