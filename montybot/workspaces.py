@@ -203,6 +203,10 @@ class WorkspaceFiles:
                                 return
                             visited += 1
                             path = relative + '/' + entry.name
+                            try:
+                                path.encode('utf-8')
+                            except UnicodeEncodeError:
+                                continue  # not representable as a JSON/attachment filename
                             if len(path) > 1024:
                                 truncated = True
                                 continue
@@ -237,6 +241,10 @@ class WorkspaceFiles:
         The shared lock excludes CPython. O_NOFOLLOW on every component and fstat on the
         final O_NONBLOCK descriptor also protect against replacement outside that lock.
         """
+        try:
+            path.encode('utf-8')
+        except UnicodeEncodeError:
+            raise PermissionError('invalid workspace path') from None
         parts = path.split('/')
         if len(path) > 1024 or parts[:2] != ['', 'work'] or len(parts) < 3:
             raise PermissionError('invalid workspace path')

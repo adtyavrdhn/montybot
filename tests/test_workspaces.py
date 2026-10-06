@@ -4,7 +4,9 @@ in `test_isolation.py`; the same calls from Monty code are in `test_run_code.py`
 from __future__ import annotations
 
 import os
+import sys
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -75,6 +77,8 @@ async def test_consumer_results_reject_links_special_files_and_traversal(workspa
     workspaces.of(other)
     (root / 'other').symlink_to(workspaces.directory(other))
     os.mkfifo(root / 'pipe')
+    if sys.platform == 'linux':  # macOS refuses non-UTF-8 filenames at creation
+        (root / 'bad\udcff').write_bytes(b'not a UTF-8 filename')
     listing, truncated = await files.list_results()
     assert not truncated
     assert listing == [
@@ -94,6 +98,7 @@ async def test_consumer_results_reject_links_special_files_and_traversal(workspa
         '/work//generated.csv',
         '/work/./generated.csv',
         '/work/generated.csv\x00',
+        '/work/bad\udcff',
     ]:
         with pytest.raises(OSError):
             await files.read_result(path)
@@ -197,7 +202,7 @@ def test_consumer_api_downloads_are_authenticated_and_private(
     users = {alice.id: alice, bob.id: bob}
 
     @asynccontextmanager
-    async def connection() -> Any:
+    async def connection() -> AsyncIterator[None]:
         yield None
 
     async def get_user(connection: Any, user_id: str) -> User | None:
