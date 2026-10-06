@@ -123,6 +123,9 @@ wheels = [
 name = "montybot"
 version = "0.0.0"
 source = { editable = "." }
+dependencies = [
+    { name = "playwright" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -134,6 +137,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "playwright", specifier = ">=1.63" }]
 
 [package.metadata.requires-dev]
 dev = [
