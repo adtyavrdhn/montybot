@@ -219,8 +219,8 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
     async def press_key(key: str) -> str:
         async def use() -> str:
             key_text = str(key)
-            activates = any(
-                part.lower() in ('enter', 'return', 'numpadenter', 'space', ' ') for part in key_text.split('+')
+            activates = key_text == ' ' or any(
+                part.strip().lower() in ('enter', 'return', 'numpadenter', 'space') for part in key_text.split('+')
             )
             if activates and not (key_text == 'Enter' and search_ready[0]):
                 refuse_submission()
