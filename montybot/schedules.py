@@ -11,7 +11,8 @@ DBOS scheduler, at each time the cron names
     step schedule.start   skip if the schedule is gone, paused, or its last occurrence is still going;
                           else store.create_run(trigger='schedule') in the schedule's thread
     run_thread(run_id)    the usual run (montybot.workflows), as a child workflow with the run's id
-    step schedule.notify  a recurring task tells the user it finished; a watch tells them itself (notify_user)
+    step schedule.notify  a recurring task tells the user it finished (or failed); a watch tells them itself when it
+                          finds something (notify_user, which also pauses it), and otherwise only if it failed
 ```
 
 A run reuses the user's saved sign-ins like any other and hands off only when a site asks to sign in again; the user
@@ -95,15 +96,21 @@ async def create(
             prompt=prompt,
             watch=watch,
         )
+    await ensure_dbos_schedule(schedule)
+    return schedule
+
+
+async def ensure_dbos_schedule(schedule: Schedule) -> None:
+    """Make the schedule's DBOS schedule, unless it exists: after a failure between the row and it, the next try or
+    a resume completes the schedule."""
     if await DBOS.get_schedule_async(dbos_name(schedule.id)) is None:
         await DBOS.create_schedule_async(
             schedule_name=dbos_name(schedule.id),
             workflow_fn=run_schedule,
-            schedule=cron,
+            schedule=schedule.cron,
             context={'schedule_id': schedule.id},
-            cron_timezone=timezone,
+            cron_timezone=schedule.timezone,
         )
-    return schedule
 
 
 async def list_for(pool: Pool, user_id: str) -> list[tuple[Schedule, bool]]:
@@ -125,6 +132,7 @@ async def set_paused(pool: Pool, user_id: str, schedule_id: str, paused: bool) -
         schedule = await store.get_schedule(connection, user_id, schedule_id)
     if schedule is None:
         return None
+    await ensure_dbos_schedule(schedule)
     change = DBOS.pause_schedule if paused else DBOS.resume_schedule
     await asyncio.to_thread(change, dbos_name(schedule.id))
     return schedule
@@ -135,10 +143,11 @@ async def delete(pool: Pool, user_id: str, schedule_id: str) -> bool:
     if not is_uuid(schedule_id):
         return False
     async with pool.connection() as connection:
-        if await store.get_schedule(connection, user_id, schedule_id) is None:
+        schedule = await store.get_schedule(connection, user_id, schedule_id)
+        if schedule is None:
             return False
-        await DBOS.delete_schedule_async(dbos_name(schedule_id))  # first, so a crash leaves nothing that still fires
-        return await store.delete_schedule(connection, user_id, schedule_id)
+        await DBOS.delete_schedule_async(dbos_name(schedule.id))  # first, so a crash leaves nothing that still fires
+        return await store.delete_schedule(connection, user_id, schedule.id)
 
 
 # --- an occurrence ---
@@ -155,10 +164,10 @@ async def run_schedule(scheduled_at: datetime, context: dict[str, str]) -> None:
         return
     run_id, schedule = started
     handle = await workflows.start(run_id)
-    await handle.get_result()
-    if not schedule.watch:
+    outcome = await handle.get_result()
+    if not schedule.watch or outcome == 'failed':
         await DBOS.run_step_async(
-            {**workflows.RETRIED, 'name': 'schedule.notify'}, notify_finished, resources, schedule, run_id
+            {**workflows.RETRIED, 'name': 'schedule.notify'}, notify_ended, resources, schedule, run_id, outcome
         )
 
 
@@ -190,11 +199,12 @@ async def start_occurrence(resources: Resources, schedule_id: str, workflow_id: 
     return run_id, schedule
 
 
-async def notify_finished(resources: Resources, schedule: Schedule, run_id: str) -> None:
-    await notify(resources, user_id=schedule.user_id, thread_id=schedule.thread_id, kind='finished', tag=run_id)
+async def notify_ended(resources: Resources, schedule: Schedule, run_id: str, outcome: str) -> None:
+    kind = 'failed' if outcome == 'failed' else 'finished'
+    await notify(resources, user_id=schedule.user_id, thread_id=schedule.thread_id, kind=kind, tag=run_id)
 
 
 async def notify_found(resources: Resources, schedule: Schedule, run_id: str) -> None:
     """A watch found what the user waits for: tell them, and pause it, so it tells them once."""
-    await asyncio.to_thread(DBOS.pause_schedule, dbos_name(schedule.id))
     await notify(resources, user_id=schedule.user_id, thread_id=schedule.thread_id, kind='found', tag=run_id)
+    await asyncio.to_thread(DBOS.pause_schedule, dbos_name(schedule.id))

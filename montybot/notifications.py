@@ -32,9 +32,14 @@ WHAT = {
     'approval': 'monty-bot needs your approval before it goes on.',
     'handoff': 'monty-bot needs you to take over its browser for a moment.',
     'finished': 'monty-bot finished a scheduled task.',
+    'failed': 'monty-bot could not finish a scheduled task.',
     'found': 'monty-bot found what you asked it to watch for.',
 }
-SUBJECT = {'finished': 'monty-bot finished a task', 'found': 'monty-bot found something'}
+SUBJECT = {
+    'finished': 'monty-bot finished a task',
+    'failed': 'monty-bot could not finish a task',
+    'found': 'monty-bot found something',
+}
 
 
 def new_vapid_keys() -> tuple[str, str]:

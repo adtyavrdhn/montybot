@@ -10,11 +10,13 @@ from typing import Any
 
 from dbos import DBOS
 from pydantic_ai import FunctionToolset, ModelRetry, RunContext, ToolFailed
+from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.tools import ToolDefinition
 
 from montybot import schedules
 from montybot.deps import RunDeps
 from montybot.resources import current
+from montybot.workflows import RETRIED
 
 INSTRUCTIONS = """\
 For anything the user wants done again and again ("every Monday, fill my cart"), or watched ("tell me when a slot
@@ -89,7 +91,7 @@ async def schedule_task(
             return f'Error: {error}'
         return f'Scheduled {schedule.name!r} (id {schedule.id}): {schedule.when}, as `{cron}` in {timezone}.'
 
-    result = await DBOS.run_step_async({'name': 'schedules.create'}, step)
+    result = await DBOS.run_step_async({**RETRIED, 'name': 'schedules.create'}, step)  # idempotent
     if result.startswith('Error: '):
         raise ToolFailed(result.removeprefix('Error: '))
     return result
@@ -155,9 +157,18 @@ async def notify_user(ctx: RunContext[RunDeps]) -> str:
     The watch pauses, so they are told once."""
     schedule = ctx.deps.schedule
     assert schedule is not None  # only offered in a watch
+    told = 'The user was notified, and the watch is paused. Now reply with what you found.'
+    if any(
+        isinstance(part, ToolReturnPart) and part.tool_name == 'notify_user'
+        for message in ctx.messages
+        for part in message.parts
+    ):
+        return told  # once per run, whatever the model does
     run_id = ctx.deps.run_id
-    await DBOS.run_step_async({'name': 'schedules.found'}, schedules.notify_found, current(), schedule, run_id)
-    return 'The user was notified, and the watch is paused. Now reply with what you found.'
+    await DBOS.run_step_async(
+        {**RETRIED, 'name': 'schedules.found'}, schedules.notify_found, current(), schedule, run_id
+    )
+    return told
 
 
 NOT_FOUND = 'No schedule of yours with that id.'
