@@ -48,5 +48,11 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with: {enable-cache: true}
       - run: uv sync --locked
+      - name: Browser prerequisites
+        # bwrap and Xvfb for Chrome on the server setup; Ubuntu 24.04's AppArmor blocks the unprivileged user
+        # namespaces that bwrap and Chrome's own sandbox need, as on our server (#7).
+        run: |
+          sudo apt-get update -q && sudo apt-get install -yq bubblewrap xvfb
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: uv run playwright install --with-deps chromium
       - run: uv run pytest -q -p no:cacheprovider -n 4 --durations=10 ${{ matrix.args }}
