@@ -40,6 +40,7 @@ class Resources:
     agent: Agent[Any, str]
     monty: MontyRunner
     workspaces: Workspaces
+    streaming_agent: Agent[Any, str] | None = None
 
 
 _current: Resources | None = None
@@ -96,7 +97,9 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
             enable_otlp=False,
         )
     )
-    agent = build_agent(load_model(settings.model))
+    model = load_model(settings.model)
+    agent = build_agent(model)
+    streaming_agent = build_agent(model, stream=True)
     async with browser, open_monty(settings) as monty:
         _current = Resources(
             settings=settings,
@@ -105,6 +108,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
             jar=jar,
             lease=lease,
             agent=agent,
+            streaming_agent=streaming_agent,
             monty=monty,
             workspaces=Workspaces(settings.workspaces_dir),
         )
