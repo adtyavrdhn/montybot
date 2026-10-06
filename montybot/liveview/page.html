@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>montybot needs you</title>
+<style>
+  body { margin: 0; font: 15px system-ui, sans-serif; background: #f3f4f6; color: #111827; }
+  header { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 14px;
+           background: #111827; color: #f9fafb; }
+  header p { margin: 0; }
+  nav { display: flex; gap: 8px; align-items: center; padding: 6px 14px; background: #e5e7eb; }
+  nav #url { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #374151; }
+  button { padding: 6px 12px; border: 0; border-radius: 6px; font: inherit; cursor: pointer; }
+  #give-back { background: #34d399; font-weight: 600; }
+  main { position: relative; padding: 8px; }
+  #view { display: block; width: 100%; max-width: 1280px; margin: 0 auto; background: #fff; touch-action: none;
+          outline: none; box-shadow: 0 1px 4px rgba(0, 0, 0, .2); }
+  #keys { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0;
+          resize: none; }
+  #status { margin: 0; padding: 6px 14px; color: #374151; }
+</style>
+</head>
+<body>
+<header>
+  <p id="reason">Connecting...</p>
+  <button id="give-back" disabled>Give back to the bot</button>
+</header>
+<nav>
+  <select id="tabs" aria-label="Tabs" hidden></select>
+  <span id="url"></span>
+  <button id="keyboard">Keyboard</button>
+  <button id="use-here" hidden>Use here</button>
+</nav>
+<main>
+  <canvas id="view" width="1280" height="720" aria-label="The bot's browser"></canvas>
+  <textarea id="keys" aria-label="Keyboard input" autocapitalize="off" autocomplete="off" autocorrect="off"
+            spellcheck="false"></textarea>
+</main>
+<p id="status" role="status"></p>
+<script src="../live.js"></script>
+</body>
+</html>

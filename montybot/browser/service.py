@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from montybot.browser.contract import Action, BrowserError, Screenshot, Snapshot
+from montybot.browser.live import FrameSource
 
 RunId = str
 UserId = str
@@ -131,6 +132,15 @@ class BrowserService(Protocol):
         """Hand the browser to the user. From now on only calls with this hand-off's id may act.
 
         Idempotent: if the run already has an active hand-off, that one is returned.
+        """
+        ...
+
+    async def live_view(self, *, run_id: RunId, user_id: UserId, handoff_id: HandoffId) -> FrameSource:
+        """A live picture of the run's browser and a way to drive it, for the user holding the hand-off (#14).
+
+        Raises `HandoffNotActive` unless `handoff_id` is the run's active hand-off. Ending the hand-off, or closing
+        the run, closes every source handed out for it, so its `updates()` end. Restarts the browser from the saved
+        state first if it was gone, like `act`.
         """
         ...
 
