@@ -47,6 +47,7 @@ def test_a_sign_in_is_saved_and_reused(app: App, client: Client, shop: Shop, dat
     assert row is not None and sid.encode() not in bytes(row[0]) and b'127.0.0.1' not in bytes(row[0])
 
     assert client.http.get('/api/sign-ins').json() == [{'site': '127.0.0.1'}]
+
     # run.finish publishes the reply before run.close saves the browser and releases its lease.
     # A 409 during that cleanup is expected; wait for forgetting to succeed, not an arbitrary delay.
     def forgotten() -> bool | None:
