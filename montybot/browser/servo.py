@@ -18,7 +18,8 @@ Servo's gaps and the numbers measured.
   side tab, so the user's tab and its history stay as they were.
 - **Site compatibility:** `ServoOptions` turns on the prefs real sites need (IntersectionObserver, adoptedStyleSheets
   and more) and sends a Chrome user agent, which got through walmart.com where Servo's Firefox one was challenged.
-- **Refs** belong to the snapshot format (#13); until then a `Ref` target raises `NotSupported('ref')`.
+- **Snapshots and refs** come from `SnapshotWalker` (#13), run with Execute Script, so the text and refs match
+  Chromium's for the same page. A click on a ref is a pointer action at the element's centre.
 """
 
 from __future__ import annotations
@@ -64,6 +65,7 @@ from montybot.browser.contract import (
     TargetNotFound,
     Type,
 )
+from montybot.browser.snapshot import JSON, SnapshotWalker, webdriver_script
 from montybot.browser.state import BLANK_URL, BrowserState, Cookie, SameSite, origin_of
 
 ENGINE = 'servo'
@@ -207,6 +209,7 @@ class ServoBackend:
         """Host to the paths to read its cookies at on export: the seeded cookies' and the visited pages'."""
         self._local_origins: set[str] = set()
         """Origins to read localStorage for on export: seeded or visited."""
+        self._walker = SnapshotWalker(run_script=self._run_walker)
 
     @property
     def pid(self) -> int | None:
@@ -219,6 +222,7 @@ class ServoBackend:
         if self._driver is not None:
             raise LifecycleError('the browser is already open')
         await self._start()
+        self._walker = SnapshotWalker(run_script=self._run_walker)
         self._http_only_readable = self.options.http_only_export
         if state is None:
             return
@@ -269,15 +273,15 @@ class ServoBackend:
 
     async def snapshot(self) -> Snapshot:
         self._check_open()
-        url, title, text = await self._script(
-            "return [location.href, document.title, document.body ? document.body.innerText : '']"
-        )
-        self._visited(url)
-        return Snapshot(url=url, title=title, text=text)
+        snapshot = await self._walker.snapshot()
+        self._visited(snapshot.url)
+        return snapshot
 
     async def act(self, action: Action) -> None:
         self._check_open()
-        match action:
+        match await self._walker.resolve(action):  # a ref becomes a point to click, or typing at the caret
+            case None:
+                return  # the walker already did it, such as choosing a select's option
             case Navigate(url=url):
                 await self._navigate(url)
                 return
@@ -489,7 +493,7 @@ class ServoBackend:
 
     async def _find(self, target: ElementTarget) -> str:
         if isinstance(target, Ref):
-            raise NotSupported('ref', engine=ENGINE, detail='refs come with the snapshot format (#13)')
+            raise TypeError('refs are resolved by the snapshot walker before this')
         deadline = time.monotonic() + self.options.find_timeout
         while True:
             try:
@@ -534,6 +538,9 @@ class ServoBackend:
 
     async def _script(self, script: str, *args: Any) -> Any:
         return await self._call('POST', '/execute/sync', {'script': script, 'args': list(args)})
+
+    async def _run_walker(self, function: str, arg: JSON, /) -> object:
+        return await self._script(webdriver_script(function), arg)
 
     async def _call(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
         """A command in this session, with WebDriver errors as `ActionFailed`. Servo's messages carry no page data."""

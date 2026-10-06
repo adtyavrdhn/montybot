@@ -210,7 +210,7 @@ async def test_unreachable_pages_raise_action_failed_and_stay_open(shop: str) ->
 async def test_refs_and_bad_selectors_are_not_found(shop: str) -> None:
     async with chromium(HEADLESS) as browser:
         await browser.open(BrowserState(url=f'{shop}/login'))
-        with pytest.raises(TargetNotFound, match='no refs'):
+        with pytest.raises(TargetNotFound, match='no snapshot of this page yet'):
             await browser.act(Click(target=Ref(ref='1')))
         with pytest.raises(TargetNotFound, match='not a valid CSS selector'):
             await browser.act(Click(target=Selector(css='##bad')))

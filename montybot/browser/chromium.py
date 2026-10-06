@@ -13,8 +13,8 @@ Chrome is visible by default, because sites spot headless Chrome. Where it draws
 | The Linux server | `ChromiumOptions.server()` | its own Xvfb screen, inside bwrap (see `chromium_linux`) |
 | CI | `ChromiumOptions(headless=True)` | Playwright's headless shell, no window |
 
-`snapshot()` returns the page's visible text (`innerText`), which never includes what was typed into a field, so
-passwords stay out. The ref format belongs to #13; until then a `Ref` target raises `TargetNotFound`.
+`snapshot()` and `Ref` targets come from `SnapshotWalker` (#13): the text format and refs every engine shares, with
+typed passwords masked. A click on a ref is a mouse click at the element's centre; typing on a ref replaces its value.
 """
 
 from __future__ import annotations
@@ -66,6 +66,7 @@ from montybot.browser.contract import (
     TargetNotFound,
     Type,
 )
+from montybot.browser.snapshot import JSON, SnapshotWalker
 from montybot.browser.state import BLANK_URL, BrowserState, Cookie, origin_of
 
 T = TypeVar('T')
@@ -127,7 +128,6 @@ _READ_SESSION_STORAGE = """() => {
   }
   return items;
 }"""
-_READ_PAGE = "() => [document.title, (document.body || document.documentElement)?.innerText ?? '']"
 _VIEWPORT = '() => [innerWidth, innerHeight]'
 
 _NAVIGATION_GRACE = 0.05
@@ -229,6 +229,7 @@ class ChromiumBackend:
         self.playwright = playwright
         self.options = options or ChromiumOptions()
         self._chrome: _Chrome | None = None
+        self._walker = SnapshotWalker(run_script=self._evaluate)
 
     @property
     def workdir(self) -> Path | None:
@@ -246,6 +247,7 @@ class ChromiumBackend:
         except PlaywrightError as error:
             raise ActionFailed(f'could not start Chrome: {_first_line(error)}') from error
         self._chrome = chrome
+        self._walker = SnapshotWalker(run_script=self._evaluate)
         if state is None:
             return
         async with contextlib.AsyncExitStack() as stack:
@@ -295,16 +297,19 @@ class ChromiumBackend:
     async def snapshot(self) -> Snapshot:
         chrome = self._require_open()
         try:
-            title, text = cast(tuple[str, str], await self._evaluate(_READ_PAGE))
+            snapshot = await self._walker.snapshot()
         except PlaywrightError as error:
             raise ActionFailed(f'could not read the page: {_first_line(error)}') from error
-        return Snapshot(url=chrome.url, title=title, text=text)
+        return Snapshot(url=chrome.url, title=snapshot.title, text=snapshot.text)
 
     async def act(self, action: Action) -> None:
         chrome = self._require_open()
         page = chrome.page
         try:
-            match action:
+            resolved = await self._walker.resolve(action)  # a ref becomes a point to click, or typing at the caret
+            match resolved:
+                case None:
+                    return  # the walker already did it, such as choosing a select's option
                 case Navigate(url=url):
                     await self._goto(url)
                 case Click(target=target):
@@ -387,12 +392,12 @@ class ChromiumBackend:
         finally:
             page.remove_listener('framenavigated', on_frame)
 
-    async def _evaluate(self, script: str) -> Any:
+    async def _evaluate(self, script: str, arg: JSON = None) -> Any:
         """`page.evaluate`, retried while a navigation replaces the document under it."""
         page = self._require_open().page
         for attempt in range(3):
             try:
-                return await page.evaluate(script)
+                return await page.evaluate(script, arg)
             except PlaywrightError as error:
                 if attempt == 2 or not _is_navigation_race(error):
                     raise
@@ -403,7 +408,7 @@ class ChromiumBackend:
     async def _locate(self, target: ElementTarget) -> Locator:
         match target:
             case Ref():
-                raise TargetNotFound(target, 'this backend prints no refs yet; use a CSS selector')
+                raise AssertionError('refs are resolved by the snapshot walker before this')
             case Selector(css=css):
                 locator = self._require_open().page.locator(f'css={css}').first
                 try:

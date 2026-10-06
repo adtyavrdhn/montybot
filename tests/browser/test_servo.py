@@ -33,9 +33,9 @@ def anyio_backend() -> str:
 
 @needs_servo
 class TestServo(BrowserBackendConformance):
-    """Stock Servo 0.7.0 cannot read HttpOnly cookies back, so it refuses `export`. Refs wait for #13."""
+    """Stock Servo 0.7.0 cannot read HttpOnly cookies back, so it refuses `export`."""
 
-    not_supported = frozenset({'export', 'ref'})
+    not_supported = frozenset({'export'})
 
     @asynccontextmanager
     async def backend(self, site: Site) -> AsyncGenerator[BrowserBackend]:
