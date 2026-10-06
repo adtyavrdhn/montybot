@@ -68,10 +68,11 @@ def app_env(dispatch_mode: str, request: pytest.FixtureRequest, tmp_path: Path) 
     return env
 
 
-def restart_upgraded(app: App) -> None:
+def restart_upgraded(app: App, *, keep_gate: bool = False) -> None:
     app.kill()
     app.env.pop('UPGRADE_DISPATCH_MODE', None)
-    app.env.pop('UPGRADE_START_GATE', None)
+    if not keep_gate:
+        app.env.pop('UPGRADE_START_GATE', None)
     app.start()
 
 
@@ -89,7 +90,11 @@ def test_legacy_queued_identity_survives_startup_reconciliation(app: App, client
     thread_id = client.ask('Recover the queued run.')
     eventually(lambda: (tmp_path / 'start-gate.entered').exists(), what='legacy run.start to enter its step')
     assert client.thread(thread_id)['run']['status'] == 'queued'
-    restart_upgraded(app)
+    # Keep recovery's run.start blocked so startup reconciliation must see the
+    # queued legacy row. Otherwise recovery could advance it first and mask the bug.
+    restart_upgraded(app, keep_gate=True)
+    assert client.thread(thread_id)['run']['status'] == 'queued'
+    (tmp_path / 'start-gate').touch()
     answer_and_check(client, thread_id)
 
 
