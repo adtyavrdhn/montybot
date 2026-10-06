@@ -18,6 +18,8 @@ pass them. A snippet that fails returns its error, and the variables it set befo
 
 from __future__ import annotations
 
+import asyncio
+import re
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
@@ -28,19 +30,22 @@ from pydantic_monty import (
     AsyncMonty,
     AsyncMontySession,
     AsyncMontyWebsocket,
-    CollectStreams,
     MontyError,
+    MontyRuntimeError,
+    MontySyntaxError,
+    MontyTypingError,
     ResourceLimits,
 )
 
 from montybot.browser.contract import BrowserError, Click, Navigate, Press, Type
+from montybot.browser.service import UserBusy
+from montybot.browser.state import BLANK_URL
 from montybot.browsing import Session, host_of, refused_url, target_of
 from montybot.deps import RunDeps
 from montybot.resources import Resources, current
 from montybot.settings import Settings
 
 OUTPUT_LIMIT = 20_000
-LIMITS = ResourceLimits(max_feed_duration_secs=60, max_memory=256 * 1024 * 1024)
 
 INSTRUCTIONS = """\
 `run_code` runs Python (a safe subset, no imports beyond `asyncio`, `json`, `re`, `math`, `datetime`) in a session
@@ -53,53 +58,90 @@ that keeps its variables for this whole task. Your browser is a set of async fun
 - `await press_key(key) -> str`: one key, such as `"Enter"` or `"Escape"`.
 
 Each returns the page afterwards. Use code to read several pages, pull out what matters and compute the answer, and
-`print` only what you need to see. A browser error raises `BrowserError` with a message you can act on."""
+`print` only what you need to see. A browser error raises `RuntimeError` with a message you can act on. Clicks that cannot be undone (placing an order,
+paying, sending) are refused from code: use the `commit` tool for those."""
 
 
 class MontyRunner:
     """Opens Monty sessions: on Full Monty when `monty_url` is set, else in local subprocesses."""
 
-    def __init__(self, pool: AsyncMonty | AsyncMontyWebsocket, *, remote: bool) -> None:
+    def __init__(self, pool: AsyncMonty | AsyncMontyWebsocket, *, remote: bool, limits: ResourceLimits) -> None:
         self._pool = pool
         self.remote = remote
+        self.limits = limits
 
     def session(self) -> AsyncMontySession:
         if self.remote:
             assert isinstance(self._pool, AsyncMontyWebsocket)
-            return self._pool.checkout(limits=LIMITS, ephemeral=False)
-        return self._pool.checkout(limits=LIMITS)
+            return self._pool.checkout(limits=self.limits, ephemeral=False)
+        return self._pool.checkout(limits=self.limits)
 
 
 @asynccontextmanager
 async def open_monty(settings: Settings) -> AsyncGenerator[MontyRunner]:
     if settings.monty_url:
         async with AsyncMontyWebsocket(settings.monty_url, request_timeout=settings.code_timeout_seconds) as pool:
-            yield MontyRunner(pool, remote=True)
+            yield MontyRunner(pool, remote=True, limits=limits_of(settings))
     else:
         async with AsyncMonty(request_timeout=settings.code_timeout_seconds) as pool:
-            yield MontyRunner(pool, remote=False)
+            yield MontyRunner(pool, remote=False, limits=limits_of(settings))
 
 
-class BrowserFailed(Exception):
-    """Raised into the sandbox for a browser error. Its message is safe to show the model."""
+def limits_of(settings: Settings) -> ResourceLimits:
+    """Per session: compute time (not counting browser calls), memory, and how many host calls one snippet makes."""
+    return ResourceLimits(
+        max_feed_duration_secs=settings.code_compute_seconds, max_memory=256 * 1024 * 1024, max_suspensions=300
+    )
+
+
+IRREVERSIBLE = re.compile(
+    r'place[ _-]?order|buy|purchase|pay|checkout|check[ _-]?out|confirm|book|send|submit[ _-]?order|subscribe|delete',
+    re.IGNORECASE,
+)
+
+
+def looks_irreversible(target: str, page: str) -> str | None:
+    """What the target is, if it looks like something that cannot be undone: by the selector's own words, or by the
+    name the latest page gave a ref (`[12] button "Place order"`). A guard, not a classifier: `commit` is the way to do
+    these, with the user's approval."""
+    target = target.strip().removeprefix('[').removesuffix(']')
+    if target.isdigit():
+        line = next((ln for ln in page.splitlines() if ln.lstrip(' -').startswith(f'[{target}]')), '')
+        return line.strip() if IRREVERSIBLE.search(line) else None
+    return target if IRREVERSIBLE.search(target) else None
 
 
 def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str]]]:
-    """The run's browser, as async functions for Monty."""
+    """The run's browser, as async functions for Monty. They take turns, so code that gathers several does not
+    interleave actions on one tab. A failure raises `RuntimeError` in the sandbox, with a message safe to show."""
+    lock = asyncio.Lock()
+    allow_private = session.resources.settings.allow_private_networks
+    last_page = ['']
 
     async def guarded(use: Callable[[], Awaitable[str]]) -> str:
-        try:
-            return await use()
-        except BrowserError as error:
-            raise BrowserFailed(str(error)) from None
+        async with lock:
+            try:
+                page = await use()
+            except UserBusy:
+                raise RuntimeError(
+                    'another of your tasks is using the browser; try again when it has finished'
+                ) from None
+            except BrowserError as error:
+                raise RuntimeError(str(error)) from None
+            # A click or a redirect can land anywhere a page links to; the agent may not stay on a private address.
+            if (refused := await refused_url(session.url, allow_private=allow_private)) is not None:
+                await session.act(Navigate(url=BLANK_URL))
+                raise RuntimeError(refused.removeprefix('Error: '))
+            last_page[0] = page
+            return page
 
     async def goto(url: str) -> str:
         async def use() -> str:
-            refused = await refused_url(url, allow_private=session.resources.settings.allow_private_networks)
+            refused = await refused_url(str(url), allow_private=allow_private)
             if refused is not None:
-                raise BrowserFailed(refused.removeprefix('Error: '))
-            await session.activity(f'Opening {host_of(url)}')
-            await session.act(Navigate(url=url))
+                raise RuntimeError(refused.removeprefix('Error: '))
+            await session.activity(f'Opening {host_of(str(url))}')
+            await session.act(Navigate(url=str(url)))
             return await session.read()
 
         return await guarded(use)
@@ -108,6 +150,15 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
         return await guarded(session.read)
 
     async def click(target: str) -> str:
+        if str(target).strip().strip('[]').isdigit() and not last_page[0]:
+            await read_page()  # a ref from an earlier call: read what it names before deciding
+        what = looks_irreversible(str(target), last_page[0])
+        if what is not None:
+            raise RuntimeError(
+                f'{what} looks like it cannot be undone, so it is not clicked from code. '
+                'Use the `commit` tool for it: it asks the user first.'
+            )
+
         async def use() -> str:
             await session.act(Click(target=target_of(str(target))))
             return await session.read()
@@ -117,7 +168,7 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
     async def type_text(target: str, text: str, press_enter: bool = False) -> str:
         async def use() -> str:
             await session.act(Type(text=str(text), target=target_of(str(target))))
-            if press_enter:
+            if press_enter is True:
                 await session.act(Press(key='Enter'))
             return await session.read()
 
@@ -133,33 +184,71 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
     return {'goto': goto, 'read_page': read_page, 'click': click, 'type_text': type_text, 'press_key': press_key}
 
 
-def shown(prints: Sequence[tuple[str, str]], result: Any, error: str | None) -> str:
-    text = ''.join(chunk for _, chunk in prints)
+class Printed:
+    """Collects what the sandbox prints, up to `OUTPUT_LIMIT` characters; the rest is counted, not kept."""
+
+    def __init__(self) -> None:
+        self.chunks: list[str] = []
+        self.size = 0
+        self.dropped = 0
+
+    def __call__(self, stream: str, text: str) -> None:
+        room = OUTPUT_LIMIT - self.size
+        if room > 0:
+            self.chunks.append(text[:room])
+            self.size += min(len(text), room)
+        self.dropped += max(0, len(text) - max(room, 0))
+
+
+def shown(printed: Printed, result: Any, error: str | None, notes: Sequence[str] = ()) -> str:
+    text = ''.join(printed.chunks)
+    if printed.dropped:
+        text += f'\n[{printed.dropped} more characters of output cut]'
     if error is not None:
         text += f'\nError: {error}'
     elif result is not None:
-        text += repr(result) if not isinstance(result, str) else result
-    text = text.strip() or '(no output; print what you want to see)'
-    return text if len(text) <= OUTPUT_LIMIT else text[:OUTPUT_LIMIT] + '\n[output cut]'
+        text += result if isinstance(result, str) else repr(result)
+    text = '\n'.join([*notes, text.strip() or '(no output; print what you want to see)'])
+    return text if len(text) <= OUTPUT_LIMIT + 200 else text[: OUTPUT_LIMIT + 200] + '\n[output cut]'
+
+
+SESSION_LOST = 'The code session was lost, so variables set before this call may be gone; set them again.'
 
 
 async def run_snippet(
     resources: Resources, run_id: str, user_id: str, state: bytes | None, code: str
 ) -> tuple[str, bytes | None]:
-    """Run `code` in the run's Monty session; returns what to show the model and the session's new state."""
+    """Run `code` in the run's Monty session; returns what to show the model and the session's new state.
+
+    The state only moves forward when the snippet ran to the end or raised an ordinary error, which keeps the variables
+    set before the failing line. If the sandbox timed out, crashed or lost its connection, the session is dropped and
+    the previous state stays, so the next call starts from before this one.
+    """
     session = Session(resources, run_id, user_id)
-    output = CollectStreams()
+    printed = Printed()
+    notes: list[str] = []
     async with resources.monty.session() as monty:
         if state is not None:
-            await monty.load_session(state)
-        error: str | None = None
-        result: Any = None
+            try:
+                await monty.load_session(state)
+            except MontyError:
+                notes.append(SESSION_LOST)
+                state = None
         try:
-            result = await monty.feed_run(code, external_lookup=browser_functions(session), print_callback=output)
-        except MontyError as raised:
-            error = str(raised)
-        new_state = await monty.dump()
-    return shown(output.output, result, error), new_state
+            async with asyncio.timeout(resources.settings.code_timeout_seconds):
+                result = await monty.feed_run(code, external_lookup=browser_functions(session), print_callback=printed)
+        except MontySyntaxError as error:
+            return shown(printed, None, error.display('type-msg'), notes), state
+        except MontyTypingError as error:
+            return shown(printed, None, error.display(), notes), state
+        except MontyRuntimeError as error:
+            if isinstance(error.exception(), TimeoutError):
+                return shown(printed, None, f'{error.display("type-msg")} (the code ran too long)', notes), state
+            return shown(printed, None, error.display('type-msg'), notes), await monty.dump()
+        except (MontyError, TimeoutError) as error:  # crashed, disconnected, or over `code_timeout_seconds`
+            message = 'the code took too long' if isinstance(error, TimeoutError) else 'the code session stopped'
+            return shown(printed, None, f'{message}. {SESSION_LOST}', notes), state
+        return shown(printed, result, None, notes), await monty.dump()
 
 
 code_tools: FunctionToolset[RunDeps] = FunctionToolset(id='code')

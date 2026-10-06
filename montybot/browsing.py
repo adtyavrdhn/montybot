@@ -1,8 +1,9 @@
 """The agent's browser: thin calls to the browser service, bound to the run's own browser. Reading and clicking happen
 in Monty (`montybot.code`); the two tools here pause the run or need the user's approval, so they are native tools.
 
-Every call that touches the browser is a DBOS step, so a run that recovers after a restart replays the recorded result
-instead of clicking again. The service keys browsers by run id, so the browser outlives an attempt of the run and
+Every call that touches the browser runs inside a DBOS step, so a run that recovers after a restart replays the
+recorded result instead of clicking again. A `run_code` snippet is one step: if the app dies while it runs, the
+recovered run runs the whole snippet again, clicks included, which is why every step must be safe to repeat. The service keys browsers by run id, so the browser outlives an attempt of the run and
 waits through a hand-off. Monty never sees a run id or a user id: the functions here fill them in from the run.
 
 What the agent reads is a snapshot of the page (`montybot.browser.contract.Snapshot`). It never reaches a log or a
@@ -55,6 +56,8 @@ class Session:
         self.run_id = run_id
         self.user_id = user_id
         self.notes: list[str] = []
+        self.url = ''
+        """The page the browser was on at the last `read()`."""
 
     def _note(self, restarted: Restarted | None) -> None:
         if restarted is not None:
@@ -76,6 +79,7 @@ class Session:
         result = await self.browser.snapshot(run_id=self.run_id, user_id=self.user_id)
         self._note(result.restarted)
         snapshot = result.snapshot
+        self.url = snapshot.url
         text = snapshot.text if len(snapshot.text) <= SNAPSHOT_LIMIT else snapshot.text[:SNAPSHOT_LIMIT] + '\n[cut]'
         return '\n'.join([*self.notes, f'URL: {snapshot.url}', f'Title: {snapshot.title}', '', text])
 

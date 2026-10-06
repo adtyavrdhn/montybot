@@ -141,7 +141,19 @@ def fail(turn: Turn) -> ModelResponse:
     raise RuntimeError('the model provider is down')
 
 
+def order_from_code(turn: Turn) -> ModelResponse:
+    """Tries to place the order from code, which skips the approval; the browser functions refuse."""
+    if not turn.returns:
+        return run(f"shop = {turn.url!r}\nawait goto(shop + '/')\nprint(await click('#add-eggs'))")
+    if 'Title: Sign in' in turn.last and not turn.called('hand_off'):
+        return call('hand_off', reason='Please sign in to the shop, then hand the browser back.')
+    if turn.called('run_code') < 2:
+        return run("await goto(shop + '/')\nawait click('#add-eggs')\nprint(await click('#place-order'))")
+    return say(turn.last)
+
+
 SCRIPTS: dict[str, Script] = {
+    'Order eggs straight from code at': order_from_code,
     'Fail please': fail,
     'Say hello': hello,
     'Ask me my favourite colour': favourite_colour,
