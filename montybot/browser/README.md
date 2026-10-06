@@ -10,6 +10,7 @@ the source of truth and this page is the map.
 | `service.py` | `BrowserService`: the API the agent and the web app call, with run id and user id on every call | browser service (#10), live view (#14), Monty host functions (#5) |
 | `fake.py` | `FakeBrowser`: an in-memory backend with scriptable pages | agent-side work and fixture tests (#2, #5) |
 | `conformance.py` | `BrowserBackendConformance`: the tests every backend passes | every backend |
+| `chromium.py`, `chromium_linux.py` | `ChromiumBackend`: real Chrome through Playwright; Xvfb and bwrap on Linux. See [`CHROMIUM.md`](CHROMIUM.md) | #11 |
 
 ## `BrowserBackend`
 
@@ -122,7 +123,7 @@ class TestChromium(BrowserBackendConformance):
     @asynccontextmanager
     async def backend(self, site: Site) -> AsyncGenerator[BrowserBackend]:
         async with async_playwright() as playwright:
-            yield ChromiumBackend(await playwright.chromium.launch())
+            yield ChromiumBackend(playwright=playwright, options=ChromiumOptions(headless=True))
 ```
 
 The suite serves a small site on `127.0.0.1` (and `localhost`, for a second origin and cookie host) and checks: an
@@ -132,6 +133,6 @@ released state; that the server receives the HttpOnly cookie while page scripts 
 each action type, including a click on a missing element and press-and-hold; and screenshots. Pages write what they
 saw into their text, which the tests read with `snapshot()`.
 
-It runs against `FakeBrowser` and against a `FakeBrowser` with features switched off, in `tests/browser/`. A
-throwaway Playwright Chromium backend, ported from `poc/`, also passed all 16 tests headless on macOS while this was
-written; that backend is #11's to build properly. Refs are not covered; #13 adds those tests.
+It runs against `FakeBrowser` and against a `FakeBrowser` with features switched off, in `tests/browser/`, and
+against `ChromiumBackend`, headless and headed, in `tests/browser/test_chromium.py`. Refs are not covered; #13 adds
+those tests.
