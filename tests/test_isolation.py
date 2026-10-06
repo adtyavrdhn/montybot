@@ -177,3 +177,58 @@ async def test_user_b_cannot_reach_user_a_files(tmp_path: Path) -> None:
     # A user id names one folder, never a path.
     with pytest.raises(ValueError):
         workspaces.of(f'../{a}')
+
+
+async def test_thread_history_and_status_share_a_snapshot(pool: Pool, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+    from types import SimpleNamespace
+
+    from pydantic_ai.messages import ModelResponse, TextPart
+    from starlette.requests import Request
+
+    from montybot import api
+
+    async with pool.connection() as connection:
+        user = await store.create_user(connection, 'snapshot@example.test', 'x')
+        assert user is not None
+        thread = await store.create_thread(connection, user.id, 'snapshot')
+        run_id = str(uuid.uuid4())
+        await store.create_run(
+            connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt='hello', trigger='message'
+        )
+    original = store.load_history
+
+    async def complete_between_reads(connection: Any, thread_id: str) -> list[Any]:
+        history = await original(connection, thread_id)
+        async with pool.connection() as writer:
+            await store.append_history(
+                writer,
+                thread_id,
+                [
+                    ModelRequest(parts=[UserPromptPart(content='hello')]),
+                    ModelResponse(parts=[TextPart(content='reply')]),
+                ],
+            )
+            await store.finish_run(writer, run_id, 'done', output='reply')
+        return history
+
+    monkeypatch.setattr(store, 'load_history', complete_between_reads)
+    request = Request(
+        {
+            'type': 'http',
+            'method': 'GET',
+            'path': '/',
+            'headers': [],
+            'path_params': {'thread_id': thread.id},
+            'session': {'user_id': user.id},
+            'state': {'resources': SimpleNamespace(pool=pool)},
+        }
+    )
+    response = await api.read_thread(request)
+    data = json.loads(response.body)
+    assert data['run']['status'] == 'queued'
+    assert data['messages'] == [{'role': 'user', 'text': 'hello'}]
+    monkeypatch.setattr(store, 'load_history', original)
+    data = json.loads((await api.read_thread(request)).body)
+    assert data['run']['status'] == 'done'
+    assert data['messages'][-1] == {'role': 'assistant', 'text': 'reply'}
