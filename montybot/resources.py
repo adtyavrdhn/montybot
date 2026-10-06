@@ -41,6 +41,7 @@ class Resources:
     monty: MontyRunner
     workspaces: Workspaces
     streaming_agent: Agent[Any, str] | None = None
+    jev_model: Model | None = None
 
 
 _current: Resources | None = None
@@ -98,8 +99,11 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
         )
     )
     model = load_model(settings.model)
-    agent = build_agent(model)
-    streaming_agent = build_agent(model, stream=True)
+    from montybot.jev import make_model
+
+    jev_model = make_model(settings)
+    agent = build_agent(model, jev=jev_model is not None)
+    streaming_agent = build_agent(model, stream=True, jev=jev_model is not None)
     async with browser, open_monty(settings) as monty:
         _current = Resources(
             settings=settings,
@@ -108,6 +112,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
             jar=jar,
             lease=lease,
             agent=agent,
+            jev_model=jev_model,
             streaming_agent=streaming_agent,
             monty=monty,
             workspaces=Workspaces(settings.workspaces_dir),

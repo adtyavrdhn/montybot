@@ -106,4 +106,7 @@ jobs:
           chmod 600 ~/.ssh/vm
           printf '%s\n' "$VM_KNOWN_HOSTS" > ~/.ssh/known_hosts
       - name: Deploy
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          LOGFIRE_TOKEN: ${{ secrets.LOGFIRE_TOKEN }}
         run: SSH_KEY="$HOME/.ssh/vm" sh deploy/deploy.sh "${{ vars.VM_USER }}@${{ vars.VM_HOST }}"
