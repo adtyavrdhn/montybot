@@ -33,6 +33,8 @@ case "${MODEL:-}" in claude-code:*)
 esac
 
 compose up -d --remove-orphans --wait --wait-timeout 300
+# They mount files from src/, which was just replaced; recreate them so they see the new ones.
+compose up -d --no-deps --force-recreate --wait backup caddy
 compose ps
 curl -fsS --retry 30 --retry-delay 2 --retry-all-errors "https://$DOMAIN/healthz"
 echo

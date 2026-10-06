@@ -209,6 +209,7 @@ async def _launch(playwright: Playwright, options: ChromiumOptions) -> _Chrome:
     downloads.mkdir()
     screen: VirtualScreen | None = None
     proxy: EgressProxy | None = None
+    context: BrowserContext | None = None
     args = [*_ARGS, f'--window-size={options.window_width},{options.window_height}', *options.extra_args]
     try:
         executable = options.executable_path
@@ -253,16 +254,19 @@ async def _launch(playwright: Playwright, options: ChromiumOptions) -> _Chrome:
             env=env,
             timeout=options.navigation_timeout * 1000,
         )
+        context.set_default_timeout(options.action_timeout * 1000)
+        context.set_default_navigation_timeout(options.navigation_timeout * 1000)
+        page = context.pages[0] if context.pages else await context.new_page()
     except BaseException:
+        if context is not None:
+            with contextlib.suppress(PlaywrightError, TimeoutError):
+                await asyncio.wait_for(context.close(), 15)
         if screen is not None:
             await screen.stop()
         if proxy is not None:
             await proxy.stop()
         shutil.rmtree(workdir, ignore_errors=True)
         raise
-    context.set_default_timeout(options.action_timeout * 1000)
-    context.set_default_navigation_timeout(options.navigation_timeout * 1000)
-    page = context.pages[0] if context.pages else await context.new_page()
     return _Chrome(workdir=workdir, context=context, page=page, screen=screen, proxy=proxy)
 
 

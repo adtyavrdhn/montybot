@@ -32,6 +32,7 @@ _CONNECT = 1
 _IPV4, _DOMAIN, _IPV6 = 1, 3, 4
 _SUCCEEDED, _NOT_ALLOWED, _HOST_UNREACHABLE, _REFUSED, _NOT_SUPPORTED = 0, 2, 4, 5, 7
 _CONNECT_TIMEOUT = 30
+_CLOSE_GRACE = 5
 
 
 class EgressProxy:
@@ -62,8 +63,8 @@ class EgressProxy:
         self._connections.add(task)
         try:
             await self._handle(reader, writer)
-        except (OSError, asyncio.IncompleteReadError, TimeoutError):
-            pass
+        except (OSError, asyncio.IncompleteReadError, TimeoutError, UnicodeError):
+            pass  # a name that is not one (bad IDNA, a label over 63 characters) ends the connection like a bad peer
         finally:
             self._connections.discard(task)
             writer.close()
@@ -94,9 +95,17 @@ class EgressProxy:
         if upstream is None:
             return
         up_reader, up_writer = upstream
+        # When either side is done, the other gets a moment to finish, then both close: socat inside the jail never
+        # keeps a half-closed connection, and a silent server must not hold sockets open until the browser closes.
+        directions = {asyncio.ensure_future(_pipe(reader, up_writer)), asyncio.ensure_future(_pipe(up_reader, writer))}
         try:
-            await asyncio.gather(_pipe(reader, up_writer), _pipe(up_reader, writer))
+            _, pending = await asyncio.wait(directions, return_when=asyncio.FIRST_COMPLETED)
+            if pending:
+                await asyncio.wait(pending, timeout=_CLOSE_GRACE)
         finally:
+            for direction in directions:
+                direction.cancel()
+            await asyncio.gather(*directions, return_exceptions=True)
             up_writer.close()
 
     async def _connect(

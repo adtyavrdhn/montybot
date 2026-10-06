@@ -222,7 +222,7 @@ def bwrap_command(
 # Inside the jail: start the forwarder, wait until it listens (state 0A in /proc/net/tcp, for at most 5 s), then become
 # Chrome ("$0") with Playwright's arguments, so the CDP pipe on fds 3 and 4 reaches it.
 _FORWARD_THEN_EXEC = (
-    'socat TCP-LISTEN:{port},bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:{socket} & '
+    'socat TCP-LISTEN:{port},bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:{socket} 3>&- 4>&- & '
     'i=0; until grep -q " 0100007F:{port:04X} 00000000:0000 0A" /proc/net/tcp; do '
     'i=$((i+1)); [ $i -gt 500 ] && echo "socat did not start" >&2 && exit 1; sleep 0.01; done; '
     'exec "$0" "$@"'

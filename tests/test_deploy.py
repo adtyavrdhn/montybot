@@ -89,8 +89,8 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
     )
     stack = Stack(env_file=env_file, url=f'https://localhost:{port}', auth=('smoke', password))
     stack.compose('down', '--volumes', '--remove-orphans')  # from scratch, as on a new server
-    stack.compose('up', '-d', '--build', '--wait', '--wait-timeout', '300')
     try:
+        stack.compose('up', '-d', '--build', '--wait', '--wait-timeout', '300')
         yield stack
     finally:
         if os.environ.get('MONTYBOT_TEST_DEPLOY_KEEP') != '1':
