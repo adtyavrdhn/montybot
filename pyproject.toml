@@ -54,6 +54,7 @@ markers = [
     "u6: user path U6, a bot check the user solves",
     "live: real sites and a real model, nightly only (--live)",
     "scripted: only meaningful with the scripted model (skipped when MONTYBOT_TEST_MODEL is set)",
+    "deploy: the deployed stack in Docker (deploy/compose.yaml), only with MONTYBOT_TEST_DEPLOY=1",
 ]
 
 [tool.ruff]

@@ -1,0 +1,11 @@
+# On top of compose.yaml for tests/test_deploy.py: the scripted model from tests/e2e/scripts.py instead of a real one,
+# and HTTPS on a local port, so the stack can run next to anything else on this machine.
+services:
+  app:
+    environment:
+      PYTHONPATH: /app/tests
+    volumes:
+      - ../tests:/app/tests:ro
+  caddy:
+    ports: !override
+      - '127.0.0.1:${HTTPS_PORT:-8443}:443'

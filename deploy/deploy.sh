@@ -1,5 +1,5 @@
 #!/bin/sh
-# Deploy the current commit to a VM: deploy/deploy.sh USER@HOST
+# Deploy the current commit to a VM: deploy/deploy.sh USER@HOST (deploy/README.md has the whole procedure)
 # Used by .github/workflows/ci-cd.yml, and works from a laptop too. SSH_KEY picks the key (default: ssh's own).
 # Ships `git archive HEAD` (the repo is private, so the VM has no clone), prepares the VM, then rebuilds and restarts.
 set -eu
@@ -13,9 +13,9 @@ echo "Deploying $commit to $target"
 git archive --format=tar HEAD | ssh $ssh_opts "$target" 'rm -rf ~/montybot-release && mkdir ~/montybot-release && tar -x -C ~/montybot-release'
 
 # shellcheck disable=SC2086
-ssh $ssh_opts "$target" COMMIT="$commit" sh -s <<'REMOTE'
+ssh $ssh_opts "$target" COMMIT="$commit" DOMAIN="${DOMAIN:-}" sh -s <<'REMOTE'
 set -eu
-sh ~/montybot-release/deploy/bootstrap.sh
+DOMAIN=$DOMAIN sh ~/montybot-release/deploy/bootstrap.sh
 rm -rf /opt/montybot/src && mv ~/montybot-release /opt/montybot/src
 echo "$COMMIT" > /opt/montybot/src/COMMIT
 cd /opt/montybot/src/deploy

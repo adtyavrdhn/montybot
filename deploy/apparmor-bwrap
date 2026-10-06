@@ -1,0 +1,9 @@
+# /etc/apparmor.d/bwrap, installed by deploy/bootstrap.sh: lets bubblewrap, and only bubblewrap, make user namespaces
+# on Ubuntu 23.10 and later. The same profile Claude Code documents for its bwrap sandbox.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+  include if exists <local/bwrap>
+}
