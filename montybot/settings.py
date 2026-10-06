@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     allow_private_networks: bool = False
     """Let the agent open loopback and private addresses. Only for local fixture sites in tests."""
 
+    vapid_private_key: SecretStr | None = None
+    """Web push: the private key from `montybot keys`. Unset: no push notifications."""
+    vapid_public_key: str | None = None
+    vapid_subject: str = 'mailto:montybot@example.com'
+    smtp_url: str | None = None
+    """Email: `smtp://user:password@host:25`, `smtp+starttls://...:587` or `smtps://...:465`. Unset: no email."""
+    mail_from: str = 'monty-bot <montybot@example.com>'
+
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
     history_limit: int = 40

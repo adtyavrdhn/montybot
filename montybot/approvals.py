@@ -31,6 +31,7 @@ from montybot.browser.contract import BrowserError
 from montybot.browser.service import UnknownRun
 from montybot.deps import RunDeps
 from montybot.models import AskKind
+from montybot.notifications import notify
 from montybot.resources import Resources
 
 
@@ -102,6 +103,8 @@ async def open_ask(
             details=details,
         )
         await store.set_run_status(connection, run_id, 'waiting')
+        run = await store.load_run(connection, run_id)
+    await notify(resources, user_id=user_id, thread_id=run.thread_id, kind=kind, tag=the_id)
 
 
 async def close_ask(resources: Resources, the_id: str, run_id: str, timed_out: bool) -> dict[str, Any] | None:

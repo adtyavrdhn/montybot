@@ -35,13 +35,12 @@ def shop() -> Iterator[Shop]:
 def test_monty_restarts_while_the_run_waits(client: Client, shop: Shop) -> None:
     client.sign_up()
     thread = client.ask(f'Order eggs from {shop.url}')  # the script's code sets `shop`, then the run hands off
-    handoff = client.wait_for_ask(thread, 'handoff')
+    client.wait_for_ask(thread, 'handoff')
 
     # Nothing of the run lives in a Monty worker while it waits: restarting monty-server and monty-worker loses nothing.
     subprocess.run(['docker', 'restart', *CONTAINERS], check=True, capture_output=True)
 
     Human(client, client.thread(thread)['run']['id']).sign_in('alice', 'hunter2')
-    client.answer(handoff, done=True)
     client.answer(client.wait_for_ask(thread, 'approval'), approved=True)
     assert '#1' in client.wait_for_reply(thread)  # the code after the hand-off used `shop` from before it
     assert [o.items for o in shop.orders] == [['eggs']]

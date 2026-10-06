@@ -66,6 +66,7 @@ from montybot.browser.contract import (
     TargetNotFound,
     Type,
 )
+from montybot.browser.live import FrameSource
 from montybot.browser.snapshot import JSON, SnapshotWalker
 from montybot.browser.state import BLANK_URL, BrowserState, Cookie, origin_of
 
@@ -236,6 +237,14 @@ class ChromiumBackend:
         """The folder holding this browser's profile and launch files, while open. Every process started for the
         browser has it on its command line, which is how the measurements find them."""
         return self._chrome.workdir if self._chrome else None
+
+    # --- LiveViewBackend (#14) ---
+
+    async def live_view(self) -> FrameSource:
+        """A CDP screencast of the tab, with input dispatched to it."""
+        from montybot.liveview.chromium import CdpFrameSource
+
+        return await CdpFrameSource.start(self._require_open().page)
 
     # --- BrowserBackend ---
 

@@ -72,9 +72,8 @@ def test_no_secrets_in_traces(traced: tuple[InProcessApp, InMemorySpanExporter],
         client.sign_up(password='my own password 123')
         prompt = f'Order eggs from {shop.url}'
         thread = client.ask(prompt)
-        handoff = client.wait_for_ask(thread, 'handoff')
+        client.wait_for_ask(thread, 'handoff')
         Human(client, client.thread(thread)['run']['id']).sign_in('alice', 'hunter2')
-        client.answer(handoff, done=True)
         client.answer(client.wait_for_ask(thread, 'approval'), approved=True)
         assert client.wait_for_reply(thread)
     finally:

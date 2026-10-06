@@ -20,9 +20,8 @@ def shop() -> Iterator[Shop]:
 
 
 def sign_in_through_hand_off(client: Client, thread: str) -> None:
-    handoff = client.wait_for_ask(thread, 'handoff')
+    client.wait_for_ask(thread, 'handoff')
     Human(client, client.thread(thread)['run']['id']).sign_in('alice', 'hunter2')
-    client.answer(handoff, done=True)
 
 
 @pytest.mark.u2
@@ -72,7 +71,6 @@ def test_the_app_is_killed_during_the_hand_off(app: App, client: Client, shop: S
 
     assert client.wait_for_ask(thread, 'handoff')['id'] == handoff['id']
     Human(client, client.thread(thread)['run']['id']).sign_in('alice', 'hunter2')
-    client.answer(handoff, done=True)
     client.answer(client.wait_for_ask(thread, 'approval'), approved=True)
     assert '#1' in client.wait_for_reply(thread)
     assert len(shop.orders) == 1

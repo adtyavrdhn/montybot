@@ -3,17 +3,21 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TypedDict
+from pathlib import Path
+from typing import Any, TypedDict
 
 from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
-from starlette.routing import Route
+from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
+from starlette.types import Receive, Scope, Send
 
 from montybot import api, approvals, workflows
+from montybot.live import live_app
 from montybot.resources import Resources, open_resources
 from montybot.settings import Settings
 
@@ -43,8 +47,14 @@ def create_app(settings: Settings) -> Starlette:
             Route('/api/threads/{thread_id:uuid}/messages', api.add_message, methods=['POST']),
             Route('/api/runs/{run_id:uuid}', api.read_run),
             Route('/api/asks/{ask_id:uuid}', api.answer_ask, methods=['POST']),
-            Route('/api/runs/{run_id:uuid}/screen', api.read_screen),
-            Route('/api/runs/{run_id:uuid}/screen', api.act_on_screen, methods=['POST']),
+            Route('/api/runs/{run_id:uuid}/live', api.live_link),
+            Route('/api/runs/{run_id:uuid}/screen', api.watch_screen),
+            Route('/api/push/key', api.push_key),
+            Route('/api/push/subscriptions', api.add_push_subscription, methods=['POST']),
+            Route('/sw.js', service_worker),
+            Mount('/live', app=LiveApp()),
+            Mount('/static', app=StaticFiles(directory=STATIC), name='static'),
+            Route('/', index),
             Route('/api/sign-ins', api.read_sign_ins),
             Route('/api/sign-ins/{site:str}', api.forget_sign_in, methods=['DELETE']),
             Route('/api/memories', api.read_memories),
@@ -63,6 +73,31 @@ def create_app(settings: Settings) -> Starlette:
         lifespan=lifespan,
         exception_handlers={ValidationError: invalid_body},
     )
+
+
+STATIC = Path(__file__).parent / 'static'
+
+
+async def index(request: Request) -> Response:
+    """The web app: one page, mobile first (`montybot/static`)."""
+    return FileResponse(STATIC / 'index.html', headers={'Cache-Control': 'no-store'})
+
+
+async def service_worker(request: Request) -> Response:
+    """Served from the root so it may show notifications for the whole app."""
+    return FileResponse(STATIC / 'sw.js', media_type='text/javascript', headers={'Cache-Control': 'no-store'})
+
+
+class LiveApp:
+    """The live view (`montybot.live`), made on first use from the app's resources, which exist once it starts."""
+
+    def __init__(self) -> None:
+        self._app: Any = None
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if self._app is None:
+            self._app = live_app(scope['state']['resources'])
+        await self._app(scope, receive, send)
 
 
 async def invalid_body(request: Request, error: Exception) -> Response:
