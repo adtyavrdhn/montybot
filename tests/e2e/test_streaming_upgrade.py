@@ -137,6 +137,7 @@ def test_recorded_scheduled_parent_keeps_child_checkpoint(
             cron_timezone='UTC',
         )
         parent = dbos.trigger_schedule(name)
+        eventually(lambda: client.thread(schedule.thread_id)['run'], what='the scheduled occurrence to create its run')
         client.wait_for_ask(schedule.thread_id, 'question')
         # Both names have a genuinely recorded parent child-start operation here.
         restart_upgraded(app)
