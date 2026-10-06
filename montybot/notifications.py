@@ -1,7 +1,8 @@
 """Telling the user the bot needs them: a web push to each browser or phone they turned it on in, and an email.
 
-Sent when a run asks something (`montybot.approvals.open_ask`). The message says only what kind of help is needed and
-links to the chat, which needs signing in: no prompt, no page, no hand-off link. Either channel is off until it is
+Sent when a run asks something (`montybot.approvals.open_ask`), when a scheduled task finishes, and when a watch finds
+what the user waits for (`montybot.schedules`). The message says only which of these it is and links to the chat,
+which needs signing in: no prompt, no page, no hand-off link. Either channel is off until it is
 configured (`VAPID_*` for push, `SMTP_URL` for email). A failure to notify is logged by type and never fails the run.
 """
 
@@ -22,7 +23,7 @@ from psycopg.types.json import Jsonb
 from pywebpush import WebPushException, webpush  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 
 from montybot.db import Connection
-from montybot.models import AskKind
+from montybot.models import NoticeKind
 from montybot.resources import Resources
 from montybot.settings import Settings
 
@@ -30,7 +31,10 @@ WHAT = {
     'question': 'monty-bot has a question for you.',
     'approval': 'monty-bot needs your approval before it goes on.',
     'handoff': 'monty-bot needs you to take over its browser for a moment.',
+    'finished': 'monty-bot finished a scheduled task.',
+    'found': 'monty-bot found what you asked it to watch for.',
 }
+SUBJECT = {'finished': 'monty-bot finished a task', 'found': 'monty-bot found something'}
 
 
 def new_vapid_keys() -> tuple[str, str]:
@@ -54,7 +58,7 @@ async def add_subscription(connection: Connection, user_id: str, endpoint: str, 
     )
 
 
-async def notify(resources: Resources, *, user_id: str, thread_id: str, kind: AskKind, tag: str) -> None:
+async def notify(resources: Resources, *, user_id: str, thread_id: str, kind: NoticeKind, tag: str) -> None:
     settings = resources.settings
     async with resources.pool.connection() as connection:
         cursor = await connection.execute('SELECT email FROM montybot.users WHERE id = %s', (user_id,))
@@ -75,7 +79,7 @@ async def notify(resources: Resources, *, user_id: str, thread_id: str, kind: As
         async with resources.pool.connection() as connection:
             await connection.execute('DELETE FROM montybot.push_subscriptions WHERE endpoint = ANY(%s)', (gone,))
     if settings.smtp_url and row is not None:
-        await asyncio.to_thread(_email, settings, row['email'], body, url)
+        await asyncio.to_thread(_email, settings, row['email'], SUBJECT.get(kind, 'monty-bot needs you'), body, url)
 
 
 def _push(settings: Settings, subscription: dict[str, Any], payload: str) -> bool:
@@ -100,13 +104,13 @@ def _push(settings: Settings, subscription: dict[str, Any], payload: str) -> boo
     return True
 
 
-def _email(settings: Settings, to: str, body: str, url: str) -> None:
+def _email(settings: Settings, to: str, subject: str, body: str, url: str) -> None:
     assert settings.smtp_url is not None
     parts = urlsplit(settings.smtp_url)
     message = EmailMessage()
     message['From'] = settings.mail_from
     message['To'] = to
-    message['Subject'] = 'monty-bot needs you'
+    message['Subject'] = subject
     message.set_content(f'{body}\n\nOpen the chat: {url}\n')
     try:
         smtp_class = smtplib.SMTP_SSL if parts.scheme == 'smtps' else smtplib.SMTP

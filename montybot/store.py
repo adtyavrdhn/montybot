@@ -1,7 +1,8 @@
 # Grown from viktor c1896df (viktor/store.py). Every function a request reaches takes the user's id and reads only
 # that user's rows, so a caller cannot tell another user's thread, run or ask from one that does not exist.
 # Functions without a user id (`load_run`, `load_history`, `append_history`, `set_run_status`, `finish_run`,
-# `add_activity`) are for the run's own workflow, which starts from a run id the app created.
+# `add_activity`, `load_schedule`, `schedule_of_thread`) are for the run's own workflow, which starts from a run id
+# the app created, or for a schedule's occurrence, which starts from the schedule's id.
 from __future__ import annotations
 
 import json
@@ -13,7 +14,7 @@ from psycopg.types.json import Jsonb
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
 from montybot.db import Connection
-from montybot.models import Ask, AskKind, Run, RunStatus, Thread, Trigger, User
+from montybot.models import Ask, AskKind, Run, RunStatus, Schedule, Thread, Trigger, User
 
 
 class ActiveRun(Exception):
@@ -22,6 +23,7 @@ class ActiveRun(Exception):
 
 RUN_COLUMNS = 'id, user_id, thread_id, trigger, prompt, status, output, error'
 ASK_COLUMNS = 'id, run_id, user_id, occurrence, kind, prompt, details, answer'
+SCHEDULE_COLUMNS = 'id, user_id, thread_id, name, cron, timezone, when_text, prompt, watch'
 
 # --- users ---
 
@@ -275,6 +277,74 @@ async def expire_ask(connection: Connection, ask_id: str) -> dict[str, Any] | No
     return None if row is None else row['answer']
 
 
+# --- schedules ---
+
+
+async def create_schedule(
+    connection: Connection,
+    *,
+    schedule_id: str,
+    user_id: str,
+    name: str,
+    cron: str,
+    timezone: str,
+    when: str,
+    prompt: str,
+    watch: bool,
+) -> Schedule:
+    """The schedule and its thread. Idempotent: a retried step finds the schedule it made the first time."""
+    if (found := await load_schedule(connection, schedule_id)) is not None:
+        return found
+    thread = await create_thread(connection, user_id, name)
+    cursor = await connection.execute(
+        f'INSERT INTO montybot.schedules ({SCHEDULE_COLUMNS}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) '
+        f'RETURNING {SCHEDULE_COLUMNS}',
+        (schedule_id, user_id, thread.id, name, cron, timezone, when, prompt, watch),
+    )
+    row = await cursor.fetchone()
+    assert row is not None
+    return schedule_from(row)
+
+
+async def get_schedule(connection: Connection, user_id: str, schedule_id: str) -> Schedule | None:
+    cursor = await connection.execute(
+        f'SELECT {SCHEDULE_COLUMNS} FROM montybot.schedules WHERE id = %s AND user_id = %s', (schedule_id, user_id)
+    )
+    row = await cursor.fetchone()
+    return None if row is None else schedule_from(row)
+
+
+async def list_schedules(connection: Connection, user_id: str) -> list[Schedule]:
+    cursor = await connection.execute(
+        f'SELECT {SCHEDULE_COLUMNS} FROM montybot.schedules WHERE user_id = %s ORDER BY created_at', (user_id,)
+    )
+    return [schedule_from(row) for row in await cursor.fetchall()]
+
+
+async def delete_schedule(connection: Connection, user_id: str, schedule_id: str) -> bool:
+    cursor = await connection.execute(
+        'DELETE FROM montybot.schedules WHERE id = %s AND user_id = %s', (schedule_id, user_id)
+    )
+    return cursor.rowcount == 1
+
+
+async def load_schedule(connection: Connection, schedule_id: str) -> Schedule | None:
+    """For the schedule's own occurrences, which start from the schedule's id. None once it is deleted."""
+    cursor = await connection.execute(
+        f'SELECT {SCHEDULE_COLUMNS} FROM montybot.schedules WHERE id = %s', (schedule_id,)
+    )
+    row = await cursor.fetchone()
+    return None if row is None else schedule_from(row)
+
+
+async def schedule_of_thread(connection: Connection, thread_id: str) -> Schedule | None:
+    cursor = await connection.execute(
+        f'SELECT {SCHEDULE_COLUMNS} FROM montybot.schedules WHERE thread_id = %s', (thread_id,)
+    )
+    row = await cursor.fetchone()
+    return None if row is None else schedule_from(row)
+
+
 # --- activity ---
 
 
@@ -312,6 +382,20 @@ def run_from(row: dict[str, Any]) -> Run:
         status=row['status'],
         output=row['output'],
         error=row['error'],
+    )
+
+
+def schedule_from(row: dict[str, Any]) -> Schedule:
+    return Schedule(
+        id=str(row['id']),
+        user_id=str(row['user_id']),
+        thread_id=str(row['thread_id']),
+        name=row['name'],
+        cron=row['cron'],
+        timezone=row['timezone'],
+        when=row['when_text'],
+        prompt=row['prompt'],
+        watch=row['watch'],
     )
 
 

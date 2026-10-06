@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from montybot.models import Run
+from montybot.models import Run, Schedule
 from montybot.resources import Resources
 
 
@@ -31,6 +31,8 @@ class CodeState:
 class RunDeps:
     resources: Resources
     run: Run
+    schedule: Schedule | None = None
+    """The schedule whose occurrence this run is, if a schedule started it."""
     asked: Asked = field(default_factory=Asked)
     code: CodeState = field(default_factory=CodeState)
 

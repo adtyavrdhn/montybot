@@ -14,13 +14,13 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, TextPart, UserPromp
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from montybot import approvals, auth, store, workflows
+from montybot import approvals, auth, schedules, store, workflows
 from montybot.browser.contract import (
     BrowserError,
 )
 from montybot.browser.state import BLANK_URL
 from montybot.memory import delete_memory, list_memories
-from montybot.models import ACTIVE, Ask, Run, User
+from montybot.models import ACTIVE, Ask, Run, Schedule, User
 from montybot.notifications import add_subscription
 from montybot.resources import Resources
 from montybot.signins import PostgresLease
@@ -333,6 +333,37 @@ async def forget_sign_in(request: Request, user: User) -> Response:
     return JSONResponse({'ok': True})
 
 
+# --- schedules ---
+
+
+@auth.signed_in
+async def list_schedules(request: Request, user: User) -> Response:
+    found = await schedules.list_for(resources_of(request).pool, user.id)
+    return JSONResponse([schedule_json(s, paused) for s, paused in found])
+
+
+@auth.signed_in
+async def pause_schedule(request: Request, user: User) -> Response:
+    return await set_paused(request, user, True)
+
+
+@auth.signed_in
+async def resume_schedule(request: Request, user: User) -> Response:
+    return await set_paused(request, user, False)
+
+
+async def set_paused(request: Request, user: User, paused: bool) -> Response:
+    schedule_id = str(request.path_params['schedule_id'])
+    schedule = await schedules.set_paused(resources_of(request).pool, user.id, schedule_id, paused)
+    return NOT_FOUND if schedule is None else JSONResponse(schedule_json(schedule, paused))
+
+
+@auth.signed_in
+async def delete_schedule(request: Request, user: User) -> Response:
+    deleted = await schedules.delete(resources_of(request).pool, user.id, str(request.path_params['schedule_id']))
+    return JSONResponse({'ok': True}) if deleted else NOT_FOUND
+
+
 # --- memory ---
 
 
@@ -354,6 +385,17 @@ async def remove_memory(request: Request, user: User) -> Response:
 
 def user_json(user: User) -> dict[str, str]:
     return {'id': user.id, 'email': user.email, 'name': user.name}
+
+
+def schedule_json(schedule: Schedule, paused: bool) -> dict[str, Any]:
+    return {
+        'id': schedule.id,
+        'name': schedule.name,
+        'when': f'{schedule.when} ({schedule.cron}, {schedule.timezone})',
+        'paused': paused,
+        'watch': schedule.watch,
+        'thread_id': schedule.thread_id,
+    }
 
 
 def ask_json(ask: Ask) -> dict[str, Any]:
