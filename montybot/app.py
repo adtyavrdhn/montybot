@@ -47,10 +47,11 @@ def create_app(settings: Settings) -> Starlette:
             Route('/api/threads/{thread_id:uuid}/messages', api.add_message, methods=['POST']),
             Route('/api/runs/{run_id:uuid}', api.read_run),
             Route('/api/asks/{ask_id:uuid}', api.answer_ask, methods=['POST']),
-            Route('/api/runs/{run_id:uuid}/live', api.live_link),
+            Route('/api/runs/{run_id:uuid}/live', api.live_link, methods=['POST']),
             Route('/api/runs/{run_id:uuid}/screen', api.watch_screen),
             Route('/api/push/key', api.push_key),
             Route('/api/push/subscriptions', api.add_push_subscription, methods=['POST']),
+            Route('/api/push/subscriptions', api.remove_push_subscription, methods=['DELETE']),
             Route('/sw.js', service_worker),
             Mount('/live', app=LiveApp()),
             Mount('/static', app=StaticFiles(directory=STATIC), name='static'),
@@ -106,7 +107,9 @@ class LiveApp:
 
 async def invalid_body(request: Request, error: Exception) -> Response:
     assert isinstance(error, ValidationError)
-    return JSONResponse({'detail': error.errors(include_url=False, include_input=False)}, status_code=422)
+    return JSONResponse(
+        {'detail': error.errors(include_url=False, include_input=False, include_context=False)}, status_code=422
+    )
 
 
 async def healthz(request: Request) -> Response:

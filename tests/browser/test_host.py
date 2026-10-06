@@ -163,6 +163,30 @@ async def test_unknown_closed_and_other_users_runs_look_the_same() -> None:
             await host.start(run_id=run_id, user_id=user_id)
 
 
+async def test_watching_never_opens_or_keeps_a_browser() -> None:
+    setup = Setup(idle_timeout=0.05)
+    host = setup.host()
+    with pytest.raises(UnknownRun):
+        await host.peek_screenshot(**ALICE)  # no run yet
+    await host.start(**ALICE)
+    assert (await host.peek_screenshot(**ALICE)).png.startswith(b'\x89PNG')
+    with pytest.raises(UnknownRun):
+        await host.peek_screenshot(run_id='run-1', user_id='bob')
+    async with host._runs['run-1'].lock:  # pyright: ignore[reportPrivateUsage]
+        with pytest.raises(UnknownRun):
+            await host.peek_screenshot(**ALICE)  # busy with a call
+    await asyncio.sleep(0.06)
+    await host.peek_screenshot(**ALICE)  # does not count as use
+    assert await host.reap_idle() == 1
+    with pytest.raises(UnknownRun):
+        await host.peek_screenshot(**ALICE)  # reaped, and not reopened
+    assert len(setup.made) == 1
+    await host.start(**ALICE)
+    await host.start_handoff(**ALICE, reason='Please sign in')
+    with pytest.raises(HandoffActive):
+        await host.peek_screenshot(**ALICE)
+
+
 class SlowJar(InMemoryJar):
     async def save(self, *, user_id: str, state: BrowserState) -> None:
         await asyncio.sleep(0.05)

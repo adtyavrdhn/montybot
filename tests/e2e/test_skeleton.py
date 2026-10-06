@@ -86,10 +86,11 @@ def test_users_cannot_see_each_other(app: App, client: Client) -> None:
         assert other.get(f'/api/threads/{thread}').status_code == 404
         assert other.get(f'/api/runs/{run_id}').status_code == 404
         assert other.get(f'/api/runs/{run_id}/screen').status_code == 404
-        assert other.get(f'/api/runs/{run_id}/live').status_code == 404
+        assert other.post(f'/api/runs/{run_id}/live', json={}).status_code == 404
         assert other.post(f'/api/asks/{question["id"]}', json={'text': 'red'}).status_code == 404
         assert other.post(f'/api/threads/{thread}/messages', json={'text': 'hi'}).status_code == 404
         assert other.get('/api/threads').json() == []
+    assert client.http.post(f'/api/asks/{question["id"]}', json={'text': '  '}).status_code == 422
     client.answer(question, text='blue')
     assert 'blue' in client.wait_for_reply(thread).lower()
 
@@ -131,7 +132,9 @@ def test_only_the_runs_user_can_take_over(app: App, client: Client, shop: Shop) 
     client.sign_up()
     thread = client.ask(f'Order eggs from {shop.url}')
     client.wait_for_ask(thread, 'handoff')
-    link = client.http.get(f'/api/runs/{client.thread(thread)["run"]["id"]}/live').json()['url']
+    run_id = client.thread(thread)['run']['id']
+    assert client.http.get(f'/api/runs/{run_id}/live').status_code == 405
+    link = client.http.post(f'/api/runs/{run_id}/live', json={}).json()['url']
     assert client.http.get(link).status_code == 200
 
     with httpx.Client(base_url=app.url) as other:

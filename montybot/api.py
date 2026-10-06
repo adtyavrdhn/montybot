@@ -5,11 +5,16 @@ another user's thread, run or ask answers 404, the same as one that does not exi
 
 from __future__ import annotations
 
+import base64
+import binascii
+import contextlib
+import re
 import uuid
+from collections.abc import Callable
 from typing import Annotated, Any, TypeVar
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, Field, StringConstraints
 from pydantic_ai.messages import ModelMessage, ModelRequest, TextPart, UserPromptPart
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -21,7 +26,7 @@ from montybot.browser.contract import (
 from montybot.browser.state import BLANK_URL
 from montybot.memory import delete_memory, list_memories
 from montybot.models import ACTIVE, Ask, Run, Schedule, User
-from montybot.notifications import add_subscription
+from montybot.notifications import TakenEndpoint, add_subscription, remove_subscription
 from montybot.resources import Resources
 from montybot.signins import PostgresLease
 
@@ -40,7 +45,7 @@ class NewMessage(BaseModel):
 
 
 class Answer(BaseModel):
-    text: str | None = Field(default=None, max_length=20_000)
+    text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20_000)] | None = None
     """For a question."""
     approved: bool | None = None
     """For an approval."""
@@ -220,23 +225,29 @@ async def open_handoff(request: Request, user: User) -> tuple[Run, Ask] | None:
 
 async def active_handoff(resources: Resources, run: Run, ask: Ask) -> str | None:
     """The run's active hand-off id, recorded on the ask. If the browser service lost the hand-off (it restarted), a
-    new one starts on the saved page and its id replaces the old. Done while holding the ask's row, unanswered, so it
-    cannot race the user handing the browser back: an answer waits for this to commit, and the run then ends the
-    hand-off recorded here. None if the ask was answered meanwhile."""
+    new one starts on the saved page and its id replaces the old. The browser starts first, outside any transaction;
+    then the ask's row is locked to record the id, so an answer waits for that to commit and the run then ends the
+    hand-off recorded here. If the ask was answered meanwhile, a hand-off started here for it is ended again and the
+    result is None."""
+    browser = resources.browser
+    await browser.start(run_id=run.id, user_id=run.user_id)
+    handoff = await browser.start_handoff(run_id=run.id, user_id=run.user_id, reason=ask.prompt)
     async with resources.pool.connection() as connection, connection.transaction():
-        if not await store.lock_open_ask(connection, ask.id):
-            return None
-        await resources.browser.start(run_id=run.id, user_id=run.user_id)
-        handoff = await resources.browser.start_handoff(run_id=run.id, user_id=run.user_id, reason=ask.prompt)
-        if handoff.handoff_id != ask.details.get('handoff_id'):
-            await store.set_handoff(connection, ask.id, handoff.handoff_id)
-    return handoff.handoff_id
+        if await store.lock_open_ask(connection, ask.id):
+            if handoff.handoff_id != ask.details.get('handoff_id'):
+                await store.set_handoff(connection, ask.id, handoff.handoff_id)
+            return handoff.handoff_id
+        owner = await store.find_handoff(connection, handoff.handoff_id)
+    if owner is None or owner.id == ask.id:  # not a later ask's hand-off
+        with contextlib.suppress(BrowserError):
+            await browser.end_handoff(run_id=run.id, user_id=run.user_id, handoff_id=handoff.handoff_id)
+    return None
 
 
 @auth.signed_in
 async def live_link(request: Request, user: User) -> Response:
-    """Where the user takes over the run's browser: `/live/handoff/<id>`. The link names the hand-off; the page only
-    opens for this user."""
+    """POST. Where the user takes over the run's browser: `/live/handoff/<id>`. The link names the hand-off; the page
+    only opens for this user. A POST, as it may start the browser and a hand-off."""
     found = await open_handoff(request, user)
     if found is None:
         return NOT_FOUND
@@ -260,18 +271,60 @@ async def watch_screen(request: Request, user: User) -> Response:
     if run is None or run.status != 'running':
         return NOT_FOUND
     try:
-        result = await resources.browser.screenshot(run_id=run.id, user_id=user.id)
+        screenshot = await resources.browser.peek_screenshot(run_id=run.id, user_id=user.id)
     except BrowserError:
-        return NOT_FOUND  # no browser yet, or a hand-off began meanwhile
-    return Response(result.screenshot.png, media_type='image/png', headers={'Cache-Control': 'no-store'})
+        return NOT_FOUND  # no open browser, busy with a call, or a hand-off began meanwhile
+    return Response(screenshot.png, media_type='image/png', headers={'Cache-Control': 'no-store'})
 
 
 # --- notifications ---
 
 
+PUSH_HOSTS = ('fcm.googleapis.com', 'web.push.apple.com')
+PUSH_HOST_SUFFIXES = ('.push.services.mozilla.com', '.notify.windows.com')
+"""The push services of Chrome, Safari, Firefox and Edge. A subscription elsewhere is refused."""
+
+
+def push_endpoint(endpoint: str) -> str:
+    parts = urlsplit(endpoint)
+    host = parts.hostname or ''
+    if parts.scheme != 'https' or parts.port is not None or parts.username is not None:
+        raise ValueError('not a push service endpoint')
+    if host not in PUSH_HOSTS and not host.endswith(PUSH_HOST_SUFFIXES):
+        raise ValueError('not a push service endpoint')
+    return endpoint
+
+
+def base64url_of(length: int) -> Callable[[str], str]:
+    """A base64url string (padding optional) that decodes to `length` bytes."""
+
+    def check(value: str) -> str:
+        if re.fullmatch(r'[A-Za-z0-9_-]+={0,2}', value) is None:
+            raise ValueError('not base64url')
+        try:
+            decoded = base64.urlsafe_b64decode(value.rstrip('=') + '=' * (-len(value.rstrip('=')) % 4))
+        except binascii.Error:
+            raise ValueError('not base64url') from None
+        if len(decoded) != length:
+            raise ValueError(f'must be base64url of {length} bytes')
+        return value
+
+    return check
+
+
+class PushKeys(BaseModel):
+    p256dh: Annotated[str, Field(max_length=100), AfterValidator(base64url_of(65))]
+    """The browser's P-256 public key, uncompressed."""
+    auth: Annotated[str, Field(max_length=40), AfterValidator(base64url_of(16))]
+
+
 class PushSubscription(BaseModel):
-    endpoint: str = Field(max_length=2_000, pattern=r'^https://')
-    keys: dict[str, str]
+    endpoint: Annotated[str, Field(max_length=2_000), AfterValidator(push_endpoint)]
+    keys: PushKeys
+
+
+class PushEndpoint(BaseModel):
+    endpoint: str = Field(max_length=2_000)
 
 
 @auth.signed_in
@@ -282,11 +335,20 @@ async def push_key(request: Request, user: User) -> Response:
 @auth.signed_in
 async def add_push_subscription(request: Request, user: User) -> Response:
     body = PushSubscription.model_validate_json(await request.body())
-    if set(body.keys) != {'p256dh', 'auth'}:
-        return JSONResponse({'detail': 'keys must be p256dh and auth'}, status_code=422)
     async with resources_of(request).pool.connection() as connection:
-        await add_subscription(connection, user.id, body.endpoint, body.keys)
+        try:
+            await add_subscription(connection, user.id, body.endpoint, body.keys.model_dump())
+        except TakenEndpoint:
+            return JSONResponse({'detail': 'that push subscription belongs to another account'}, status_code=409)
     return JSONResponse({'ok': True}, status_code=201)
+
+
+@auth.signed_in
+async def remove_push_subscription(request: Request, user: User) -> Response:
+    body = PushEndpoint.model_validate_json(await request.body())
+    async with resources_of(request).pool.connection() as connection:
+        removed = await remove_subscription(connection, user.id, body.endpoint)
+    return JSONResponse({'ok': True}) if removed else NOT_FOUND
 
 
 # --- saved sign-ins ---

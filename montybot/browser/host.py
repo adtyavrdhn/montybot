@@ -36,6 +36,7 @@ from montybot.browser.contract import (
     ActionFailed,
     BrowserBackend,
     NotSupported,
+    Screenshot,
     TargetNotFound,
 )
 from montybot.browser.jar import JarLease, SignInJar
@@ -191,6 +192,21 @@ class BrowserHost:
             _check_handoff(run, handoff_id)
             screenshot, restarted = await self._use(run, lambda backend: backend.screenshot(), replay=True)
             return ScreenshotResult(screenshot=screenshot, restarted=restarted)
+
+    async def peek_screenshot(self, *, run_id: RunId, user_id: UserId) -> Screenshot:
+        """The viewport of the run's open browser, for the user watching the run. Read only: it never opens, restarts
+        or keeps a browser alive, and does not wait for a call in progress. `UnknownRun` if there is no open browser
+        or it is busy; `HandoffActive` during a hand-off."""
+        run = self._runs.get(run_id)
+        backend = run.backend if run is not None and run.user_id == user_id else None
+        if run is None or backend is None or run.lock.locked():
+            raise UnknownRun('no browser to watch for this run')
+        async with run.lock:  # free, and nothing awaited since the checks above, so this neither waits nor races
+            _check_handoff(run, None)
+            try:
+                return await self._call(run, backend, lambda backend: backend.screenshot())
+            except _Gone as gone:
+                raise UnknownRun('no browser to watch for this run') from gone
 
     async def start_handoff(self, *, run_id: RunId, user_id: UserId, reason: str) -> Handoff:
         run = await self._find(run_id, user_id)

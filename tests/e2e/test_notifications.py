@@ -9,6 +9,7 @@ import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import httpx
 import psycopg
 import pytest
 from conftest import Client
@@ -124,14 +125,28 @@ def test_the_user_hears_that_the_bot_needs_them(
 ) -> None:
     user = client.sign_up()
     assert client.http.get('/api/push/key').json() == {'public_key': VAPID_PUBLIC}
-    # The app takes https push endpoints only; this one is registered as a browser vendor's would be, then pointed at
-    # the stand-in.
+    # The app takes the browser vendors' push services only; this one is registered as Chrome's would be, then pointed
+    # at the stand-in.
     keys = subscription_keys()
-    response = client.http.post(
-        '/api/push/subscriptions', json={'endpoint': 'https://push.example.test/x', 'keys': keys}
-    )
-    assert response.status_code == 201
-    assert client.http.post('/api/push/subscriptions', json={'endpoint': 'http://x', 'keys': keys}).status_code == 422
+    endpoint = 'https://fcm.googleapis.com/fcm/send/x'
+    subscriptions = '/api/push/subscriptions'
+    assert client.http.post(subscriptions, json={'endpoint': endpoint, 'keys': keys}).status_code == 201
+    assert client.http.post(subscriptions, json={'endpoint': endpoint, 'keys': keys}).status_code == 201  # again
+    for refused in (
+        {'endpoint': 'https://push.example.test/x', 'keys': keys},
+        {'endpoint': 'http://fcm.googleapis.com/fcm/send/x', 'keys': keys},
+        {'endpoint': endpoint, 'keys': {**keys, 'auth': 'not base64!'}},
+        {'endpoint': endpoint, 'keys': {**keys, 'p256dh': keys['auth']}},
+    ):
+        assert client.http.post(subscriptions, json=refused).status_code == 422
+    with httpx.Client(base_url=client.app.url) as other:
+        other.post('/api/signup', json={'email': 'mallory@example.test', 'password': 'correct horse'})
+        assert other.post(subscriptions, json={'endpoint': endpoint, 'keys': subscription_keys()}).status_code == 409
+        assert other.request('DELETE', subscriptions, json={'endpoint': endpoint}).status_code == 404
+    firefox = {'endpoint': 'https://updates.push.services.mozilla.com/wpush/v2/y', 'keys': subscription_keys()}
+    assert client.http.post(subscriptions, json=firefox).status_code == 201
+    assert client.http.request('DELETE', subscriptions, json={'endpoint': firefox['endpoint']}).status_code == 200
+    assert client.http.request('DELETE', subscriptions, json={'endpoint': firefox['endpoint']}).status_code == 404
     with psycopg.connect(database_url) as connection:
         connection.execute(
             'UPDATE montybot.push_subscriptions SET endpoint = %s',
