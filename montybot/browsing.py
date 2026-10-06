@@ -136,8 +136,8 @@ def host_of(url: str) -> str:
 
 async def refused_url(url: str, *, allow_private: bool) -> str | None:
     """Why the agent may not open `url`, or None. Only http(s), and only public addresses, so a page cannot steer the
-    agent into our own network. The browser's own network namespace (#7) blocks the same ranges for redirects and
-    subresources; this check gives the model a clear answer first."""
+    agent into our own network. On the server the browser's egress proxy (`browser/egress.py`) blocks the same ranges
+    for redirects and subresources; this check gives the model a clear answer first."""
     parts = urlsplit(url)
     if parts.scheme not in ('http', 'https') or not parts.hostname:
         return 'Error: only http and https addresses can be opened.'

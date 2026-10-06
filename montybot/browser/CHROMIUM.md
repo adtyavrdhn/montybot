@@ -52,8 +52,13 @@ Each `open()` starts a new Chrome; nothing is shared between browsers.
   mounts as on the host; `/etc/ssl`, `/etc/resolv.conf` and the like are mounted if present.
 - Chrome's own sandbox stays on (`chromium_sandbox=True`). It needs unprivileged user namespaces inside bwrap.
 
-Not done here: a separate network namespace (`pasta`). Chrome shares the host's network, loopback included, until the
-server setup (#7) adds it.
+- **Its own network, with one way out.** `--unshare-net` leaves Chrome only a loopback interface. `socat` inside
+  forwards `127.0.0.1:1080` to a Unix socket mounted from outside, where the browser's `EgressProxy` (`egress.py`)
+  answers SOCKS5. Chrome is started with `--proxy-server=socks5://127.0.0.1:1080 --proxy-bypass-list=<-loopback>`, so
+  every connection, loopback included, goes there with its host name; the proxy resolves it and refuses any private,
+  loopback or link-local answer (`ipaddress.is_global`). Pages cannot reach the app's database, the host, or the
+  cloud metadata address, by name or by number. Only TCP leaves, so there is no QUIC and no WebRTC UDP.
+  `ChromiumOptions.allow_private_networks` lifts the address check, for fixture sites in tests.
 
 ## Behaviour worth knowing
 
@@ -92,9 +97,11 @@ after it. Memory is RSS summed over every process of the browser; CPU is CPU tim
 - On the server, Xvfb and bwrap add their own processes, which the script counts. `--server` on the script measures
   that; it has not run yet.
 
-## Not run yet
+## On Linux
 
-Everything Linux: bwrap, Xvfb, `ChromiumOptions.server()`, and the measurements there. On the Mac,
-`tests/browser/test_chromium_linux.py` runs the launch path with stand-in `bwrap` and `Xvfb` scripts: Playwright runs
-the generated script, the CDP pipe survives it, and the stand-ins check the command lines. `test_real_bwrap_and_xvfb`
-runs the real thing and skips unless it is on Linux with both installed.
+`tests/browser/test_chromium_linux.py` runs the launch path on a Mac with stand-in `bwrap` and `Xvfb` scripts:
+Playwright runs the generated script, the CDP pipe survives it, and the stand-ins check the command lines.
+`test_real_bwrap_and_xvfb` and `test_real_bwrap_refuses_private_addresses` run the real thing, and skip unless bwrap,
+Xvfb and socat are installed. They pass inside the app image (`Dockerfile`) with the container settings in
+`deploy/compose.yaml`, on Ubuntu 24.04 arm64 (colima), as does `tests/test_deploy.py` against the whole deployed
+stack. Not measured there yet: `bench_chromium.py --server`.

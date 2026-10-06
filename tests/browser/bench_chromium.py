@@ -158,7 +158,7 @@ async def main() -> None:
     print('|---|---|---|---|---|---|---|---|---|')
     async with async_playwright() as playwright:
         modes = {
-            'headed': ChromiumOptions.server() if args.server else ChromiumOptions(),
+            'headed': ChromiumOptions.server(allow_private_networks=True) if args.server else ChromiumOptions(),
             'headless (shell)': ChromiumOptions(headless=True),
             # The same Chrome as headed, in its new headless mode: what bwrap runs with `server(headless=True)`.
             'headless (full Chrome)': ChromiumOptions(

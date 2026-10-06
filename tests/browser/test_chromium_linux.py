@@ -27,7 +27,7 @@ from montybot.browser.chromium_linux import (
     xauthority_entry,
 )
 from montybot.browser.conformance import Site, sample_state, serve_site
-from montybot.browser.contract import Navigate
+from montybot.browser.contract import ActionFailed, Navigate
 
 pytestmark = pytest.mark.anyio
 
@@ -98,7 +98,7 @@ def test_bwrap_command(tmp_path: Path) -> None:
         '--clearenv',
     ):
         assert flag in command
-    assert '--unshare-net' not in command  # the browser needs the internet; pasta's job (#7)
+    assert '--unshare-net' not in command  # without a proxy Chrome shares the host's network
     assert ('--bind', str(profile), str(profile)) in pairs  # Playwright's --user-data-dir works unchanged
     assert ('--ro-bind', '/opt/chrome', '/opt/chrome') in pairs
     assert ('--tmpfs', '/tmp', '--bind') in pairs
@@ -107,6 +107,18 @@ def test_bwrap_command(tmp_path: Path) -> None:
     assert ('--setenv', 'XAUTHORITY', str(tmp_path / 'Xauthority')) in pairs
     headless = bwrap_command(chrome=Path('/opt/chrome/chrome'), profile=profile, display=None)
     assert 'DISPLAY' not in headless
+
+
+def test_bwrap_command_with_a_proxy(tmp_path: Path) -> None:
+    proxy = tmp_path / 'egress.sock'
+    command = bwrap_command(chrome=Path('/opt/chrome/chrome'), profile=tmp_path / 'p', display=None, proxy=proxy)
+    pairs = list(zip(command, command[1:], command[2:], strict=False))
+    assert '--unshare-net' in command  # only loopback inside
+    assert ('--bind', str(proxy), str(proxy)) in pairs
+    shell, flag, script, chrome = command[-4:]
+    assert (shell, flag, chrome) == ('/bin/sh', '-c', '/opt/chrome/chrome')
+    assert f'UNIX-CONNECT:{proxy}' in script and 'TCP-LISTEN:1080,bind=127.0.0.1' in script
+    assert script.endswith('exec "$0" "$@"')  # Chrome gets Playwright's arguments and keeps fds 3 and 4
 
 
 def test_bwrap_script_quotes_paths(tmp_path: Path) -> None:
@@ -187,9 +199,22 @@ async def test_server_launch_with_stand_ins(tmp_path: Path) -> None:
     assert not any(a.startswith('--remote-debugging-port') for a in args)
 
 
-@pytest.mark.skipif(
-    sys.platform != 'linux' or not (shutil.which('bwrap') and shutil.which('Xvfb')), reason='needs Linux, bwrap, Xvfb'
+needs_linux_server = pytest.mark.skipif(
+    sys.platform != 'linux' or not all(shutil.which(tool) for tool in ('bwrap', 'Xvfb', 'socat')),
+    reason='needs Linux, bwrap, Xvfb and socat (the app image has them)',
 )
+
+
+@needs_linux_server
 async def test_real_bwrap_and_xvfb() -> None:
-    async with server_backend(ChromiumOptions.server()) as backend:
+    async with server_backend(ChromiumOptions.server(allow_private_networks=True)) as backend:
         await check_server_launch(backend, serve_site())
+
+
+@needs_linux_server
+async def test_real_bwrap_refuses_private_addresses() -> None:
+    site = serve_site()  # on 127.0.0.1, as the app's own services are on private addresses
+    async with server_backend(ChromiumOptions.server()) as backend:
+        await backend.open(None)
+        with pytest.raises(ActionFailed, match='ERR_SOCKS_CONNECTION_FAILED'):
+            await backend.act(Navigate(url=site.home))

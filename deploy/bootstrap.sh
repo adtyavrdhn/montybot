@@ -11,12 +11,19 @@ if ! command -v docker >/dev/null 2>&1; then
     curl -fsSL https://get.docker.com | sudo sh
 fi
 
-# bwrap needs unprivileged user namespaces. Ubuntu 24.04 lets only AppArmor-profiled programs make them; this turns
-# that restriction off for the whole host. A bwrap AppArmor profile would be narrower (#7).
-SYSCTL=/etc/sysctl.d/60-montybot-userns.conf
-if [ ! -f "$SYSCTL" ]; then
-    echo 'kernel.apparmor_restrict_unprivileged_userns = 0' | sudo tee "$SYSCTL" >/dev/null
-    sudo sysctl -q -p "$SYSCTL"
+# bwrap needs unprivileged user namespaces. Ubuntu 24.04 lets a program make them only if its AppArmor profile says
+# `userns` (kernel.apparmor_restrict_unprivileged_userns=1). deploy/apparmor-bwrap allows it for /usr/bin/bwrap and
+# nothing else, the bwrap inside the app container included, since that container runs without a profile of its own.
+PROFILE=/etc/apparmor.d/bwrap
+if [ -d /etc/apparmor.d ] && ! cmp -s "$(dirname "$0")/apparmor-bwrap" "$PROFILE"; then
+    echo "Allowing bwrap to make user namespaces"
+    sudo cp "$(dirname "$0")/apparmor-bwrap" "$PROFILE"
+    sudo apparmor_parser -r "$PROFILE"
+fi
+# Earlier deploys turned the restriction off for the whole host instead; turn it back on.
+if [ -f /etc/sysctl.d/60-montybot-userns.conf ]; then
+    sudo rm /etc/sysctl.d/60-montybot-userns.conf
+    sudo sysctl -q kernel.apparmor_restrict_unprivileged_userns=1
 fi
 
 sudo mkdir -p "$ROOT"
@@ -25,13 +32,17 @@ sudo chown "$(id -u):$(id -g)" "$ROOT"
 # Secrets are made here, once, and never leave the VM.
 if [ ! -f "$ENV_FILE" ]; then
     echo "Writing $ENV_FILE"
-    metadata=http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0
-    ip=$(curl -fsS -H 'Metadata-Flavor: Google' "$metadata/external-ip")
+    if [ -z "${DOMAIN:-}" ]; then
+        # The public IP from GCP's metadata server, or elsewhere from a public service; sslip.io names it.
+        metadata=http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0
+        ip=$(curl -fsS -H 'Metadata-Flavor: Google' "$metadata/external-ip" || curl -fsS https://api.ipify.org)
+        DOMAIN=$(echo "$ip" | tr . -).sslip.io
+    fi
     password=$(openssl rand -hex 16)
     hash=$(sudo docker run --rm caddy:2 caddy hash-password --plaintext "$password")
     umask 077
     cat >"$ENV_FILE" <<EOF
-DOMAIN=$(echo "$ip" | tr . -).sslip.io
+DOMAIN=$DOMAIN
 POSTGRES_PASSWORD=$(openssl rand -hex 24)
 SESSION_SECRET=$(openssl rand -hex 32)
 ENCRYPTION_KEY=$(openssl rand -base64 32 | tr '+/' '-_')
