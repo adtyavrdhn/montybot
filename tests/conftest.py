@@ -65,8 +65,10 @@ def postgres() -> Iterator[str]:
 
 
 @pytest.fixture
-def database_url(postgres: str) -> str:
+def database_url(postgres: str) -> Iterator[str]:
     name = f't_{uuid.uuid4().hex[:12]}'
     with psycopg.connect(postgres, autocommit=True) as connection:
         connection.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(name)))
-    return postgres.rsplit('/', 1)[0] + f'/{name}'
+    yield postgres.rsplit('/', 1)[0] + f'/{name}'
+    with psycopg.connect(postgres, autocommit=True) as connection:
+        connection.execute(sql.SQL('DROP DATABASE IF EXISTS {} WITH (FORCE)').format(sql.Identifier(name)))
