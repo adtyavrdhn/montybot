@@ -54,6 +54,113 @@ compose exec backup pg_restore --no-owner -d montybot_restored /backups/montybot
 Copy `/opt/montybot/backups` off the server (rsync, a bucket) for backups that survive losing the disk; that is not
 automated yet.
 
+## Full Monty: manual private release
+
+This is an operator plan; installing images and enabling them are separate steps. The Dockerfiles and options
+were checked read-only against local `monty-private` commit `db45c98f1e42d6ade8ff7ad3f8635d70a2207261`;
+review them again when selecting a different source revision. No private registry, registry
+token, GitHub source token, or automated private checkout is needed. Normal app CD only builds the app; when
+`MONTY_PRIVATE_COMMIT` is configured it checks the installed private image revision labels, enables the
+`full-monty` profile and sets `MONTY_URL=ws://monty-server:8000`. With that setting absent, local Monty remains
+the default. The production Compose file has no private build contexts and uses `pull_policy: never`.
+
+### 1. Review and pin the authorized source
+
+From a machine with an existing authorized `monty-private` checkout (not a GitHub runner):
+
+```bash
+cd /path/to/montybot
+PRIVATE="$HOME/pydantic_repos/monty-private"
+COMMIT=$(git -C "$PRIVATE" rev-parse --verify 'HEAD^{commit}')
+git -C "$PRIVATE" show --stat "$COMMIT"  # review the intended committed revision
+# Only when approved to build on the existing VM:
+SSH_KEY="$HOME/.ssh/vm" sh deploy/build-monty.sh USER@SERVER "$PRIVATE" "$COMMIT"
+```
+
+The script makes `git archive` of the full commit, sends it encrypted over SSH with normal host-key verification,
+and builds the workspace-root server and worker Dockerfiles on the VM's native Linux amd64/arm64 daemon.
+`MONTY_COMMIT` stamps the revision into the images (and server binary); `CARGO_PROFILE=release` is explicit.
+Images stay in that daemon as `montybot-monty-server:<full-commit>` and `montybot-monty-worker:<full-commit>`.
+There is no push, image export, registry login, stack restart or automatic activation. Existing tags are not
+overwritten. A partial build may leave only the server tag: inspect it before removing that unused tag and
+retrying. Do not remove tags used by running containers or retained for rollback.
+
+The first build compiles Rust workspace crates and the worker's matching `monty-runtime`, downloads public
+base images and Cargo dependencies, and can take many minutes with substantial CPU, memory and disk usage.
+There is no measured VM capacity estimate yet; schedule it outside peak traffic and check free RAM/disk first.
+Later builds have coarse Docker layer caching: a source change can invalidate compilation. Source pinning is
+not fully reproducible pinning of toolchains/base-image digests. The native daemon must be on this VM (not a
+remote Docker context); the script checks its OS/architecture but not physical locality.
+
+### 2. Configure and activate, only after VM verification
+
+On the VM, inspect both local image revision labels, non-root users and architecture without printing `.env`:
+
+```bash
+COMMIT=<full-reviewed-source-commit>
+for service in server worker; do
+  sudo docker image inspect --format '{{.Architecture}} {{.Config.User}} {{ index .Config.Labels "org.opencontainers.image.revision" }}' "montybot-monty-$service:$COMMIT"
+done
+# Edit privately; add MONTY_PRIVATE_COMMIT=<the same full commit> (do not duplicate the key).
+${EDITOR:-vi} /opt/montybot/.env
+```
+
+The next normal app deploy enables Full Monty using those installed tags, never rebuilding them. To activate
+without waiting for CD, on the VM with the updated montybot source installed:
+
+```bash
+cd /opt/montybot/src/deploy
+set -a; . /opt/montybot/.env; set +a
+export COMPOSE_PROFILES=full-monty MONTY_URL=ws://monty-server:8000
+sudo --preserve-env=COMPOSE_PROFILES,MONTY_URL docker compose --env-file /opt/montybot/.env up -d --no-build --wait
+sudo --preserve-env=COMPOSE_PROFILES,MONTY_URL docker compose --env-file /opt/montybot/.env ps
+```
+
+`monty-server` shares `edge` with the app and has no published port. It relays to the worker on the separate
+internal `monty` network. The worker is **only** on `monty`, with no app/db/Internet access or published port.
+The app's browser egress proxy still blocks private addresses. `edge` also contains Caddy; this is shared-network
+isolation, not per-client authentication of the relay. Neither private service has a Compose healthcheck yet:
+`up --wait` confirms containers are running, not websocket readiness. Verify service `/health` responses and a
+real app `run_code` call, network isolation, and a paused session surviving a relay restart before declaring ready.
+
+Sessions use `MONTY_SERVER_DEFAULT_PERSISTENCE=stored` and `file:///var/lib/monty-server` on
+`montybot_monty-sessions`. The current private Dockerfile creates that directory owned by `65532:65532`, so a
+**fresh named volume** inherits writable ownership for the nonroot server. Inspect existing volume ownership
+before reusing it; old root-owned volumes require an explicit operator repair while the server is stopped.
+Do not use `down -v`. The worker limits are 32 sessions and 256 MiB per session, not a total container/VM memory
+limit. The relay's current defaults also cap one caller at 10 concurrent sessions (the app is one caller), limit each
+connection to one hour of total age (even when active), and park stored sessions after 60 seconds. These defaults still apply; persistence
+is not unlimited retention or a promise that every active session survives a crash. Long-running workflows
+must reconnect/resume rather than assume activity extends that connection deadline; verify that path before
+activation. Compose allows 60 seconds to stop each private service, exceeding its default 30-second drain
+window; abrupt VM loss still bypasses graceful shutdown. CPU, wall time and aggregate
+capacity still need measurement and tuning. Session data is not part of the
+Postgres backup and has no automated backup/retention here.
+
+### Private data and rollback
+
+The archive contains all tracked committed source, not `.git` or uncommitted files. Review that no credentials
+are committed; `git archive` honors export-ignore and does not include submodule contents. Local temporary tar
+and remote tar/extraction directory are removed on normal exit and trapped failures. A dropped SSH connection,
+failed transfer or killed process can leave `~/monty-private-<commit>.tar` or `~/monty-private-build.*`: remove
+those specific paths after checking no build is active. Source is briefly plaintext on both disks; deleting it
+is not secure erasure and snapshots/backups may retain it.
+
+**Docker build cache/intermediate layers retain private source** because the builder uses `COPY . .`.
+Runtime images/binaries, daemon storage, build logs and session volumes are private artifacts too. Restrict VM,
+Docker socket and backup access; do not export caches, push images or publish logs. `sudo docker builder prune`
+is an optional operator cleanup after builds (it affects shared cache and makes future builds expensive); also
+inspect other builders/caches and VM snapshots under your storage policy. It does not remove installed runtime
+images. Keep previous runtime tags for rollback, but do not assume they contain no sensitive information.
+
+For rollback, privately restore the previous `MONTY_PRIVATE_COMMIT` in `.env` and activate with the commands
+above, or run normal app deployment. Verify both previous tags still exist first. Stored-session compatibility
+across versions is not guaranteed: drain active runs and back up the session volume before an upgrade; use a
+compatible volume backup if needed. To disable Full Monty, remove that setting, unset `COMPOSE_PROFILES` and
+`MONTY_URL`, and run normal `deploy.sh`; it reconfigures the app for local Monty and removes profile-service
+orphans. Parked remote sessions will not automatically migrate to local Monty. Never delete the session volume
+as part of rollback.
+
 ## The browser jail
 
 Each Chrome runs inside bwrap with its own user, PID, IPC and network namespaces, its own profile folder and `/tmp`,
@@ -109,9 +216,8 @@ It ran on colima's Ubuntu 24.04 arm64 VM with the AppArmor profile installed.
 
 ## Not done
 
-- Full Monty (`monty-server`, `monty-worker`) is not in this compose file: the server has no checkout of
-  monty-private to build them from. The app runs Monty in local subprocesses (`MONTY_URL` unset). The root
-  `compose.yaml` has them for local development.
+- Full Monty private builds, VM capacity, runtime readiness, network isolation and persisted-session restart
+  behavior still require the operator verification above; no VM build or activation was performed for this change.
 - Backups stay on the server's disk, and cover Postgres only: the users' files (the `workspaces` volume) and the
   Claude Code sign-in (`claude-code`) are not in them.
 - One app process (`EXECUTOR_ID=vm-1`); more would each need their own id.

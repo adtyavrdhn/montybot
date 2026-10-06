@@ -95,6 +95,8 @@ services:
     image: montybot-monty-server:${MONTY_PRIVATE_COMMIT:-not-installed}
     pull_policy: never
     restart: unless-stopped
+    # Both services default to a 30s drain window; allow it to finish before SIGKILL.
+    stop_grace_period: 60s
     environment:
       MONTY_SERVER_WORKER_URL: ws://monty-worker:8000/
       MONTY_SERVER_OBJECT_STORE_URI: file:///var/lib/monty-server
@@ -110,6 +112,8 @@ services:
     image: montybot-monty-worker:${MONTY_PRIVATE_COMMIT:-not-installed}
     pull_policy: never
     restart: unless-stopped
+    # Both services default to a 30s drain window; allow it to finish before SIGKILL.
+    stop_grace_period: 60s
     environment:
       MONTY_WORKER_MAX_SESSIONS: '32'
       MONTY_WORKER_MAX_MEMORY_MIB: '256'
