@@ -48,8 +48,16 @@ def current() -> Resources:
     return _current
 
 
+CLAUDE_CODE_PREFIX = 'claude-code:'
+
+
 def load_model(name: str) -> Model | str:
-    """A model name for Pydantic AI, or `script:module:attribute` for a `Model` object (or a function making one)."""
+    """A model name for Pydantic AI, `claude-code:NAME` for a Claude Code subscription model, or
+    `script:module:attribute` for a `Model` object (or a function making one)."""
+    if name.startswith(CLAUDE_CODE_PREFIX):
+        from montybot.vendor.claude_code import ClaudeCodeModel
+
+        return ClaudeCodeModel(name.removeprefix(CLAUDE_CODE_PREFIX))
     if not name.startswith('script:'):
         return name
     obj = import_object(name.removeprefix('script:'))
