@@ -1,6 +1,6 @@
 """The monty-bot side: an agent drives a headless browser and hands it to the user when stuck.
 
-Run: uv run python -m montybot_poc.remote
+Run: uv run python -m montybot_poc.remote [--engine servo]
 """
 
 from __future__ import annotations
@@ -8,14 +8,17 @@ from __future__ import annotations
 import argparse
 import asyncio
 import secrets
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol
 
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from montybot_poc import demo_site
+from montybot_poc import demo_site, servo
 from montybot_poc.browser import export_state, open_page, seeded_context
 from montybot_poc.state import BrowserState
 from montybot_poc.wire import DEFAULT_PORT, LINE_LIMIT, recv, send
@@ -65,9 +68,27 @@ class HandoffServer:
             writer.close()
 
 
-@dataclass
-class RemoteBrowser:
+class AgentBrowser(Protocol):
     """The headless browser the agent drives. Only one side holds the session at a time."""
+
+    async def open(self, state: BrowserState | None) -> None: ...
+
+    async def release(self) -> BrowserState:
+        """Export the session and close this side's copy, so only the user's window can change it."""
+        ...
+
+    async def goto(self, url: str) -> None: ...
+
+    async def click(self, selector: str) -> None: ...
+
+    async def describe(self) -> str: ...
+
+    async def close(self) -> None: ...
+
+
+@dataclass
+class ChromiumBrowser:
+    """Headless Chromium through Playwright."""
 
     browser: Browser
     context: BrowserContext | None = None
@@ -84,35 +105,44 @@ class RemoteBrowser:
         self._page = await open_page(self.context, state)
 
     async def release(self) -> BrowserState:
-        """Export the session and close this side's copy, so only the user's window can change it."""
         assert self.context is not None
         state = await export_state(self.context, self._page)
-        await self.context.close()
-        self.context = self._page = None
+        await self.close()
         return state
+
+    async def goto(self, url: str) -> None:
+        await self.page.goto(url)
+
+    async def click(self, selector: str) -> None:
+        await self.page.click(selector, timeout=5000)
 
     async def describe(self) -> str:
         text = await self.page.inner_text('body')
         return f'URL: {self.page.url}\n\n{text[:4000]}'
 
+    async def close(self) -> None:
+        if self.context is not None:
+            await self.context.close()
+        self.context = self._page = None
+
 
 @dataclass
 class Run:
-    browser: RemoteBrowser
+    browser: AgentBrowser
     handoff: HandoffServer
 
 
 async def navigate(ctx: RunContext[Run], url: str) -> str:
     """Open a URL and return the page's text."""
     print(f'[agent] navigate({url!r})')
-    await ctx.deps.browser.page.goto(url)
+    await ctx.deps.browser.goto(url)
     return await ctx.deps.browser.describe()
 
 
 async def click(ctx: RunContext[Run], selector: str) -> str:
     """Click the element matching a CSS selector, such as `#add-eggs`, and return the page's text."""
     print(f'[agent] click({selector!r})')
-    await ctx.deps.browser.page.click(selector, timeout=5000)
+    await ctx.deps.browser.click(selector)
     return await ctx.deps.browser.describe()
 
 
@@ -177,6 +207,8 @@ async def main() -> None:
     parser.add_argument('--site-port', type=int, default=8765, help='demo shop port')
     parser.add_argument('--token', help='hand-off token (default: random)')
     parser.add_argument('--model', help='a real model, such as anthropic:claude-sonnet-4-5 (default: scripted)')
+    parser.add_argument('--engine', choices=['chromium', 'servo'], default='chromium', help='the remote browser')
+    parser.add_argument('--servo-binary', type=Path, default=servo.DEFAULT_BINARY, help='path to servoshell')
     args = parser.parse_args()
 
     shop = demo_site.start(args.site_port)
@@ -197,9 +229,13 @@ async def main() -> None:
             f'never guess credentials. When you are done, open {shop}/cart and report what is in it.'
         ),
     )
-    async with server, async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
-        remote = RemoteBrowser(browser)
+    async with server, AsyncExitStack() as stack:
+        remote: AgentBrowser
+        if args.engine == 'servo':
+            remote = servo.ServoBrowser(args.servo_binary)
+        else:
+            playwright = await stack.enter_async_context(async_playwright())
+            remote = ChromiumBrowser(await playwright.chromium.launch(headless=True))
         await remote.open(None)
         try:
             result = await agent.run(
@@ -208,7 +244,7 @@ async def main() -> None:
             print(f'[remote] agent finished:\n{result.output}')
         finally:
             handoff.close()
-            await browser.close()
+            await remote.close()
 
 
 if __name__ == '__main__':
