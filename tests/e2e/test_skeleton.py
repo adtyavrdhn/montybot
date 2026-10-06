@@ -3,12 +3,16 @@ waits; an approval gates an irreversible click, and a hand-off gives the user th
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from collections.abc import Iterator
 
 import httpx
 import pytest
 from conftest import App, Client, Human
 from sites.shop import Shop
+
+from montybot.liveview.client import LiveViewClient, LiveViewClosed
 
 
 @pytest.fixture
@@ -49,7 +53,6 @@ def test_sign_in_through_a_hand_off_then_approve_the_order(client: Client, shop:
     assert 'sign in' in handoff['prompt'].lower()
     human = Human(client, client.thread(thread)['run']['id'])
     human.sign_in('alice', 'hunter2')
-    client.answer(handoff, done=True)
 
     approval = client.wait_for_ask(thread, 'approval')
     assert 'eggs' in approval['prompt'].lower()
@@ -63,9 +66,8 @@ def test_sign_in_through_a_hand_off_then_approve_the_order(client: Client, shop:
 def test_a_denied_approval_places_no_order(client: Client, shop: Shop) -> None:
     client.sign_up()
     thread = client.ask(f'Order eggs from {shop.url}')
-    handoff = client.wait_for_ask(thread, 'handoff')
+    client.wait_for_ask(thread, 'handoff')
     Human(client, client.thread(thread)['run']['id']).sign_in('alice', 'hunter2')
-    client.answer(handoff, done=True)
     client.answer(client.wait_for_ask(thread, 'approval'), approved=False, reason='too pricey')
 
     assert client.wait_for_reply(thread)
@@ -84,7 +86,7 @@ def test_users_cannot_see_each_other(app: App, client: Client) -> None:
         assert other.get(f'/api/threads/{thread}').status_code == 404
         assert other.get(f'/api/runs/{run_id}').status_code == 404
         assert other.get(f'/api/runs/{run_id}/screen').status_code == 404
-        assert other.post(f'/api/runs/{run_id}/screen', json={'kind': 'press', 'key': 'Enter'}).status_code == 404
+        assert other.get(f'/api/runs/{run_id}/live').status_code == 404
         assert other.post(f'/api/asks/{question["id"]}', json={'text': 'red'}).status_code == 404
         assert other.post(f'/api/threads/{thread}/messages', json={'text': 'hi'}).status_code == 404
         assert other.get('/api/threads').json() == []
@@ -111,3 +113,38 @@ def test_writes_must_be_json(app: App) -> None:
         assert browser.post('/api/threads', json={'text': '   '}).status_code == 401
         browser.post('/api/signup', content=body, headers={'content-type': 'application/json'})
         assert browser.post('/api/threads', json={'text': '   '}).status_code == 422
+
+
+@pytest.mark.u3
+@pytest.mark.scripted
+def test_code_cannot_skip_the_approval(client: Client, shop: Shop) -> None:
+    client.sign_up()
+    thread = client.ask(f'Order eggs straight from code at {shop.url}')
+    client.wait_for_ask(thread, 'handoff')
+    Human(client, client.thread(thread)['run']['id']).sign_in('alice', 'hunter2')
+    reply = client.wait_for_reply(thread)
+    assert 'Use the `commit` tool' in reply
+    assert shop.orders == []
+
+
+def test_only_the_runs_user_can_take_over(app: App, client: Client, shop: Shop) -> None:
+    client.sign_up()
+    thread = client.ask(f'Order eggs from {shop.url}')
+    client.wait_for_ask(thread, 'handoff')
+    link = client.http.get(f'/api/runs/{client.thread(thread)["run"]["id"]}/live').json()['url']
+    assert client.http.get(link).status_code == 200
+
+    with httpx.Client(base_url=app.url) as other:
+        assert other.get(link).status_code == 401  # signed out
+        other.post('/api/signup', json={'email': 'mallory@example.test', 'password': 'correct horse'})
+        assert other.get(link).status_code == 404
+        session = other.cookies.get('montybot_session')
+
+    async def connect() -> int | None:
+        url = app.url.replace('http', 'ws', 1) + link + '/ws'
+        async with LiveViewClient.connect(url, session=session, origin=app.url) as live:
+            with contextlib.suppress(LiveViewClosed, TimeoutError):
+                await live.next_frame(timeout=5)
+            return live.close_code
+
+    assert asyncio.run(connect()) == 4404

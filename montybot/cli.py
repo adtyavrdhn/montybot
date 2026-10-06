@@ -19,9 +19,19 @@ def main() -> None:
     commands.add_parser('serve', help='run the web app and its workflows')
     commands.add_parser('migrate', help='apply database migrations')
     commands.add_parser('claude-code-login', help='sign in to a Claude Code subscription for claude-code: models')
+    commands.add_parser('keys', help='print a new ENCRYPTION_KEY and web push (VAPID) keys for .env')
     args = parser.parse_args()
     if args.command == 'claude-code-login':
         asyncio.run(claude_code_login())
+        return
+    if args.command == 'keys':
+        from montybot.crypto import new_key
+        from montybot.notifications import new_vapid_keys
+
+        private, public = new_vapid_keys()
+        print(f'ENCRYPTION_KEY={new_key()}')
+        print(f'VAPID_PRIVATE_KEY={private}')
+        print(f'VAPID_PUBLIC_KEY={public}')
         return
     settings = Settings.from_environment()
     if args.command == 'migrate':

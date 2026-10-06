@@ -19,6 +19,7 @@ from playwright.async_api import Playwright, async_playwright
 
 from montybot.browser.chromium import ChromiumBackend, ChromiumOptions
 from montybot.browser.contract import Action, Screenshot, Snapshot
+from montybot.browser.live import FrameSource
 from montybot.browser.state import BrowserState
 
 _playwright: Playwright | None = None
@@ -68,6 +69,9 @@ class LazyChromium:
 
     async def screenshot(self) -> Screenshot:
         return await (await self._backend()).screenshot()
+
+    async def live_view(self) -> FrameSource:
+        return await (await self._backend()).live_view()
 
     async def close(self) -> None:
         if self._inner is not None:

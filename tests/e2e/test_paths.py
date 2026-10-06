@@ -46,7 +46,6 @@ def test_the_user_passes_a_press_and_hold_check(client: Client, checkpoint: Chec
 
     human = Human(client, client.thread(thread)['run']['id'])
     human.press_and_hold(seconds=HOLD_MS / 1000 + 0.5)
-    client.answer(handoff, done=True)
 
     assert 'oat milk' in client.wait_for_reply(thread).lower()
     assert checkpoint.passes == 1

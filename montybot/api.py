@@ -6,11 +6,10 @@ another user's thread, run or ask answers 404, the same as one that does not exi
 from __future__ import annotations
 
 import uuid
-from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, TypeVar
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, StringConstraints, TypeAdapter
+from pydantic import BaseModel, Field, StringConstraints
 from pydantic_ai.messages import ModelMessage, ModelRequest, TextPart, UserPromptPart
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -18,20 +17,11 @@ from starlette.responses import JSONResponse, Response
 from montybot import approvals, auth, store, workflows
 from montybot.browser.contract import (
     BrowserError,
-    Click,
-    MouseDown,
-    MouseMove,
-    MouseUp,
-    Point,
-    Press,
-    Screenshot,
-    Scroll,
-    Type,
 )
-from montybot.browser.service import HandoffNotActive, UnknownRun
 from montybot.browser.state import BLANK_URL
 from montybot.memory import delete_memory, list_memories
 from montybot.models import ACTIVE, Ask, Run, User
+from montybot.notifications import add_subscription
 from montybot.resources import Resources
 from montybot.signins import PostgresLease
 
@@ -213,10 +203,7 @@ async def answer_ask(request: Request, user: User) -> Response:
     return JSONResponse({'ok': True})
 
 
-# --- the live view: the user drives the run's browser during a hand-off ---
-
-LiveAction = Click | Type | Press | Scroll | MouseDown | MouseMove | MouseUp
-live_action: TypeAdapter[LiveAction] = TypeAdapter(Annotated[LiveAction, Field(discriminator='kind')])
+# --- the live view: the user drives the run's browser during a hand-off (montybot.live) ---
 
 
 async def open_handoff(request: Request, user: User) -> tuple[Run, Ask] | None:
@@ -231,68 +218,75 @@ async def open_handoff(request: Request, user: User) -> tuple[Run, Ask] | None:
     return run, ask
 
 
-async def on_handoff(request: Request, user: User, use: Callable[[Run, str], Awaitable[T]]) -> T | Response:
-    """Call `use` with the run's active hand-off id. If the browser service lost the hand-off (it restarted), start
-    a new one for the same run, from the user's saved sign-ins, and record its id on the ask."""
-    found = await open_handoff(request, user)
-    if found is None:
-        return NOT_FOUND
-    run, ask = found
-    resources = resources_of(request)
-    try:
-        try:
-            return await use(run, str(ask.details['handoff_id']))
-        except (UnknownRun, HandoffNotActive):
-            renewed = await renew_handoff(resources, run, ask)
-            if renewed is None:
-                return NOT_FOUND
-            return await use(run, renewed)
-    except BrowserError as error:
-        return JSONResponse({'detail': str(error)}, status_code=409)
-
-
-async def renew_handoff(resources: Resources, run: Run, ask: Ask) -> str | None:
-    """Start a new hand-off for a run whose browser service lost the old one (it restarted). Done while holding the
-    ask's row, unanswered, so it cannot race the user handing the browser back: an answer waits for this to commit, and
-    the run then ends the hand-off recorded here."""
+async def active_handoff(resources: Resources, run: Run, ask: Ask) -> str | None:
+    """The run's active hand-off id, recorded on the ask. If the browser service lost the hand-off (it restarted), a
+    new one starts on the saved page and its id replaces the old. Done while holding the ask's row, unanswered, so it
+    cannot race the user handing the browser back: an answer waits for this to commit, and the run then ends the
+    hand-off recorded here. None if the ask was answered meanwhile."""
     async with resources.pool.connection() as connection, connection.transaction():
         if not await store.lock_open_ask(connection, ask.id):
-            return None  # answered or expired meanwhile: the run has ended, or is ending, the hand-off
+            return None
         await resources.browser.start(run_id=run.id, user_id=run.user_id)
         handoff = await resources.browser.start_handoff(run_id=run.id, user_id=run.user_id, reason=ask.prompt)
-        await store.set_handoff(connection, ask.id, handoff.handoff_id)
+        if handoff.handoff_id != ask.details.get('handoff_id'):
+            await store.set_handoff(connection, ask.id, handoff.handoff_id)
     return handoff.handoff_id
 
 
 @auth.signed_in
-async def read_screen(request: Request, user: User) -> Response:
-    browser = resources_of(request).browser
-
-    async def shoot(run: Run, handoff_id: str) -> Screenshot:
-        return (await browser.screenshot(run_id=run.id, user_id=user.id, handoff_id=handoff_id)).screenshot
-
-    screen = await on_handoff(request, user, shoot)
-    if isinstance(screen, Response):
-        return screen
-    headers = {'X-Viewport': f'{screen.width}x{screen.height}', 'Cache-Control': 'no-store'}
-    return Response(screen.png, media_type='image/png', headers=headers)
+async def live_link(request: Request, user: User) -> Response:
+    """Where the user takes over the run's browser: `/live/handoff/<id>`. The link names the hand-off; the page only
+    opens for this user."""
+    found = await open_handoff(request, user)
+    if found is None:
+        return NOT_FOUND
+    run, ask = found
+    try:
+        handoff_id = await active_handoff(resources_of(request), run, ask)
+    except BrowserError as error:
+        return JSONResponse({'detail': str(error)}, status_code=409)
+    if handoff_id is None:
+        return NOT_FOUND
+    return JSONResponse({'url': f'/live/handoff/{handoff_id}', 'reason': ask.prompt})
 
 
 @auth.signed_in
-async def act_on_screen(request: Request, user: User) -> Response:
-    """One input from the user: a click or a mouse press, move or release at a point, typing, a key, a scroll."""
-    action = live_action.validate_json(await request.body())
-    if isinstance(action, Click) and not isinstance(action.target, Point):
-        return JSONResponse({'detail': 'the live view clicks at a point'}, status_code=422)
-    if isinstance(action, Type) and action.target is not None:
-        return JSONResponse({'detail': 'the live view types at the caret'}, status_code=422)
-    browser = resources_of(request).browser
+async def watch_screen(request: Request, user: User) -> Response:
+    """The bot's browser as it works, for the user to watch: read only, and only while the run is running (during a
+    hand-off the user has the live view instead)."""
+    resources = resources_of(request)
+    async with resources.pool.connection() as connection:
+        run = await store.get_run(connection, user.id, str(request.path_params['run_id']))
+    if run is None or run.status != 'running':
+        return NOT_FOUND
+    try:
+        result = await resources.browser.screenshot(run_id=run.id, user_id=user.id)
+    except BrowserError:
+        return NOT_FOUND  # no browser yet, or a hand-off began meanwhile
+    return Response(result.screenshot.png, media_type='image/png', headers={'Cache-Control': 'no-store'})
 
-    async def act(run: Run, handoff_id: str) -> Response:
-        await browser.act(run_id=run.id, user_id=user.id, action=action, handoff_id=handoff_id)
-        return JSONResponse({'ok': True})
 
-    return await on_handoff(request, user, act)
+# --- notifications ---
+
+
+class PushSubscription(BaseModel):
+    endpoint: str = Field(max_length=2_000, pattern=r'^https://')
+    keys: dict[str, str]
+
+
+@auth.signed_in
+async def push_key(request: Request, user: User) -> Response:
+    return JSONResponse({'public_key': resources_of(request).settings.vapid_public_key})
+
+
+@auth.signed_in
+async def add_push_subscription(request: Request, user: User) -> Response:
+    body = PushSubscription.model_validate_json(await request.body())
+    if set(body.keys) != {'p256dh', 'auth'}:
+        return JSONResponse({'detail': 'keys must be p256dh and auth'}, status_code=422)
+    async with resources_of(request).pool.connection() as connection:
+        await add_subscription(connection, user.id, body.endpoint, body.keys)
+    return JSONResponse({'ok': True}, status_code=201)
 
 
 # --- saved sign-ins ---

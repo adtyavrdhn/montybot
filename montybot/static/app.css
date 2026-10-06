@@ -1,0 +1,78 @@
+:root {
+  --bg: #111318; --panel: #1a1d24; --line: #2a2f3a; --text: #e8eaf0; --muted: #9aa3b2;
+  --accent: #6aa9ff; --good: #3ecf8e; --bad: #ff6b6b; --radius: 12px;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+[hidden] { display: none !important; }
+button, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; border: 0; border-radius: var(--radius); padding: .65em 1em; background: var(--accent);
+  color: #08111f; font-weight: 600; }
+button.secondary { background: transparent; border: 1px solid var(--line); color: var(--text); }
+button.link { background: none; color: var(--text); text-align: left; padding: .5em 0; font-weight: 400; display: block; }
+button.icon { background: none; color: var(--text); font-size: 1.3em; padding: .2em .5em; }
+button.good { background: var(--good); } button.bad { background: var(--bad); }
+input, textarea { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: .65em .8em; }
+label { display: block; margin: .8em 0; color: var(--muted); }
+.muted { color: var(--muted); } .error { color: var(--bad); min-height: 1.2em; }
+#app, .screen { height: 100%; }
+.screen { display: flex; flex-direction: column; }
+.card.narrow { max-width: 380px; width: 100%; margin: auto; padding: 1.5em; }
+.card form button { width: 100%; margin-top: .6em; }
+
+.bar { display: flex; align-items: center; gap: .5em; padding: .5em .75em; border-bottom: 1px solid var(--line);
+  padding-top: max(.5em, env(safe-area-inset-top)); }
+.bar h1 { font-size: 1.05em; margin: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawer { position: fixed; inset: 0 auto 0 0; width: min(320px, 85vw); background: var(--panel); z-index: 10;
+  padding: 1em; transform: translateX(-100%); transition: transform .2s; overflow-y: auto;
+  border-right: 1px solid var(--line); }
+.drawer.open { transform: none; }
+.drawer ul { list-style: none; padding: 0; margin: 1em 0; }
+.drawer li button { width: 100%; text-align: left; background: none; color: var(--text); font-weight: 400;
+  padding: .55em .4em; border-radius: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawer li button.current { background: var(--line); }
+.drawer hr { border: 0; border-top: 1px solid var(--line); }
+
+#layout { flex: 1; display: flex; min-height: 0; }
+#chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#messages { flex: 1; overflow-y: auto; padding: 1em; display: flex; flex-direction: column; gap: .6em; }
+.msg { max-width: 85%; padding: .6em .85em; border-radius: var(--radius); white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.user { align-self: flex-end; background: var(--accent); color: #08111f; }
+.msg.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); }
+.empty { margin: auto; text-align: center; color: var(--muted); max-width: 30em; }
+.status { padding: .4em 1em; color: var(--muted); font-size: .92em; }
+.status::before { content: ''; display: inline-block; width: .6em; height: .6em; border-radius: 50%;
+  background: var(--accent); margin-right: .5em; animation: pulse 1s infinite alternate; }
+@keyframes pulse { to { opacity: .3; } }
+.ask { margin: .5em 1em; padding: .85em; border: 1px solid var(--accent); border-radius: var(--radius);
+  background: var(--panel); }
+.ask p { margin: 0 0 .6em; white-space: pre-wrap; } .ask .row { display: flex; gap: .5em; flex-wrap: wrap; }
+.ask .row > * { flex: 1; }
+#composer { display: flex; gap: .5em; padding: .6em .75em; border-top: 1px solid var(--line);
+  padding-bottom: max(.6em, env(safe-area-inset-bottom)); }
+#composer textarea { resize: none; max-height: 8em; }
+
+#browser { display: flex; flex-direction: column; background: #000; border-left: 1px solid var(--line); }
+.panel-bar { display: flex; align-items: center; justify-content: space-between; padding: .4em .75em;
+  background: var(--panel); border-bottom: 1px solid var(--line); color: var(--muted); }
+#screen { width: 100%; height: auto; object-fit: contain; flex: 1; min-height: 0; }
+#live { border: 0; flex: 1; width: 100%; background: #000; }
+
+.page { position: fixed; inset: 0; background: var(--bg); z-index: 5; padding: 1em; overflow-y: auto;
+  padding-top: max(1em, env(safe-area-inset-top)); }
+.page ul { list-style: none; padding: 0; }
+.page li { display: flex; justify-content: space-between; align-items: center; padding: .6em 0;
+  border-bottom: 1px solid var(--line); gap: .5em; }
+
+/* Phones: the browser panel takes the whole screen when open. */
+@media (max-width: 899px) {
+  #browser { position: fixed; inset: 0; z-index: 8; }
+}
+/* Wider screens: chat beside the browser, as in ChatGPT agent and Muse. */
+@media (min-width: 900px) {
+  #browser { width: 55%; }
+  #browser-button { display: none; }
+}

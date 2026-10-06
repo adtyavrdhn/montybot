@@ -225,6 +225,16 @@ async def handoff_of(connection: Connection, ask_id: str) -> str | None:
     return None if row is None else row['id']
 
 
+async def find_handoff(connection: Connection, handoff_id: str) -> Ask | None:
+    """The hand-off ask that carries `handoff_id`, answered or not."""
+    cursor = await connection.execute(
+        f"SELECT {ASK_COLUMNS} FROM montybot.asks WHERE kind = 'handoff' AND details->>'handoff_id' = %s",
+        (handoff_id,),
+    )
+    row = await cursor.fetchone()
+    return None if row is None else ask_from(row)
+
+
 async def lock_open_ask(connection: Connection, ask_id: str) -> bool:
     """Lock the ask's row for this transaction; True if it is still unanswered."""
     cursor = await connection.execute(

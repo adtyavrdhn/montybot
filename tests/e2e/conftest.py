@@ -16,14 +16,14 @@ Postgres comes from `tests/conftest.py`.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import signal
 import subprocess
 import sys
-import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
@@ -31,6 +31,9 @@ from typing import Any, TypeVar
 import httpx
 import pytest
 from helpers import eventually, free_port
+
+from montybot.browser.contract import MouseDown, MouseUp, Point, Press, Type
+from montybot.liveview.client import LiveViewClient
 
 ROOT = Path(__file__).resolve().parents[2]
 TESTS = ROOT / 'tests'
@@ -122,7 +125,13 @@ class App:
 
 
 @pytest.fixture
-def app(database_url: str, request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[App]:
+def app_env() -> dict[str, str]:
+    """Extra settings for the app; a test module overrides this fixture to set some."""
+    return {}
+
+
+@pytest.fixture
+def app(database_url: str, request: pytest.FixtureRequest, tmp_path: Path, app_env: dict[str, str]) -> Iterator[App]:
     backend = BACKENDS[str(request.config.getoption('--browser'))]
     env = {
         'DATABASE_URL': database_url,
@@ -133,8 +142,10 @@ def app(database_url: str, request: pytest.FixtureRequest, tmp_path: Path) -> It
         'PYTHONPATH': os.pathsep.join([str(TESTS), os.environ.get('PYTHONPATH', '')]),
         'EXECUTOR_ID': 'local',
         'ALLOW_PRIVATE_NETWORKS': 'true',  # the fixture sites are on 127.0.0.1
+        # Full Monty (monty-server), if the test run names one; local Monty subprocesses otherwise.
+        **({'MONTY_URL': url} if (url := os.environ.get('MONTYBOT_TEST_MONTY_URL')) else {}),
     }
-    app = App(env=env, log=tmp_path / 'app.log')
+    app = App(env=env | app_env, log=tmp_path / 'app.log')
     app.start()
     try:
         yield app
@@ -211,46 +222,57 @@ class Client:
 
 
 class Human:
-    """A person driving a hand-off in the web app's live view: keys, typing, and mouse at a point. They see the
-    screen (`screen()`) but, like a person, never use selectors."""
+    """A person in the web app taking over the run's browser: they open the hand-off link the app gives them and drive
+    the live view over its WebSocket (`LiveViewClient`, which talks exactly as the page does), with keys and the mouse,
+    never selectors. Giving the browser back answers the run."""
 
     def __init__(self, client: Client, run_id: str) -> None:
         self.client = client
         self.run_id = run_id
-        self.viewport = (0, 0)
 
-    def screen(self) -> bytes:
-        response = self.client.http.get(f'/api/runs/{self.run_id}/screen')
+    def _ws_url(self) -> str:
+        response = self.client.http.get(f'/api/runs/{self.run_id}/live')
         assert response.status_code == 200, response.text
-        width, height = response.headers['X-Viewport'].split('x')
-        self.viewport = (int(width), int(height))
-        return response.content
+        return self.client.app.url.replace('http', 'ws', 1) + response.json()['url'] + '/ws'
 
-    def do(self, action: dict[str, Any]) -> None:
-        response = self.client.http.post(f'/api/runs/{self.run_id}/screen', json=action)
-        assert response.status_code == 200, response.text
+    def drive(self, steps: Callable[[LiveViewClient], Awaitable[None]], *, give_back: bool = True) -> None:
+        session = self.client.http.cookies.get('montybot_session')
 
-    def type(self, text: str) -> None:
-        self.do({'kind': 'type', 'text': text})
+        async def run() -> None:
+            async with LiveViewClient.connect(self._ws_url(), session=session, origin=self.client.app.url) as live:
+                await live.next_frame()  # they look before they act
+                await steps(live)
+                if give_back:
+                    await live.give_back()
 
-    def press(self, key: str) -> None:
-        self.do({'kind': 'press', 'key': key})
-
-    def press_and_hold(self, seconds: float) -> None:
-        """Hold the mouse in the middle of the screen, where a person would."""
-        self.screen()
-        x, y = self.viewport[0] / 2, self.viewport[1] / 2
-        self.do({'kind': 'mouse_down', 'at': {'x': x, 'y': y}})
-        time.sleep(seconds)
-        self.do({'kind': 'mouse_up', 'at': {'x': x, 'y': y}})
+        asyncio.run(run())
 
     def sign_in(self, username: str, password: str) -> None:
         """On a sign-in form whose first field has the focus, as `autofocus` gives it."""
-        self.screen()
-        self.type(username)
-        self.press('Tab')
-        self.type(password)
-        self.press('Enter')
+
+        async def steps(live: LiveViewClient) -> None:
+            start = await live.wait_for_url(lambda url: url.startswith('http'))
+            await live.send(Type(text=username))
+            await live.send(Press(key='Tab'))
+            await live.send(Type(text=password))
+            await live.send(Press(key='Enter'))
+            await live.wait_for_url(lambda url: url != start)
+
+        self.drive(steps)
+
+    def press_and_hold(self, seconds: float) -> None:
+        """Hold the mouse in the middle of the screen, where a person would."""
+
+        async def steps(live: LiveViewClient) -> None:
+            assert live.frame is not None  # the frame they looked at
+            middle = Point(x=live.frame.frame.width / 2, y=live.frame.frame.height / 2)
+            start = await live.wait_for_url(lambda url: url.startswith('http'))
+            await live.send(MouseDown(at=middle))
+            await asyncio.sleep(seconds)
+            await live.send(MouseUp(at=middle))
+            await live.wait_for_url(lambda url: url != start)
+
+        self.drive(steps)
 
 
 @pytest.fixture
