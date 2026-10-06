@@ -105,8 +105,8 @@ class EgressProxy:
         finally:
             for direction in directions:
                 direction.cancel()
+            up_writer.transport.abort()  # at once: data a server never reads must not keep the socket open
             await asyncio.gather(*directions, return_exceptions=True)
-            up_writer.close()
 
     async def _connect(
         self, host: str, port: int
