@@ -75,3 +75,7 @@ label { display: block; margin: .8em 0; color: var(--muted); }
 @media (min-width: 900px) {
   #browser { width: 55%; }
 }
+
+/* Workspace paths may be long, especially on a phone. */
+#file-list span { min-width: 0; overflow-wrap: anywhere; }
+#file-list button { flex-shrink: 0; }

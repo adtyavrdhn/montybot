@@ -45,6 +45,15 @@ DOWNLOADS = f'{VIRTUAL_ROOT}/downloads'
 """Where browser downloads are saved."""
 
 
+MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
+MAX_LIST_ENTRIES = 1000
+MAX_LIST_DEPTH = 16
+
+
+class FileTooLarge(ValueError):
+    """The consumer download exceeds the bounded in-memory response size."""
+
+
 class Workspaces:
     """One `Workspace` per user, each a directory under `root`, made on first use."""
 
@@ -168,6 +177,108 @@ class WorkspaceFiles:
         if host == await self.workspace.working_dir():
             raise _error(errno.EACCES, f'Permission denied: {VIRTUAL_ROOT} itself cannot be changed', str(path))
         return host
+
+    # --- read-only consumer exports ---
+
+    @staticmethod
+    def _directory_fd(path: str, *, parent: int | None = None) -> int:
+        return os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+
+    async def list_results(self) -> tuple[list[dict[str, Any]], bool]:
+        """Bound traversal and output; never follow links, even inside /work."""
+        async with self.lock:
+            root = await self._host(VIRTUAL_ROOT)
+
+            def listing() -> tuple[list[dict[str, Any]], bool]:
+                found: list[dict[str, Any]] = []
+                visited = 0
+                truncated = False
+
+                def walk(fd: int, relative: str, depth: int) -> None:
+                    nonlocal visited, truncated
+                    with os.scandir(fd) as entries:
+                        for entry in entries:
+                            if visited >= MAX_LIST_ENTRIES:
+                                truncated = True
+                                return
+                            visited += 1
+                            path = relative + '/' + entry.name
+                            try:
+                                path.encode('utf-8')
+                            except UnicodeEncodeError:
+                                continue  # not representable as a JSON/attachment filename
+                            if len(path) > 1024:
+                                truncated = True
+                                continue
+                            try:
+                                info = entry.stat(follow_symlinks=False)
+                                if stat_module.S_ISREG(info.st_mode):
+                                    found.append({'path': path, 'size': info.st_size})
+                                elif stat_module.S_ISDIR(info.st_mode):
+                                    if depth >= MAX_LIST_DEPTH:
+                                        truncated = True
+                                        continue
+                                    child = self._directory_fd(entry.name, parent=fd)
+                                    try:
+                                        walk(child, path, depth + 1)
+                                    finally:
+                                        os.close(child)
+                            except OSError:
+                                continue  # removed, replaced, or inaccessible while listing
+
+                fd = self._directory_fd(root)
+                try:
+                    walk(fd, VIRTUAL_ROOT, 0)
+                finally:
+                    os.close(fd)
+                return sorted(found, key=lambda item: item['path']), truncated
+
+            return await asyncio.to_thread(listing)
+
+    async def read_result(self, path: str) -> bytes:
+        """Read bounded bytes from pinned descriptors, not a checked path reopened later.
+
+        The shared lock excludes CPython. O_NOFOLLOW on every component and fstat on the
+        final O_NONBLOCK descriptor also protect against replacement outside that lock.
+        """
+        try:
+            path.encode('utf-8')
+        except UnicodeEncodeError:
+            raise PermissionError('invalid workspace path') from None
+        parts = path.split('/')
+        if len(path) > 1024 or parts[:2] != ['', 'work'] or len(parts) < 3:
+            raise PermissionError('invalid workspace path')
+        if any(part in ('', '.', '..') or '\\' in part or '\x00' in part for part in parts[2:]):
+            raise PermissionError('invalid workspace path')
+        async with self.lock:
+            await self._host(path)  # existing boundary checks; never open the resolved path
+            root = await self._host(VIRTUAL_ROOT)
+
+            def read() -> bytes:
+                fd = self._directory_fd(root)
+                try:
+                    for part in parts[2:-1]:
+                        child = self._directory_fd(part, parent=fd)
+                        os.close(fd)
+                        fd = child
+                    file_fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                    try:
+                        info = os.fstat(file_fd)
+                        if not stat_module.S_ISREG(info.st_mode):
+                            raise PermissionError('not a regular file')
+                        if info.st_size > MAX_DOWNLOAD_BYTES:
+                            raise FileTooLarge
+                        with os.fdopen(file_fd, 'rb', closefd=False) as stream:
+                            data = stream.read(MAX_DOWNLOAD_BYTES + 1)
+                        if len(data) > MAX_DOWNLOAD_BYTES:
+                            raise FileTooLarge
+                        return data
+                    finally:
+                        os.close(file_fd)
+                finally:
+                    os.close(fd)
+
+            return await asyncio.to_thread(read)
 
     # --- the calls ---
 

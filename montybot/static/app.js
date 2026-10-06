@@ -506,6 +506,71 @@ $('message').addEventListener('keydown', (event) => {
   }
 });
 
+// --- read-only workspace results ---
+
+async function openFiles() {
+  const view = ++state.view;
+  const current = () => state.view === view && location.hash === '#/files';
+  stopPolling();
+  stopStream();
+  stopWatching();
+  $('layout').hidden = true;
+  $('files').hidden = false;
+  $('file-list').replaceChildren();
+  $('files-status').textContent = 'Loading…';
+  try {
+    const data = await api('/api/files', {}, current);
+    if (!current()) return;
+    $('files-status').textContent = data.truncated ? 'Showing a partial list (up to 1,000 entries, 16 folders deep).' :
+      (data.files.length ? '' : 'No files yet. Ask the bot to download or generate a file.');
+    $('file-list').replaceChildren(...data.files.map((file) => {
+      const item = document.createElement('li');
+      const name = document.createElement('span');
+      name.textContent = `${file.path} (${file.size.toLocaleString()} bytes)`;
+      const download = button('Download', 'secondary', async () => {
+        download.disabled = true;
+        try {
+          const response = await fetch('/api/files/download', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: file.path }),
+          });
+          if (!current()) return;
+          if (response.status === 401) { signedOut(); return; }
+          if (!response.ok) {
+            $('files-status').textContent = response.status === 413 ? 'File exceeds the 20 MiB download limit.' :
+              'File unavailable. Refresh and try again.';
+            return;
+          }
+          const blob = await response.blob();
+          if (!current()) return;
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          const disposition = response.headers.get('Content-Disposition') || '';
+          link.download = decodeURIComponent(disposition.split("filename*=UTF-8''")[1] || 'download');
+          document.body.append(link);
+          link.click();
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (_) {
+          if (current()) $('files-status').textContent = 'Download failed. Try again.';
+        } finally {
+          download.disabled = file.size > data.max_download_bytes;
+        }
+      });
+      download.disabled = file.size > data.max_download_bytes;
+      if (download.disabled) download.title = 'Exceeds the 20 MiB download limit';
+      item.append(name, download);
+      return item;
+    }));
+  } catch (_) {
+    if (current()) $('files-status').textContent = 'Could not load files. Try Refresh.';
+  }
+}
+
+$('open-files').addEventListener('click', () => { location.hash = '#/files'; closeDrawer(); });
+$('refresh-files').addEventListener('click', () => openFiles());
+
 // --- saved sign-ins and schedules ---
 
 async function openSignins() {
@@ -607,9 +672,12 @@ function notify(ask) {
 // --- routing ---
 
 async function route() {
+  $('files').hidden = true;
+  $('layout').hidden = false;
   $('signins').hidden = true;
   $('schedules').hidden = true;
   const hash = location.hash;
+  if (hash === '#/files') return openFiles();
   if (hash === '#/sign-ins') return openSignins();
   if (hash === '#/schedules') return openSchedules();
   const match = hash.match(/^#\/t\/([0-9a-f-]{36})$/);

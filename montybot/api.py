@@ -14,7 +14,7 @@ import re
 import uuid
 from collections.abc import AsyncIterator, Callable
 from typing import Annotated, Any, TypeVar
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from pydantic import AfterValidator, BaseModel, Field, StringConstraints
 from pydantic_ai.messages import ModelMessage, ModelRequest, TextPart, UserPromptPart
@@ -31,6 +31,7 @@ from montybot.models import ACTIVE, Ask, Run, Schedule, User
 from montybot.notifications import TakenEndpoint, add_subscription, remove_subscription
 from montybot.resources import Resources
 from montybot.signins import PostgresLease
+from montybot.workspaces import MAX_DOWNLOAD_BYTES, FileTooLarge, download_name
 
 T = TypeVar('T')
 NOT_FOUND = JSONResponse({'detail': 'not found'}, status_code=404)
@@ -542,3 +543,40 @@ def chat_messages(history: list[ModelMessage]) -> list[dict[str, str]]:
             if text and not message.tool_calls:
                 shown.append({'role': 'assistant', 'text': text})
     return shown
+
+
+# --- workspace results (no filenames in request URLs or telemetry) ---
+
+
+class FileDownload(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
+
+
+@auth.signed_in
+async def list_files(request: Request, user: User) -> Response:
+    files, truncated = await resources_of(request).workspaces.files(user.id).list_results()
+    return JSONResponse(
+        {'files': files, 'truncated': truncated, 'max_download_bytes': MAX_DOWNLOAD_BYTES},
+        headers={'Cache-Control': 'no-store'},
+    )
+
+
+@auth.signed_in
+async def download_file(request: Request, user: User) -> Response:
+    headers = {'Cache-Control': 'no-store'}
+    # Bound JSON too; never echo invalid paths through validation responses.
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > 8192:
+            return JSONResponse({'detail': 'request too large'}, status_code=413, headers=headers)
+        body.extend(chunk)
+    try:
+        path = FileDownload.model_validate_json(body).path
+        data = await resources_of(request).workspaces.files(user.id).read_result(path)
+    except FileTooLarge:
+        return JSONResponse({'detail': 'file exceeds the 20 MiB download limit'}, status_code=413, headers=headers)
+    except (OSError, ValueError):
+        return JSONResponse({'detail': 'file unavailable'}, status_code=404, headers=headers)
+    headers['Content-Disposition'] = "attachment; filename*=UTF-8''" + quote(download_name(path), safe='')
+    headers['X-Content-Type-Options'] = 'nosniff'
+    return Response(data, media_type='application/octet-stream', headers=headers)

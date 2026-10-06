@@ -37,11 +37,24 @@ def test_download_invoices_and_total_them(app: App, client: Client, invoices: In
     assert sorted(p.name for p in downloads.iterdir()) == [f'invoice-{month}.csv' for month, _ in INVOICES[-3:]]
     month, lines = INVOICES[-1]
     assert (downloads / f'invoice-{month}.csv').read_text() == csv_of(lines)
+    path = f'/work/downloads/invoice-{month}.csv'
+    response = client.http.post('/api/files/download', json={'path': path})
+    assert response.status_code == 200 and response.content == csv_of(lines).encode()
+    assert response.headers['cache-control'] == 'no-store'
 
     # Bob's code sees an empty folder, and cannot reach Alice's files by path.
     bob = Client(app)
     try:
         bob.sign_up()
+        assert bob.http.get('/api/files').json()['files'] == []
+        assert bob.http.post('/api/files/download', json={'path': path}).status_code == 404
+        assert (
+            bob.http.post(
+                '/api/files/download',
+                json={'path': f'/work/../{alice["id"]}/downloads/invoice-{month}.csv'},
+            ).status_code
+            == 404
+        )
         thread = bob.ask(f'Show me my files and the file /work/../{alice["id"]}/downloads/invoice-{month}.csv')
         reply = bob.wait_for_reply(thread)
     finally:
