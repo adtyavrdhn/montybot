@@ -17,3 +17,6 @@ Dated files in [`notes/`](notes/), newest last. Later notes win over earlier one
   E2B computer use, and sessions and takeover.
 - [2026-10-06 browser, isolation and state flow](<notes/2026-10-06 browser, isolation and state flow.md>): Ladybird,
   Lightpanda and Servo as Monty's browser, two browser tiers, per-user browser state, and isolation between users.
+- [2026-10-06 monty-bot plan and browser design](<notes/2026-10-06 monty-bot plan and browser design.md>): the goals
+  agreed so far (a hosted consumer bot built on Viktor), how the browser and user takeover work on one server, bot
+  checks, speed, and milestones. Draft for discussion with Mike.
