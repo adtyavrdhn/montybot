@@ -42,6 +42,8 @@ def create_app(settings: Settings) -> ASGIApp:
             Route('/api/signin', api.sign_in, methods=['POST']),
             Route('/api/signout', api.sign_out, methods=['POST']),
             Route('/api/me', api.me),
+            Route('/api/files', api.list_files),
+            Route('/api/files/download', api.download_file, methods=['POST']),
             Route('/api/threads', api.list_threads),
             Route('/api/threads', api.create_thread, methods=['POST']),
             Route('/api/threads/{thread_id:uuid}', api.read_thread),

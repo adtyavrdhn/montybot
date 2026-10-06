@@ -7,12 +7,16 @@ in with the keyboard, give it back, approve the order.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
+from pathlib import Path, PurePosixPath
 
 import pytest
 from conftest import App
 from playwright.sync_api import Page, expect, sync_playwright
 from sites.shop import Shop
+
+from montybot.workspaces import Workspaces, save_download
 
 
 @pytest.fixture
@@ -110,3 +114,34 @@ def test_repeated_enter_creates_one_chat_and_preserves_a_new_draft(app: App, per
     expect(person.locator('.msg.assistant')).to_have_text('Hello! I am monty-bot.')
     expect(person.locator('#message')).to_have_value('My next question')
     expect(person.locator('#threads li')).to_have_count(1)
+
+
+@pytest.mark.u5
+def test_files_panel_downloads_browser_and_generated_csv(app: App, person: Page, workspaces_dir: Path) -> None:
+    sign_up(person, app)
+    user = person.request.get(f'{app.url}/api/me').json()
+    downloaded = b'item,total\neggs,3\n'
+    generated = b'total\n3\n'
+
+    async def prepare() -> None:
+        files = Workspaces(workspaces_dir).files(user['id'])
+        await save_download(files, 'export.csv', downloaded)
+        async with files.lock:
+            await files.write_bytes(PurePosixPath('/work/generated.csv'), generated)
+
+    asyncio.run(prepare())
+    person.click('#menu-button')
+    person.get_by_role('button', name='Files', exact=True).click()
+    expect(person.locator('#files')).to_be_visible()
+    expect(person.locator('#layout')).to_be_hidden()
+    expect(person.locator('#file-list li')).to_have_count(2)
+    for path, content in [('/work/downloads/export.csv', downloaded), ('/work/generated.csv', generated)]:
+        row = person.locator('#file-list li').filter(has_text=path)
+        with person.expect_download() as pending:
+            row.get_by_role('button', name='Download', exact=True).click()
+        download = pending.value
+        assert download.suggested_filename == path.rsplit('/', 1)[-1]
+        saved = download.path()
+        assert saved is not None and Path(saved).read_bytes() == content
+    person.get_by_role('button', name='Back', exact=True).click()
+    expect(person.locator('#layout')).to_be_visible()
