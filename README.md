@@ -15,3 +15,5 @@ Dated files in [`notes/`](notes/), newest last. Later notes win over earlier one
 - [2026-10-06 clai2 vs Muse, Dots and Grok Bot](<notes/2026-10-06 clai2 vs Muse, Dots and Grok Bot.md>): what Meta
   Muse, OpenAI dots and xAI Grok Bot do, where clai2 stands, and designs for channels, Monty-first execution,
   E2B computer use, and sessions and takeover.
+- [2026-10-06 browser, isolation and state flow](<notes/2026-10-06 browser, isolation and state flow.md>): Ladybird,
+  Lightpanda and Servo as Monty's browser, two browser tiers, per-user browser state, and isolation between users.
