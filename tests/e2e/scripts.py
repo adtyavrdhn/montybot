@@ -79,7 +79,9 @@ def favourite_colour(turn: Turn) -> ModelResponse:
 def order_eggs(turn: Turn) -> ModelResponse:
     if not turn.returns:
         return call('open_page', url=f'{turn.url}/')
-    if turn.last.find('Title: Sign in') != -1 and not turn.called('hand_off'):
+    if 'Title: Sign in' in turn.last:
+        if turn.called('hand_off'):
+            return say('You are still not signed in, so I stopped.')
         return call('hand_off', reason='Please sign in to the shop, then hand the browser back.')
     if 'In cart: eggs' not in turn.last and not turn.called('commit'):
         return call('click', target='#add-eggs')
@@ -97,7 +99,9 @@ FLIGHT = re.compile(r'\b([A-Z0-9]{2} \d{3,4})\b\W+(\d\d:\d\d)\W+€\s?(\d+)')
 
 def cheapest_flights(turn: Turn) -> ModelResponse:
     if not turn.returns:
-        return call('open_page', url=f'{turn.url}/results?to=Lisbon&date=next+Friday')
+        return call('open_page', url=f'{turn.url}/')
+    if turn.called('open_page') and not turn.called('click'):
+        return call('click', target='#search')  # the form already says Lisbon, next Friday
     if 'Next page' in turn.last:
         return call('click', target='#next')
     flights = {m.group(1): (m.group(2), int(m.group(3))) for r in turn.returns for m in FLIGHT.finditer(str(r.content))}

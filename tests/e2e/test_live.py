@@ -12,12 +12,6 @@ import pytest
 from conftest import Client
 from helpers import eventually
 
-LIVE_SITES = {
-    'u1': ['https://www.walmart.com/search?q=oat+milk', 'https://news.ycombinator.com/'],
-    'u2': ['https://github.com/login'],
-    'u6': ['https://www.walmart.com/'],
-}
-
 pytestmark = pytest.mark.live
 
 

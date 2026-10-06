@@ -16,6 +16,7 @@ Postgres comes from `tests/conftest.py`.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -33,7 +34,6 @@ from helpers import eventually, free_port
 
 ROOT = Path(__file__).resolve().parents[2]
 TESTS = ROOT / 'tests'
-WAIT = 60.0
 T = TypeVar('T')
 
 BACKENDS = {
@@ -53,10 +53,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    live = pytest.mark.skip(reason='real sites: run with --live, a real browser and MONTYBOT_TEST_MODEL')
+    real_browser = config.getoption('--browser') != 'fake'
+    live = pytest.mark.skip(reason='real sites: run with --live, --browser=chromium and MONTYBOT_TEST_MODEL')
     scripted = pytest.mark.skip(reason='needs the scripted model')
     for item in items:
-        if 'live' in item.keywords and not config.getoption('--live'):
+        if 'live' in item.keywords and not (config.getoption('--live') and real_browser):
             item.add_marker(live)
         if 'scripted' in item.keywords and os.environ.get('MONTYBOT_TEST_MODEL'):
             item.add_marker(scripted)
@@ -82,7 +83,12 @@ class App:
         env = {**os.environ, **self.env, 'PORT': str(self.port), 'PUBLIC_URL': self.url}
         with self.log.open('ab') as log:
             self.process = subprocess.Popen(
-                [sys.executable, '-m', 'montybot', 'serve'], cwd=ROOT, env=env, stdout=log, stderr=log
+                [sys.executable, '-m', 'montybot', 'serve'],
+                cwd=ROOT,
+                env=env,
+                stdout=log,
+                stderr=log,
+                start_new_session=True,  # its own process group, so a kill takes its browsers with it
             )
 
         def healthy() -> bool | None:
@@ -97,8 +103,10 @@ class App:
         eventually(healthy, what='the app to start')
 
     def kill(self) -> None:
+        """A crash: the app and everything it started (Playwright, Chrome) die at once."""
         assert self.process is not None
-        self.process.send_signal(signal.SIGKILL)
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(self.process.pid, signal.SIGKILL)
         self.process.wait()
 
     def stop(self) -> None:
@@ -108,6 +116,9 @@ class App:
                 self.process.wait(timeout=20)
             except subprocess.TimeoutExpired:
                 self.kill()
+        if self.process is not None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(self.process.pid, signal.SIGKILL)
 
 
 @pytest.fixture
@@ -179,11 +190,17 @@ class Client:
 
         return eventually(asked, what=f'a {kind} ask')
 
-    def wait_for_reply(self, thread_id: str) -> str:
+    def wait_for_reply(self, thread_id: str, *, failed: bool = False) -> str:
+        """The reply to the thread's latest message, once its run is done. A failed run is an error unless
+        `failed`."""
+
         def replied() -> str | None:
             thread = self.thread(thread_id)
-            if thread['run']['status'] not in ('done', 'failed'):
+            status = thread['run']['status']
+            if status not in ('done', 'failed'):
                 return None
+            if (status == 'failed') != failed:
+                raise AssertionError(f'the run ended {status}: {thread["messages"][-1]["text"]}')
             return thread['messages'][-1]['text']
 
         return eventually(replied, what='the reply')

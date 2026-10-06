@@ -31,12 +31,12 @@ def test_a_sign_in_is_saved_and_reused(app: App, client: Client, shop: Shop, dat
     first = client.ask(f'Order eggs from {shop.url}')
     sign_in_through_hand_off(client, first)
     client.answer(client.wait_for_ask(first, 'approval'), approved=True)
-    assert client.wait_for_reply(first)
+    assert '#1' in client.wait_for_reply(first)
 
     # A new conversation, later: no hand-off this time, straight to the approval.
     second = client.ask(f'Order eggs from {shop.url}')
     client.answer(client.wait_for_ask(second, 'approval'), approved=True)
-    assert client.wait_for_reply(second)
+    assert '#2' in client.wait_for_reply(second)
     assert shop.sign_ins == 1
     assert [o.user for o in shop.orders] == ['alice', 'alice']
 
@@ -74,7 +74,7 @@ def test_the_app_is_killed_during_the_hand_off(app: App, client: Client, shop: S
     Human(client, client.thread(thread)['run']['id']).sign_in('alice', 'hunter2')
     client.answer(handoff, done=True)
     client.answer(client.wait_for_ask(thread, 'approval'), approved=True)
-    assert client.wait_for_reply(thread)
+    assert '#1' in client.wait_for_reply(thread)
     assert len(shop.orders) == 1
 
 
@@ -93,6 +93,6 @@ def test_the_app_is_killed_while_an_approval_waits(app: App, client: Client, sho
     again = client.wait_for_ask(thread, 'approval')
     assert again['id'] == approval['id']
     client.answer(again, approved=True)
-    assert client.wait_for_reply(thread)
+    assert '#1' in client.wait_for_reply(thread)
     assert [(o.user, o.items) for o in shop.orders] == [('alice', ['eggs'])]
     assert shop.sign_ins == 1

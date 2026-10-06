@@ -56,7 +56,7 @@ def test_sign_in_through_a_hand_off_then_approve_the_order(client: Client, shop:
     assert shop.orders == []
     client.answer(approval, approved=True)
 
-    assert client.wait_for_reply(thread)
+    assert '#1' in client.wait_for_reply(thread)
     assert [(o.user, o.items) for o in shop.orders] == [('alice', ['eggs'])]
 
 
@@ -96,7 +96,7 @@ def test_users_cannot_see_each_other(app: App, client: Client) -> None:
 def test_a_failed_run_says_so_and_frees_the_thread(client: Client) -> None:
     client.sign_up()
     thread = client.ask('Fail please.')
-    assert client.wait_for_reply(thread).startswith('Something went wrong')
+    assert client.wait_for_reply(thread, failed=True).startswith('Something went wrong')
     client.ask('Say hello.', thread)
     assert 'hello' in client.wait_for_reply(thread).lower()
 

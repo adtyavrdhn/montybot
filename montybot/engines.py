@@ -26,7 +26,8 @@ _lock: asyncio.Lock | None = None
 
 
 async def shared_playwright() -> Playwright:
-    """This process's Playwright, started on first use. It lives as long as the process."""
+    """This process's Playwright, started on first use. It lives as long as the process, on the app's one event loop;
+    the browser service runs there, so every backend does too."""
     global _playwright, _lock
     if _lock is None:
         _lock = asyncio.Lock()
@@ -45,7 +46,9 @@ class LazyChromium:
 
     async def _backend(self) -> ChromiumBackend:
         if self._inner is None:
-            self._inner = ChromiumBackend(playwright=await shared_playwright(), options=self._options())
+            playwright = await shared_playwright()
+            if self._inner is None:  # a concurrent first call may have made it while this one waited
+                self._inner = ChromiumBackend(playwright=playwright, options=self._options())
         return self._inner
 
     async def open(self, state: BrowserState | None) -> None:
