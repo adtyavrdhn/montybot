@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 import psycopg
@@ -33,7 +34,7 @@ class InProcessApp:
 
 
 @pytest.fixture
-def traced(database_url: str) -> Iterator[tuple[InProcessApp, InMemorySpanExporter]]:
+def traced(database_url: str, workspaces_dir: Path) -> Iterator[tuple[InProcessApp, InMemorySpanExporter]]:
     exporter = InMemorySpanExporter()
     port = free_port()
     settings = Settings(
@@ -44,6 +45,7 @@ def traced(database_url: str) -> Iterator[tuple[InProcessApp, InMemorySpanExport
         model='script:e2e.scripts:model',
         browser_backend='sites.html_browser:new_backend',
         allow_private_networks=True,
+        workspaces_dir=workspaces_dir,
     )
     configure_observability(settings, span_processors=[SimpleSpanProcessor(exporter)])
     server = uvicorn.Server(uvicorn.Config(create_app(settings), host='127.0.0.1', port=port, log_level='warning'))
