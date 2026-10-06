@@ -1,0 +1,6 @@
+# The app image needs only pyproject.toml, uv.lock and montybot/.
+*
+!pyproject.toml
+!uv.lock
+!montybot/
+**/__pycache__
