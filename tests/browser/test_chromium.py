@@ -38,7 +38,7 @@ from montybot.browser.state import BrowserState
 pytestmark = pytest.mark.anyio
 
 HEADLESS = ChromiumOptions(headless=True)
-HEADED = ChromiumOptions.for_this_machine()
+HEADED = ChromiumOptions.for_this_machine(allow_private_networks=True)  # the fixture sites are on 127.0.0.1
 """A window on a Mac or a Linux desktop; on Linux without a desktop, Xvfb and bwrap."""
 SHOW_WINDOWS = os.environ.get('MONTYBOT_HEADED') == '1'
 """Headed tests on a desktop open a real window per test, so they only run when asked for."""

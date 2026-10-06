@@ -76,7 +76,8 @@ too, so the app's bwrap gets it and nothing else in the container does. This is 
 for its own bwrap sandbox. The blunt alternative, `sysctl kernel.apparmor_restrict_unprivileged_userns=0`, turns the
 restriction off for every program on the host; earlier deploys did that, and `bootstrap.sh` turns it back on.
 
-Hosts without AppArmor (Debian, most other distributions) need only the container settings.
+Hosts without AppArmor (Debian, most other distributions) need only the container settings. On such a host, Chrome
+started without bwrap (the headless test engine) cannot start its own sandbox; the server never does that.
 
 **Network.** bwrap's `--unshare-net` leaves Chrome only loopback. Its connections leave through the app's egress
 proxy (`montybot/browser/egress.py`): SOCKS5 over a Unix socket, which resolves each host name itself and refuses
