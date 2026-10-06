@@ -96,13 +96,8 @@ async def create(
             prompt=prompt,
             watch=watch,
         )
-    await ensure_dbos_schedule(schedule)
-    return schedule
-
-
-async def ensure_dbos_schedule(schedule: Schedule) -> None:
-    """Make the schedule's DBOS schedule, unless it exists: after a failure between the row and it, the next try or
-    a resume completes the schedule."""
+    # Unless an earlier try of this step made it. If every try fails here, the row stays without a DBOS schedule: it
+    # lists as paused, cannot be resumed, and can be deleted.
     if await DBOS.get_schedule_async(dbos_name(schedule.id)) is None:
         await DBOS.create_schedule_async(
             schedule_name=dbos_name(schedule.id),
@@ -111,6 +106,7 @@ async def ensure_dbos_schedule(schedule: Schedule) -> None:
             context={'schedule_id': schedule.id},
             cron_timezone=schedule.timezone,
         )
+    return schedule
 
 
 async def list_for(pool: Pool, user_id: str) -> list[tuple[Schedule, bool]]:
@@ -125,14 +121,13 @@ async def list_for(pool: Pool, user_id: str) -> list[tuple[Schedule, bool]]:
 
 
 async def set_paused(pool: Pool, user_id: str, schedule_id: str, paused: bool) -> Schedule | None:
-    """None if the user has no such schedule."""
+    """None if the user has no such schedule (or it was never completed, see `create`)."""
     if not is_uuid(schedule_id):
         return None
     async with pool.connection() as connection:
         schedule = await store.get_schedule(connection, user_id, schedule_id)
-    if schedule is None:
+    if schedule is None or await DBOS.get_schedule_async(dbos_name(schedule.id)) is None:
         return None
-    await ensure_dbos_schedule(schedule)
     change = DBOS.pause_schedule if paused else DBOS.resume_schedule
     await asyncio.to_thread(change, dbos_name(schedule.id))
     return schedule

@@ -10,7 +10,6 @@ from typing import Any
 
 from dbos import DBOS
 from pydantic_ai import FunctionToolset, ModelRetry, RunContext, ToolFailed
-from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.tools import ToolDefinition
 
 from montybot import schedules
@@ -158,12 +157,9 @@ async def notify_user(ctx: RunContext[RunDeps]) -> str:
     schedule = ctx.deps.schedule
     assert schedule is not None  # only offered in a watch
     told = 'The user was notified, and the watch is paused. Now reply with what you found.'
-    if any(
-        isinstance(part, ToolReturnPart) and part.tool_name == 'notify_user'
-        for message in ctx.messages
-        for part in message.parts
-    ):
+    if ctx.deps.notified.done:
         return told  # once per run, whatever the model does
+    ctx.deps.notified.done = True  # before the step: two calls in one response run one after the other
     run_id = ctx.deps.run_id
     await DBOS.run_step_async(
         {**RETRIED, 'name': 'schedules.found'}, schedules.notify_found, current(), schedule, run_id

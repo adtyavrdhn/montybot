@@ -27,6 +27,13 @@ class CodeState:
     state: bytes | None = None
 
 
+@dataclass
+class Notified:
+    """Whether this run's watch has told the user what it found. Set in workflow code, which DBOS replays in order."""
+
+    done: bool = False
+
+
 @dataclass(frozen=True)
 class RunDeps:
     resources: Resources
@@ -35,6 +42,7 @@ class RunDeps:
     """The schedule whose occurrence this run is, if a schedule started it."""
     asked: Asked = field(default_factory=Asked)
     code: CodeState = field(default_factory=CodeState)
+    notified: Notified = field(default_factory=Notified)
 
     @property
     def user_id(self) -> str:
