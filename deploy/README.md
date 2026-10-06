@@ -111,5 +111,6 @@ It ran on colima's Ubuntu 24.04 arm64 VM with the AppArmor profile installed.
 - Full Monty (`monty-server`, `monty-worker`) is not in this compose file: the server has no checkout of
   monty-private to build them from. The app runs Monty in local subprocesses (`MONTY_URL` unset). The root
   `compose.yaml` has them for local development.
-- Backups stay on the server's disk.
+- Backups stay on the server's disk, and cover Postgres only: the users' files (the `workspaces` volume) and the
+  Claude Code sign-in (`claude-code`) are not in them.
 - One app process (`EXECUTOR_ID=vm-1`); more would each need their own id.

@@ -32,12 +32,13 @@ jobs:
           python-version: '3.12'
           enable-cache: true
       # Ubuntu 24.04 only lets AppArmor-profiled programs make user namespaces, which Chromium's sandbox and bwrap
-      # need; the VM turns this off the same way (deploy/bootstrap.sh). Xvfb is for the virtual-screen tests.
-      - name: Allow user namespaces, install Xvfb and bubblewrap
+      # need; on this throwaway runner the restriction is simply off (the server allows only bwrap, see
+      # deploy/README.md). Xvfb, bwrap and socat are for the real server launch tests in test_chromium_linux.py.
+      - name: Allow user namespaces, install Xvfb, bubblewrap and socat
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           sudo apt-get update -q
-          sudo apt-get install -y -q xvfb bubblewrap
+          sudo apt-get install -y -q xvfb bubblewrap socat
       - run: uv sync --frozen
       - run: uv run playwright install --with-deps chromium
       - run: uv run ruff check montybot tests
