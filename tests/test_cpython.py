@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import uuid
 from collections.abc import AsyncIterator, Iterator
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any
 
@@ -40,12 +41,21 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture
-def resources(tmp_path: Path) -> Any:
+def workspaces_dir() -> Iterator[Path]:
+    """Outside `/tmp`, as on the server, because the jail has its own `/tmp` and would hide the folder for free."""
+    folder = Path.home() / '.cache' / 'montybot-tests' / uuid.uuid4().hex
+    folder.mkdir(parents=True)
+    yield folder
+    shutil.rmtree(folder)
+
+
+@pytest.fixture
+def resources(workspaces_dir: Path) -> Any:
     settings = Settings(
         database_url='postgresql://unused',
         session_secret=SecretStr('x'),
         encryption_key=SecretStr('x'),
-        workspaces_dir=tmp_path / 'workspaces',
+        workspaces_dir=workspaces_dir,
         cpython_cpu_seconds=2,
         cpython_timeout_seconds=30,
     )
@@ -61,7 +71,9 @@ def listener() -> Iterator[int]:
 
 async def test_pandas_works_on_the_users_files(resources: Any) -> None:
     user = str(uuid.uuid4())
-    await save_download(resources.workspaces.of(user), 'a.csv', b'item,quantity,unit_price\neggs,2,3.20\nmilk,1,1.10\n')
+    await save_download(
+        resources.workspaces.files(user), 'a.csv', b'item,quantity,unit_price\neggs,2,3.20\nmilk,1,1.10\n'
+    )
     code = """
 import pandas as pd
 frame = pd.read_csv('downloads/a.csv')
@@ -83,7 +95,6 @@ def attempt(name, use):
 attempt('other user', lambda: open(OTHER).read())
 attempt('every user', lambda: os.listdir(ROOT))
 attempt('app folder', lambda: os.listdir(APP))
-attempt('homes', lambda: os.listdir('/home'))
 attempt('app environment', lambda: open(f'/proc/{APP_PID}/environ', 'rb').read())
 attempt('environment', lambda: [k for k in os.environ if k not in ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'HOME', 'PWD', 'OPENBLAS_NUM_THREADS', 'SHLVL', '_')])
 attempt('own environ', lambda: b'montybot-secret' in open('/proc/self/environ', 'rb').read())
@@ -99,7 +110,7 @@ async def test_the_jail_sees_only_the_users_files(
 ) -> None:
     monkeypatch.setenv('MONTYBOT_PROBE_SECRET', 'montybot-secret')  # as the app's settings would be
     a, b = str(uuid.uuid4()), str(uuid.uuid4())
-    await save_download(resources.workspaces.of(a), 'a.csv', b'only for A')
+    await save_download(resources.workspaces.files(a), 'a.csv', b'only for A')
     other = resources.workspaces.directory(a) / 'downloads' / 'a.csv'
     names = {
         'OTHER': str(other),
@@ -113,8 +124,7 @@ async def test_the_jail_sees_only_the_users_files(
     assert seen == {
         'other user': 'FileNotFoundError',
         'every user': repr([b]),  # only B's own folder is mounted there
-        'app folder': 'FileNotFoundError',
-        'homes': '[]',
+        'app folder': '[]',  # an empty folder over the app's
         'app environment': 'FileNotFoundError',
         'environment': '[]',
         'own environ': 'False',
@@ -130,6 +140,10 @@ async def test_limits_hold_and_nothing_outlives_the_call(resources: Any) -> None
     assert 'MemoryError' in out and 'Exit code 1' in out
     out = await run_jailed(resources, user, 'while True:\n    pass')  # two CPU seconds in the test settings
     assert 'Exit code' in out
+    forks = 'import os\nfor n in range(100):\n    if os.fork() == 0:\n        os.pause()\n'
+    assert 'BlockingIOError' in await run_jailed(resources, user, forks)  # at most a few dozen processes
+    tmp = "for n in range(4):\n    open(f'/tmp/{n}', 'wb').write(bytes(90 * 2**20))"
+    assert 'No space left on device' in await run_jailed(resources, user, tmp)  # /tmp is small
 
     code = "import subprocess\nsubprocess.Popen(['sleep', '6123'], start_new_session=True)\nprint('started')"
     assert await run_jailed(resources, user, code) == 'started'
@@ -176,3 +190,28 @@ class TestJailConformance(WorkspaceBackendSuite):
         with anyio.fail_after(60):
             while running(f'36{marker}'):
                 await anyio.sleep(0.05)
+
+
+async def test_what_the_jail_leaves_cannot_lead_the_app_out(resources: Any) -> None:
+    """Links and FIFOs the code makes stay in the user's files: Monty's calls refuse them, and do not hang."""
+    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    await save_download(resources.workspaces.files(a), 'a.csv', b'only for A')
+    other = resources.workspaces.directory(a) / 'downloads' / 'a.csv'
+    code = f"import os\nos.symlink({str(other)!r}, 'a.csv')\nos.symlink('/etc', 'etc')\nos.mkfifo('pipe')\nprint('ok')"
+    assert await run_jailed(resources, b, code) == 'ok'
+
+    files = resources.workspaces.files(b)
+
+    async def call(name: str, *args: Any) -> Any:
+        paths = tuple(PurePosixPath(a) if isinstance(a, str) else a for a in args[:1]) + args[1:]
+        return await files(name=name, args=paths, kwargs={}, is_async=True)
+
+    for path in ['/work/a.csv', '/work/etc/passwd']:
+        with pytest.raises(PermissionError):
+            await call('Path.read_text', path)
+    with anyio.fail_after(10):
+        for name in ['Path.write_text', 'Path.append_text']:
+            with pytest.raises(OSError, match='not a regular file'):
+                await call(name, '/work/pipe', 'x')
+        with pytest.raises(OSError):
+            await call('Path.read_text', '/work/pipe')

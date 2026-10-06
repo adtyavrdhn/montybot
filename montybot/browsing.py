@@ -95,14 +95,14 @@ class Session:
         downloads = await self.browser.take_downloads(run_id=self.run_id, user_id=self.user_id)
         if not downloads:
             return
-        workspace = self.resources.workspaces.of(self.user_id)
+        files = self.resources.workspaces.files(self.user_id)
         for download in downloads:
             name = download_name(download.name)
             if download.too_large or len(download.data) > MAX_DOWNLOAD_BYTES:
                 self.downloaded.append(f'Download not saved: {name} is over {MAX_DOWNLOAD_BYTES >> 20} MB.')
                 continue
             try:
-                path = await save_download(workspace, download.name, download.data)
+                path = await save_download(files, download.name, download.data)
             except (OSError, WorkspaceError) as error:  # such as a file the code made where the folder goes
                 reason = error.strerror if isinstance(error, OSError) and error.strerror else 'it could not be written'
                 self.downloaded.append(f'Download not saved: {name}: {reason}.')

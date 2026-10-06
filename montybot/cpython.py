@@ -15,14 +15,17 @@ What the jail sees:
 
 - **Files:** the system's programs and libraries (`/usr`, `/bin`, `/lib`, `/etc`), read-only, and the user's directory,
   writable, as its working directory. Every other top-level folder (`/home`, `/root`, `/data`, `/app`, `/opt`,
-  `/var`...) is an empty tmpfs, so neither other users' files nor the app's own (its settings file, its sign-ins) are
-  there. `/tmp` and `/run` are empty too.
+  `/var`...), the folder of all users' files and the app's own folder are empty and read-only, wherever they are, so
+  neither other users' files nor the app's (its settings file, its sign-ins) are there. `/tmp` is empty and small.
 - **Environment:** `PATH`, `LANG` and a `HOME` in `/tmp`; nothing of the app's. `/proc` shows only the jail's own
   processes, so the app's environment cannot be read there either.
 - **Network:** none (`BubblewrapWorkspace(network=False)`: its own network namespace, and a seccomp filter against
   sockets to other processes).
-- **Limits:** CPU seconds, address space and file size (`setrlimit`, hard, before the code runs; the jail has no
-  capabilities to raise them), and a wall-clock timeout that kills it.
+- **Limits:** CPU seconds, address space, file size and processes (`setrlimit`, hard, before the code runs; the jail
+  has no capabilities to raise them), a small `/tmp`, and a wall-clock timeout that kills it. These are per process;
+  a cgroup per call would cap the whole call's memory and CPU, which the server's container does not offer yet.
+- **The user's files:** the call holds the user's lock (`Workspaces.lock`), so Monty's file calls and downloads wait
+  until the jail is gone and never meet a link it is swapping.
 
 Linux with `bwrap` only. Elsewhere `run_python` says it is not available, and the tests that need it are skipped.
 """
@@ -32,10 +35,11 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from pathlib import Path
 
 from dbos import DBOS
 from pydantic_ai import FunctionToolset, RunContext
-from pydantic_ai.workspaces import WorkspaceError, WorkspaceTimeoutError
+from pydantic_ai.workspaces import WorkspaceError, WorkspaceOutputLimitError, WorkspaceTimeoutError
 from pydantic_ai_harness.bubblewrap_sandbox import BubblewrapWorkspace
 
 from montybot.deps import RunDeps
@@ -46,6 +50,10 @@ from montybot.workspaces import Workspaces
 OUTPUT_LIMIT = 20_000
 FILE_LIMIT = 100 << 20
 """The largest file the code may write, in bytes."""
+TMP_BYTES = 256 << 20
+"""The size of the jail's `/tmp`, which is memory."""
+PROCESSES = 32
+"""Processes and threads the code may have at once, so its memory is at most this many times `cpython_memory_mb`."""
 CODE_LIMIT = 100_000
 """Characters of code per call: it travels on the command line, which caps one argument at 128 KiB."""
 
@@ -55,7 +63,13 @@ are the jail's own."""
 
 LIMITS = """\
 import resource, sys
-for which, value in ((resource.RLIMIT_CPU, {cpu}), (resource.RLIMIT_AS, {memory}), (resource.RLIMIT_FSIZE, {size})):
+limits = (
+    (resource.RLIMIT_CPU, {cpu}),
+    (resource.RLIMIT_AS, {memory}),
+    (resource.RLIMIT_FSIZE, {size}),
+    (resource.RLIMIT_NPROC, {processes}),
+)
+for which, value in limits:
     resource.setrlimit(which, (value, value))
 code = sys.argv.pop(1)
 sys.argv[0] = 'run_python'
@@ -74,12 +88,16 @@ def can_jail() -> bool:
     return sys.platform == 'linux' and shutil.which('bwrap') is not None
 
 
-def hidden_folders() -> list[str]:
-    """Every top-level folder but the ones in `KEPT`, to cover with an empty tmpfs."""
+def hidden_folders(workspaces_root: Path) -> list[str]:
+    """The folders to cover with an empty, read-only tmpfs, parents first: every top-level folder but the ones in
+    `KEPT` (and where a top-level link points), and wherever the users' files and the app's own folder are, even if
+    that is under a kept one."""
+    folders = {os.path.realpath(f'/{name}') for name in os.listdir('/') if name not in KEPT}
+    folders |= {str(workspaces_root.resolve()), os.getcwd()}
+    kept = {'/', *(f'/{name}' for name in KEPT)}
     return sorted(
-        path
-        for name in os.listdir('/')
-        if name not in KEPT and os.path.isdir(path := f'/{name}') and not os.path.islink(path)
+        (f for f in folders if f not in kept and os.path.isdir(f) and not f.startswith(('/proc/', '/dev/', '/sys/'))),
+        key=lambda f: (f.count('/'), f),
     )
 
 
@@ -87,11 +105,14 @@ def jail_of(workspaces: Workspaces, user_id: str) -> BubblewrapWorkspace:
     """A jail on the user's directory. Its `run` starts a new one for each command."""
     workspace = workspaces.of(user_id)
     directory = str(workspaces.directory(user_id).resolve())
-    hide = [arg for folder in hidden_folders() for arg in ('--tmpfs', folder)]
-    # Mounts apply in order: hide the folders, then bring the user's directory back on top.
-    return BubblewrapWorkspace(
-        workspace, network=False, bwrap_args=['--unshare-pid', *hide, '--bind', directory, directory]
-    )
+    hidden = [f for f in hidden_folders(workspaces.root) if not (f + '/').startswith(directory + '/')]
+    # Mounts apply in order: a small /tmp, empty folders over the hidden ones, the user's directory on top, then the
+    # empty folders made read-only, so nothing can be written but the user's files and /tmp.
+    args = ['--unshare-pid', '--size', str(TMP_BYTES), '--tmpfs', '/tmp']
+    args += [arg for folder in hidden for arg in ('--tmpfs', folder)]
+    args += ['--bind', directory, directory]
+    args += [arg for folder in [*hidden, '/run', '/dev'] for arg in ('--remount-ro', folder)]
+    return BubblewrapWorkspace(workspace, network=False, bwrap_args=args)
 
 
 def shown(stdout: str, stderr: str, exit_code: int | None) -> str:
@@ -110,14 +131,19 @@ async def run_jailed(resources: Resources, user_id: str, code: str) -> str:
         return 'Error: Python with packages is not available on this server; use `run_code`.'
     if len(code) > CODE_LIMIT:
         return f'Error: the code is over {CODE_LIMIT} characters; write it in smaller steps.'
-    limits = LIMITS.format(cpu=settings.cpython_cpu_seconds, memory=settings.cpython_memory_mb << 20, size=FILE_LIMIT)
+    limits = LIMITS.format(
+        cpu=settings.cpython_cpu_seconds, memory=settings.cpython_memory_mb << 20, size=FILE_LIMIT, processes=PROCESSES
+    )
     jail = jail_of(resources.workspaces, user_id)
     try:
-        result = await jail.run(
-            [settings.cpython, '-I', '-c', limits, code],
-            env={'HOME': '/tmp', 'OPENBLAS_NUM_THREADS': '1'},
-            timeout=settings.cpython_timeout_seconds,
-        )
+        async with resources.workspaces.lock(user_id):  # no file call of the user's runs meanwhile
+            result = await jail.run(
+                [settings.cpython, '-I', '-c', limits, code],
+                env={'HOME': '/tmp', 'OPENBLAS_NUM_THREADS': '1'},
+                timeout=settings.cpython_timeout_seconds,
+            )
+    except WorkspaceOutputLimitError as error:
+        return shown(error.stdout, error.stderr, None) + '\nError: too much output; write it to a file and print less'
     except WorkspaceTimeoutError as error:
         return (
             shown(error.stdout, error.stderr, None)

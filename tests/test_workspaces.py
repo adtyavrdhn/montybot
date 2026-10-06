@@ -33,10 +33,12 @@ async def call(files: WorkspaceFiles, name: str, *args: Any, **kwargs: Any) -> A
 
 async def test_downloads_keep_one_copy_and_never_overwrite(workspaces: Workspaces) -> None:
     workspace = workspaces.of(str(uuid.uuid4()))
-    assert await save_download(workspace, 'export.csv', b'one') == '/work/downloads/export.csv'
-    assert await save_download(workspace, 'export.csv', b'one') == '/work/downloads/export.csv'  # a repeat
-    assert await save_download(workspace, 'export.csv', b'two') == '/work/downloads/export (2).csv'
-    assert await save_download(workspace, '../../.bashrc', b'x') == '/work/downloads/bashrc'
+    assert await save_download(WorkspaceFiles(workspace), 'export.csv', b'one') == '/work/downloads/export.csv'
+    assert (
+        await save_download(WorkspaceFiles(workspace), 'export.csv', b'one') == '/work/downloads/export.csv'
+    )  # a repeat
+    assert await save_download(WorkspaceFiles(workspace), 'export.csv', b'two') == '/work/downloads/export (2).csv'
+    assert await save_download(WorkspaceFiles(workspace), '../../.bashrc', b'x') == '/work/downloads/bashrc'
     assert len(download_name('發票' * 200 + '.pdf').encode()) <= 200
 
 

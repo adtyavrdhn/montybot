@@ -159,7 +159,7 @@ async def test_one_run_at_a_time_holds_a_users_sign_ins(pool: Pool) -> None:
 async def test_user_b_cannot_reach_user_a_files(tmp_path: Path) -> None:
     workspaces = Workspaces(tmp_path)
     a, b = str(uuid.uuid4()), str(uuid.uuid4())
-    saved = await save_download(workspaces.of(a), 'invoice.csv', b'item,quantity,unit_price\n')
+    saved = await save_download(workspaces.files(a), 'invoice.csv', b'item,quantity,unit_price\n')
     assert saved == '/work/downloads/invoice.csv'
     b_files = WorkspaceFiles(workspaces.of(b))
 
