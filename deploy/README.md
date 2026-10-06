@@ -221,3 +221,18 @@ It ran on colima's Ubuntu 24.04 arm64 VM with the AppArmor profile installed.
 - Backups stay on the server's disk, and cover Postgres only: the users' files (the `workspaces` volume) and the
   Claude Code sign-in (`claude-code`) are not in them.
 - One app process (`EXECUTOR_ID=vm-1`); more would each need their own id.
+
+
+## Jev and Logfire keys
+
+Add `TYPESAFE_API_KEY` and `LOGFIRE_TOKEN` in the repository's Actions secrets. Only the trusted main deploy
+receives them. `deploy/update-secrets.py` sends nonempty values over SSH stdin and atomically updates the VM's
+owner-only `.env`; unset repo secrets do not erase existing VM values. Tokens must use letters, digits or
+`_.:/+=-`; malformed updates fail rather than interpolating shell syntax. No secrets enter image layers.
+
+On the VM, set `JEV_ENABLED=true` to expose optional intent and navigation-advice tools, then deploy/restart.
+The default is off. `JEV_MODEL=jev-latest` is an evaluation alias; pin a version after testing.
+`JEV_THRESHOLD` applies to the probability of the chosen field value, not provider sureness. A missing key,
+metadata, timeout or uncertain decision falls back to the normal agent. Jev never clicks or grants approval.
+It receives up to three user requests for intent and up to 20 unique link labels for navigation, not form values
+or page prose. It is advisory, not a replacement for the code-writing agent; no latency improvement is claimed.

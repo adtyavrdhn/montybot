@@ -12,6 +12,8 @@ echo "Deploying $commit to $target"
 # shellcheck disable=SC2086
 git archive --format=tar HEAD | ssh $ssh_opts "$target" 'rm -rf ~/montybot-release && mkdir ~/montybot-release && tar -x -C ~/montybot-release'
 
+python3 deploy/update-secrets.py "$target"
+
 # shellcheck disable=SC2086
 ssh $ssh_opts "$target" COMMIT="$commit" DOMAIN="${DOMAIN:-}" sh -s <<'REMOTE'
 set -eu

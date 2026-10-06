@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     secure_cookies: bool = False
     """Mark the session cookie `Secure`; on behind TLS."""
 
+    typesafe_api_key: SecretStr | None = None
+    jev_enabled: bool = False
+    jev_model: str = 'jev-latest'
+    """Use a versioned Jev model after calibrating the threshold; the alias is for initial evaluation only."""
+    jev_threshold: float = Field(default=0.8, ge=0, le=1)
+    jev_timeout_seconds: float = Field(default=3, gt=0, le=30)
+
     model: str = 'claude-code:claude-opus-5-5'
     """A Pydantic AI model name; `claude-code:NAME` for a Claude Code subscription model (sign in with
     `montybot claude-code-login`); or `script:module:attribute` for a `Model` object, which is how tests script the
