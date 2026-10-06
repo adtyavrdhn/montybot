@@ -182,7 +182,7 @@ def test_streaming_preview_and_completed_model_step_survive_recovery(app: App, c
     assert counter.read_text().splitlines() == ['1', '1', '1']
 
 
-def test_streaming_failure_reconciles_preview_and_reconnect(client: Client, tmp_path: Path) -> None:
+def test_streaming_failure_reconciles_preview_and_reconnect(app: App, client: Client, tmp_path: Path) -> None:
     from montybot.workflows import FAILURE_NOTICE
 
     client.sign_up()
@@ -209,3 +209,14 @@ def test_streaming_failure_reconciles_preview_and_reconnect(client: Client, tmp_
         {'role': 'user', 'text': prompt},
         {'role': 'assistant', 'text': FAILURE_NOTICE},
     ]
+    log = app.log.read_text()
+    leaked = [
+        name
+        for name, sentinel in {
+            'prompt': prompt,
+            'partial': PARTIAL,
+            'exception': 'private-provider-error-sentinel',
+        }.items()
+        if sentinel in log
+    ]
+    assert leaked == []  # Report category names only, never dump private log content.
