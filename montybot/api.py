@@ -148,6 +148,8 @@ async def list_threads(request: Request, user: User) -> Response:
 @auth.signed_in
 async def read_thread(request: Request, user: User) -> Response:
     async with resources_of(request).pool.connection() as connection:
+        # History and status must describe the same instant, even if a workflow finishes between the reads.
+        await connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
         thread = await store.get_thread(connection, user.id, request.path_params['thread_id'])
         if thread is None:
             return NOT_FOUND
