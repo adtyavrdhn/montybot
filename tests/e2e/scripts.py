@@ -52,6 +52,10 @@ def call(tool: str, **args: object) -> ModelResponse:
     return ModelResponse(parts=[ToolCallPart(tool_name=tool, args=args)])
 
 
+def run(code: str) -> ModelResponse:
+    return call('run_code', code=code)
+
+
 def say(text: str) -> ModelResponse:
     return ModelResponse(parts=[TextPart(text)])
 
@@ -77,29 +81,85 @@ def favourite_colour(turn: Turn) -> ModelResponse:
 
 
 def order_eggs(turn: Turn) -> ModelResponse:
+    if turn.returns and turn.returns[-1].tool_name == 'run_code' and '\nError: ' in '\n' + turn.last:
+        return say(f'My code failed: {turn.last}')
     if not turn.returns:
-        return call('open_page', url=f'{turn.url}/')
-    if turn.last.find('Title: Sign in') != -1 and not turn.called('hand_off'):
+        # `shop` is used again after the hand-off: Monty keeps the session's variables across the pause.
+        return run(f"shop = {turn.url!r}\nawait goto(shop + '/')\nprint(await click('#add-eggs'))")
+    if 'Title: Sign in' in turn.last:
+        if turn.called('hand_off'):
+            return say('You are still not signed in, so I stopped.')
         return call('hand_off', reason='Please sign in to the shop, then hand the browser back.')
     if 'In cart: eggs' not in turn.last and not turn.called('commit'):
-        return call('click', target='#add-eggs')
+        return run("await goto(shop + '/')\nprint(await click('#add-eggs'))")
     if not turn.called('commit'):
         return call('commit', target='#place-order', description='Place the order for eggs ($3.20)')
     result = turn.result_of('commit')
-    if 'Order #' not in result:
+    order = re.search(r'Order #\d+: [a-z, ]+, \$\d+\.\d\d', result)
+    if order is None:
         return say(f'I did not place the order. {result}')
-    return say(f'Done. {line_with(result, "Order #")}')
+    return say(f'Done. {order.group(0)}')
+
+
+# One snippet reads every page of results and works out the answer in Monty.
+CHEAPEST_FLIGHTS = """
+import re
+page = await goto(site + '/')
+page = await click('#search')
+rows = []
+while True:
+    rows += re.findall(r'([A-Z0-9]{2} \\d{3,4})\\W+(\\d\\d:\\d\\d)\\W+€\\s?(\\d+)', page)
+    if 'Next page' not in page:
+        break
+    page = await click('#next')
+best = sorted(rows, key=lambda row: int(row[2]))[:3]
+for flight, departs, price in best:
+    print(f'| {flight} | {departs} | €{price} |')
+"""
+
+
+def cheapest_flights(turn: Turn) -> ModelResponse:
+    if not turn.returns:
+        return run(f'site = {turn.url!r}' + CHEAPEST_FLIGHTS)
+    return say(
+        f'The three cheapest flights to Lisbon next Friday:\n\n| Flight | Departs | Price |\n|---|---|---|\n{turn.last}'
+    )
+
+
+def todays_offer(turn: Turn) -> ModelResponse:
+    if not turn.returns:
+        return run(f'print(await goto({turn.url + "/"!r}))')
+    if 'Press and hold' in turn.last and not turn.called('hand_off'):
+        return call(
+            'hand_off', reason='The store wants a press-and-hold check. Please hold the button, then hand back.'
+        )
+    offer = line_with(turn.last, 'Today only')
+    return say(offer.strip(' -') if offer else f'I could not get past the check. {turn.last}')
 
 
 def fail(turn: Turn) -> ModelResponse:
     raise RuntimeError('the model provider is down')
 
 
+def order_from_code(turn: Turn) -> ModelResponse:
+    """Tries to place the order from code, which skips the approval; the browser functions refuse."""
+    if not turn.returns:
+        return run(f"shop = {turn.url!r}\nawait goto(shop + '/')\nprint(await click('#add-eggs'))")
+    if 'Title: Sign in' in turn.last and not turn.called('hand_off'):
+        return call('hand_off', reason='Please sign in to the shop, then hand the browser back.')
+    if turn.called('run_code') < 2:
+        return run("await goto(shop + '/')\nawait click('#add-eggs')\nprint(await click('#place-order'))")
+    return say(turn.last)
+
+
 SCRIPTS: dict[str, Script] = {
+    'Order eggs straight from code at': order_from_code,
     'Fail please': fail,
     'Say hello': hello,
     'Ask me my favourite colour': favourite_colour,
     'Order eggs from': order_eggs,
+    'Find the three cheapest flights to Lisbon next Friday': cheapest_flights,
+    'What is on offer today at': todays_offer,
 }
 
 

@@ -34,8 +34,23 @@ class Settings(BaseSettings):
     browser_backend: str = 'montybot.browser.fake:FakeBrowser'
     """`module:attribute` of a callable that makes a closed `BrowserBackend` for one run."""
     browser_idle_timeout_seconds: float = 10 * 60
+    monty_url: str | None = None
+    """Full Monty: monty-server's WebSocket URL, such as `ws://monty-server:8000`. Unset: Monty in local
+    subprocesses."""
+    code_timeout_seconds: float = 600
+    """The longest one `run_code` call may take, browser calls included."""
+    code_compute_seconds: float = 60
+    """The longest one `run_code` call may compute, not counting time waiting on the browser."""
     allow_private_networks: bool = False
     """Let the agent open loopback and private addresses. Only for local fixture sites in tests."""
+
+    vapid_private_key: SecretStr | None = None
+    """Web push: the private key from `montybot keys`. Unset: no push notifications."""
+    vapid_public_key: str | None = None
+    vapid_subject: str = 'mailto:montybot@example.com'
+    smtp_url: str | None = None
+    """Email: `smtp://user:password@host:25`, `smtp+starttls://...:587` or `smtps://...:465`. Unset: no email."""
+    mail_from: str = 'monty-bot <montybot@example.com>'
 
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""

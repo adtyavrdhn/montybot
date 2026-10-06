@@ -7,6 +7,7 @@ Playwright runs our wrapper script, the CDP pipe survives the `exec`, and everyt
 
 from __future__ import annotations
 
+import os
 import shutil
 import struct
 import sys
@@ -165,6 +166,9 @@ async def check_server_launch(backend: ChromiumBackend, site: Site) -> Path:
 
 
 @pytest.mark.skipif(sys.platform == 'linux', reason='headed Chrome under the stand-in Xvfb needs a real screen')
+@pytest.mark.skipif(
+    os.environ.get('MONTYBOT_HEADED') != '1', reason='opens a real window on this desktop; set MONTYBOT_HEADED=1 to run'
+)
 async def test_server_launch_with_stand_ins(tmp_path: Path) -> None:
     log = tmp_path / 'bwrap-args'
     options = ChromiumOptions.server(

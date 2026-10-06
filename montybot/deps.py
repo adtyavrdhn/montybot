@@ -19,11 +19,20 @@ class Asked:
         return self.count
 
 
+@dataclass
+class CodeState:
+    """The run's Monty session between `run_code` calls: an id in monty-server's store (or bytes, locally). Set from
+    each `run_code` step's recorded result, so a replay restores it."""
+
+    state: bytes | None = None
+
+
 @dataclass(frozen=True)
 class RunDeps:
     resources: Resources
     run: Run
     asked: Asked = field(default_factory=Asked)
+    code: CodeState = field(default_factory=CodeState)
 
     @property
     def user_id(self) -> str:

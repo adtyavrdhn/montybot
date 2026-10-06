@@ -11,24 +11,29 @@ Chromium, DBOS for schedules, and hand-off to the user when the agent gets stuck
 ## Run it
 
 ```bash
-docker compose up -d          # Postgres
+docker compose up -d          # Postgres, monty-server and monty-worker
 cp .env.example .env          # then set SESSION_SECRET and your model's API key
 uv run montybot serve         # http://127.0.0.1:8000
 ```
 
 The app is Starlette plus DBOS in one process (`montybot/app.py`, `montybot/workflows.py`). A run is a DBOS workflow:
 model requests and browser calls are steps, and questions, approvals and hand-offs wait in `DBOS.recv`
-(`montybot/approvals.py`). The browser contract and service are in [`montybot/browser/`](montybot/browser/README.md).
+(`montybot/approvals.py`). The agent's code runs in Monty through `run_code` (`montybot/code.py`), with the browser
+as host functions; with `MONTY_URL` set it runs on Full Monty. The browser contract and service are in [`montybot/browser/`](montybot/browser/README.md).
 
 ## Tests
 
 ```bash
-uv run pytest       # unit tests, and end-to-end tests with the fake browser
+uv run pytest                                   # unit tests, and end-to-end tests with the fake browser
+uv run pytest tests/e2e --browser=chromium      # the same end-to-end tests in real (headless) Chrome
+uv run pytest -m u2                             # one user path (u1 ... u6)
+MONTYBOT_TEST_MODEL=anthropic:claude-sonnet-4-5 uv run pytest tests/e2e --browser=chromium --live   # nightly
 ```
 
 End-to-end tests run the real app in its own process against Postgres (`MONTYBOT_TEST_POSTGRES`, or a container they
-start with Docker), the fixture sites in `tests/sites`, a scripted model (`tests/e2e/scripts.py`) and a scripted
-human who drives hand-offs through the live-view API.
+start with Docker), the fixture sites in `tests/sites` (one per user path), a scripted model (`tests/e2e/scripts.py`)
+and a scripted human who drives hand-offs through the live-view API. With `MONTYBOT_TEST_MODEL` the same tests run
+against a real model; `--live` adds real sites (`tests/e2e/test_live.py`).
 
 ## Notes
 

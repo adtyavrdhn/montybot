@@ -19,12 +19,13 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from http.cookies import SimpleCookie
 from urllib.parse import urlencode, urljoin, urlsplit
 
 from montybot.browser.contract import Action, Click, MouseDown, MouseUp, Press, Ref, Selector
-from montybot.browser.fake import FakeBrowser, FakeElement, FakePage
+from montybot.browser.fake import VIEWPORT_HEIGHT, VIEWPORT_WIDTH, FakeBrowser, FakeElement, FakePage
 from montybot.browser.state import BLANK_URL, Cookie
 
 ENGINE = 'fake (html)'
@@ -40,6 +41,10 @@ class HtmlElement(FakeElement):
     """`data-post`: clicking POSTs to this path."""
     hold_ms: int | None = None
     """`data-hold-ms`: a press-and-hold button that POSTs `post` once held this long."""
+    box: tuple[float, float, float, float] | None = None
+    """Where a fixed-position element sits, as fractions of the viewport (left, top, right, bottom), from its
+    `style`. The only layout this engine knows."""
+    autofocus: bool = False
 
 
 @dataclass
@@ -70,6 +75,8 @@ class _Parser(HTMLParser):
             self._in_title = True
         elif tag in BLOCKS:
             self.text.append('\n')
+        elif tag in ('td', 'th'):
+            self.text.append(' | ')
         if tag == 'form':
             self.forms.append(Form(a.get('method', 'get').lower(), a.get('action', ''), {}))
             self._form = len(self.forms) - 1
@@ -79,7 +86,8 @@ class _Parser(HTMLParser):
                 if self._form is not None:
                     self.forms[self._form].hidden[a.get('name', '')] = a.get('value', '')
                 return
-            label = a.get('aria-label') or a.get('placeholder') or a.get('name') or kind
+            label = a.get('aria-label') or (a.get('value') if kind == 'submit' else '') or a.get('placeholder')
+            label = label or a.get('name') or kind
             self.elements.append(
                 HtmlElement(
                     selector=_selector(a, len(self.elements)),
@@ -90,6 +98,7 @@ class _Parser(HTMLParser):
                     form=self._form,
                     field_name=a.get('name'),
                     submits=kind == 'submit',
+                    autofocus='autofocus' in a,
                 )
             )
         elif tag in ('a', 'button'):
@@ -103,6 +112,7 @@ class _Parser(HTMLParser):
                 submits=tag == 'button' and a.get('type', 'submit') == 'submit' and self._form is not None,
                 post=a.get('data-post') or None,
                 hold_ms=int(hold) if hold else None,
+                box=_box(a.get('style', '')),
             )
             self._label = []
 
@@ -132,6 +142,18 @@ class _Parser(HTMLParser):
             self._label.append(data)
 
 
+def _box(style: str) -> tuple[float, float, float, float] | None:
+    """`left`, `top`, `width` and `height` in percent from a `position:fixed` style, else None."""
+    rules = dict(rule.split(':', 1) for rule in style.replace(' ', '').split(';') if ':' in rule)
+    if rules.get('position') != 'fixed':
+        return None
+    try:
+        left, top, width, height = (float(rules[k].removesuffix('%')) / 100 for k in ('left', 'top', 'width', 'height'))
+    except (KeyError, ValueError):
+        return None
+    return left, top, left + width, top + height
+
+
 def _selector(attrs: dict[str, str], index: int) -> str:
     if attrs.get('id'):
         return f'#{attrs["id"]}'
@@ -145,17 +167,37 @@ def _visible_text(chunks: list[str]) -> str:
     return '\n'.join(line for line in lines if line)
 
 
+def _expiry(max_age: str, expires: str) -> float:
+    """Seconds since the epoch, or -1 for a session cookie. `Max-Age` wins over `Expires`; zero or less is past."""
+    if max_age:
+        try:
+            return time.time() + int(max_age) if int(max_age) > 0 else 0
+        except ValueError:
+            pass
+    if expires:
+        try:
+            return parsedate_to_datetime(expires).timestamp()
+        except (TypeError, ValueError):
+            pass
+    return -1
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args: object, **kwargs: object) -> None:
         return None
 
 
-_opener = urllib.request.build_opener(_NoRedirect)
+_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
 
 
 class HtmlBrowser(FakeBrowser):
     def __init__(self) -> None:
+        self.downloads: list[tuple[str, bytes]] = []
+        """What links and forms downloaded instead of showing, in order. Downloads into the run's files are #21."""
         super().__init__(engine=ENGINE)
+
+    def _reset(self) -> None:
+        super()._reset()
         self.forms: list[Form] = []
         self._held_since: float | None = None
 
@@ -186,8 +228,13 @@ class HtmlBrowser(FakeBrowser):
                 self._set_cookie(url, value)
             if status in (301, 302, 303, 307, 308) and headers.get('Location'):
                 url = urljoin(url, headers['Location'])
-                method, form = 'GET', None
+                if status in (301, 302, 303):  # 307 and 308 repeat the request as it was
+                    method, form = 'GET', None
                 continue
+            kind = headers.get('Content-Type', '').split(';')[0].strip()
+            if 'attachment' in headers.get('Content-Disposition', '') or kind not in ('text/html', ''):
+                self.downloads.append((url, body))  # a browser saves it and stays on the page
+                return
             self._show(url, body.decode(errors='replace'))
             return
         raise RuntimeError('too many redirects')
@@ -203,7 +250,7 @@ class HtmlBrowser(FakeBrowser):
             elements=list(parser.elements),
             on_action=self._on_action,
         )
-        self.focused = next((e for e in parser.elements if e.role == 'textbox'), None)
+        self.focused = next((e for e in parser.elements if e.autofocus), None)
         self._refs = None
 
     def _set_cookie(self, url: str, header: str) -> None:
@@ -211,12 +258,14 @@ class HtmlBrowser(FakeBrowser):
         parsed.load(header)
         host = urlsplit(url).hostname or ''
         for name, morsel in parsed.items():
-            max_age = morsel['max-age']
-            expires = time.time() + int(max_age) if max_age else -1
+            expires = _expiry(morsel['max-age'], morsel['expires'])
+            domain = morsel['domain'].lstrip('.')
+            if domain and host != domain and not host.endswith('.' + domain):
+                continue  # a site may not set cookies for another
             cookie = Cookie(
                 name=name,
                 value=morsel.value,
-                domain=morsel['domain'] or host,
+                domain=f'.{domain}' if domain else host,
                 path=morsel['path'] or '/',
                 expires=expires,
                 http_only=bool(morsel['httponly']),
@@ -226,8 +275,12 @@ class HtmlBrowser(FakeBrowser):
             self.cookies = [
                 c for c in self.cookies if (c.name, c.domain, c.path) != (cookie.name, cookie.domain, cookie.path)
             ]
-            if max_age != '0':
+            if expires == -1 or expires > time.time():
                 self.cookies.append(cookie)
+
+    def cookies_for(self, url: str) -> list[Cookie]:
+        now = time.time()
+        return [c for c in super().cookies_for(url) if c.expires == -1 or c.expires > now]
 
     # --- what the page's forms and widgets do ---
 
@@ -238,17 +291,22 @@ class HtmlBrowser(FakeBrowser):
                 if isinstance(element, HtmlElement):
                     self._activate(element)
             case Press(key='Enter'):
-                if isinstance(self.focused, HtmlElement) and self.focused.form is not None:
-                    self._submit(self.focused.form)
-                elif isinstance(self.focused, HtmlElement) and self.focused.role in ('button', 'link'):
-                    self._activate(self.focused)
+                focused = self.focused
+                if not isinstance(focused, HtmlElement):
+                    return
+                if focused.role == 'link' and focused.href:
+                    self.load(focused.href)
+                elif focused.role == 'button':
+                    self._activate(focused)
+                elif focused.form is not None:
+                    self._submit(focused.form)  # Enter in a text box submits its form
             case Press(key='Tab'):
                 self._tab('Shift' in action.modifiers)
-            case MouseDown():
-                if self._hold_button() is not None:
+            case MouseDown(at=at):
+                if self._hold_button(at.x, at.y) is not None:
                     self._held_since = time.monotonic()
-            case MouseUp():
-                button, since, self._held_since = self._hold_button(), self._held_since, None
+            case MouseUp(at=at):
+                button, since, self._held_since = self._hold_button(at.x, at.y), self._held_since, None
                 if button is not None and since is not None and self._held_long_enough(button, since):
                     self._request('POST', urljoin(self.url, button.post or ''), {})
             case _:
@@ -276,7 +334,7 @@ class HtmlBrowser(FakeBrowser):
         if form.method == 'post':
             self._request('POST', target, values)
         else:
-            self._request('GET', f'{target}?{urlencode(values)}', None)
+            self._request('GET', urlsplit(target)._replace(query=urlencode(values), fragment='').geturl(), None)
 
     def _tab(self, backwards: bool) -> None:
         focusable = [e for e in self.page.elements if e.role in ('textbox', 'button', 'link')]
@@ -290,8 +348,15 @@ class HtmlBrowser(FakeBrowser):
     def _held_long_enough(button: HtmlElement, since: float) -> bool:
         return bool(button.post) and button.hold_ms is not None and (time.monotonic() - since) * 1000 >= button.hold_ms
 
-    def _hold_button(self) -> HtmlElement | None:
-        return next((e for e in self.page.elements if isinstance(e, HtmlElement) and e.hold_ms is not None), None)
+    def _hold_button(self, x: float, y: float) -> HtmlElement | None:
+        """The press-and-hold button under the point, if there is one there."""
+        fx, fy = x / VIEWPORT_WIDTH, y / VIEWPORT_HEIGHT
+        for element in self.page.elements:
+            if isinstance(element, HtmlElement) and element.hold_ms is not None and element.box is not None:
+                left, top, right, bottom = element.box
+                if left <= fx <= right and top <= fy <= bottom:
+                    return element
+        return None
 
 
 def new_backend() -> HtmlBrowser:
