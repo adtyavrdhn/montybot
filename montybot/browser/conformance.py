@@ -6,7 +6,7 @@ Subclass it in a test module, under a name pytest collects, and say how to make 
         @asynccontextmanager
         async def backend(self, site: Site) -> AsyncGenerator[BrowserBackend]:
             async with async_playwright() as playwright:
-                yield ChromiumBackend(await playwright.chromium.launch())
+                yield ChromiumBackend(playwright=playwright, options=ChromiumOptions(headless=True))
 
 `backend` yields a closed backend; the tests open it. For each feature in `not_supported`, the tests that use it check
 that it raises `NotSupported` instead of doing it.
@@ -21,6 +21,7 @@ of an action needs a working `snapshot()` that includes the page's visible text.
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -281,6 +282,13 @@ def assert_same_state(actual: BrowserState, expected: BrowserState) -> None:
     assert actual.session_storage == expected.session_storage
 
 
+def ref_in(text: str, role: str, name: str) -> Ref:
+    """The ref on the snapshot line `[ref] role "name"`, which every snapshot format prints this way (#13)."""
+    found = re.findall(rf'^\s*\[([^\]]+)\] {re.escape(role)} "{re.escape(name)}"', text, re.MULTILINE)
+    assert len(found) == 1, f'{len(found)} refs for {role} "{name}" in:\n{text}'
+    return Ref(ref=found[0])
+
+
 async def wait_for_text(browser: BrowserBackend, *expected: str, timeout: float = 5) -> str:
     """Poll `snapshot()` until its text contains every `expected` string, and return that text."""
     deadline = time.monotonic() + timeout
@@ -451,6 +459,38 @@ class BrowserBackendConformance(ABC):
                 await wait_for_text(browser, 'typed: hello')
                 await browser.act(Type(text=' world'))
                 await wait_for_text(browser, 'typed: hello world')
+
+    async def snapshot_ref(self, browser: BrowserBackend, role: str, name: str) -> Ref:
+        """The ref for `role "name"` in a new snapshot. A backend without refs prints none, so any ref will do: the
+        test only checks that acting on it raises `NotSupported`."""
+        text = (await browser.snapshot()).text
+        return ref_in(text, role, name) if self.supports('ref') else Ref(ref='1')
+
+    async def test_click_ref(self, site: Site) -> None:
+        async with self.opened(site, BrowserState(url=site.actions)) as browser:
+            ref = await self.snapshot_ref(browser, 'button', 'Press me')
+            if await self.act_or_refuse(browser, Click(target=ref)):
+                await wait_for_text(browser, 'clicked: button')
+
+    async def test_type_ref(self, site: Site) -> None:
+        async with self.opened(site, BrowserState(url=site.actions)) as browser:
+            ref = await self.snapshot_ref(browser, 'textbox', 'Input')
+            if await self.act_or_refuse(browser, Type(text='hello', target=ref)):
+                text = await wait_for_text(browser, 'typed: hello')
+                assert 'value="hello"' in text
+
+    async def test_ref_from_an_earlier_page(self, site: Site) -> None:
+        """A ref never reaches an element on a page loaded after its snapshot."""
+        async with self.opened(site, BrowserState(url=site.actions)) as browser:
+            ref = await self.snapshot_ref(browser, 'button', 'Press me')
+            if not await self.act_or_refuse(browser, Navigate(url=site.actions)):
+                return
+            action = Click(target=ref)
+            if not self.supports(*features_of(action)):
+                assert not await self.act_or_refuse(browser, action)
+                return
+            with pytest.raises(TargetNotFound):
+                await browser.act(action)
 
     async def test_press(self, site: Site) -> None:
         async with self.opened(site, BrowserState(url=site.actions)) as browser:

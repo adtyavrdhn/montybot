@@ -95,6 +95,11 @@ class HandoffNotActive(BrowserError):
     """The call named a hand-off that is not the run's active one: it ended, or never existed."""
 
 
+class UserBusy(BrowserError):
+    """Another run of this user holds the user's saved sign-ins, so this run cannot start a browser from them. One
+    run per user at a time, so two runs never save over each other. Try again when the other run ends."""
+
+
 class BrowserService(Protocol):
     """One browser per run, kept across pauses, with its state saved to the user's jar.
 
@@ -103,7 +108,7 @@ class BrowserService(Protocol):
 
     async def start(self, *, run_id: RunId, user_id: UserId) -> Started:
         """Give the run its browser, started from the user's saved state. Idempotent: a retry of the same run gets
-        the same browser back."""
+        the same browser back. Raises `UserBusy` while another run of the user's holds its sign-ins."""
         ...
 
     async def act(
