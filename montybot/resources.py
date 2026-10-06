@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from dbos import DBOS, DBOSConfig
 from pydantic_ai import Agent
@@ -25,6 +25,9 @@ from montybot.imports import import_object
 from montybot.settings import Settings
 from montybot.signins import PostgresJar, PostgresLease
 
+if TYPE_CHECKING:
+    from montybot.code import MontyRunner
+
 
 @dataclass(frozen=True, kw_only=True)
 class Resources:
@@ -34,6 +37,7 @@ class Resources:
     jar: PostgresJar
     lease: PostgresLease
     agent: Agent[Any, str]
+    monty: MontyRunner
 
 
 _current: Resources | None = None
@@ -60,6 +64,7 @@ def backend_factory(name: str) -> Callable[[], BrowserBackend]:
 async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
     global _current
     from montybot.agent import build_agent  # the agent imports the tools, which import this module
+    from montybot.code import open_monty
 
     await migrate(settings.database_url)
     pool = create_pool(settings.database_url)
@@ -82,8 +87,10 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
         )
     )
     agent = build_agent(load_model(settings.model))
-    async with browser:
-        _current = Resources(settings=settings, pool=pool, browser=browser, jar=jar, lease=lease, agent=agent)
+    async with browser, open_monty(settings) as monty:
+        _current = Resources(
+            settings=settings, pool=pool, browser=browser, jar=jar, lease=lease, agent=agent, monty=monty
+        )
         try:
             DBOS.launch()
             yield _current

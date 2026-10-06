@@ -1,4 +1,5 @@
-"""The agent's browser: thin calls to the browser service, bound to the run's own browser.
+"""The agent's browser: thin calls to the browser service, bound to the run's own browser. Reading and clicking happen
+in Monty (`montybot.code`); the two tools here pause the run or need the user's approval, so they are native tools.
 
 Every call that touches the browser is a DBOS step, so a run that recovers after a restart replays the recorded result
 instead of clicking again. The service keys browsers by run id, so the browser outlives an attempt of the run and
@@ -121,66 +122,6 @@ async def refused_url(url: str, *, allow_private: bool) -> str | None:
         if not address.is_global:
             return 'Error: that address is on a private network, which you cannot open.'
     return None
-
-
-@browser_tools.tool
-async def open_page(ctx: RunContext[RunDeps], url: str) -> str:
-    """Open `url` (absolute, with https://) in your browser and return what the page shows."""
-
-    async def use(session: Session) -> str:
-        refused = await refused_url(url, allow_private=session.resources.settings.allow_private_networks)
-        if refused is not None:
-            return refused
-        await session.activity(f'Opening {host_of(url)}')
-        await session.act(Navigate(url=url))
-        return await session.read()
-
-    return await browser_step(ctx, 'open', use)
-
-
-@browser_tools.tool
-async def read_page(ctx: RunContext[RunDeps]) -> str:
-    """What the current page shows: its text, and numbered refs such as [12] for the things you can click or type
-    into."""
-    return await browser_step(ctx, 'read', lambda session: session.read())
-
-
-@browser_tools.tool
-async def click(ctx: RunContext[RunDeps], target: str) -> str:
-    """Click a ref from the latest page (`12`) or a CSS selector (`#add-eggs`), then return the page.
-
-    Not for anything that spends money or sends something as the user: use `commit` for that."""
-
-    async def use(session: Session) -> str:
-        await session.act(Click(target=target_of(target)))
-        return await session.read()
-
-    return await browser_step(ctx, 'click', use)
-
-
-@browser_tools.tool
-async def type_text(ctx: RunContext[RunDeps], target: str, text: str, press_enter: bool = False) -> str:
-    """Replace the value of a text box (a ref or a CSS selector) with `text`, optionally press Enter, then return the
-    page. Never type passwords: hand the browser to the user instead."""
-
-    async def use(session: Session) -> str:
-        await session.act(Type(text=text, target=target_of(target)))
-        if press_enter:
-            await session.act(Press(key='Enter'))
-        return await session.read()
-
-    return await browser_step(ctx, 'type', use)
-
-
-@browser_tools.tool
-async def press_key(ctx: RunContext[RunDeps], key: str) -> str:
-    """Press one key, such as `Enter`, `Escape` or `ArrowDown`, then return the page."""
-
-    async def use(session: Session) -> str:
-        await session.act(Press(key=key))
-        return await session.read()
-
-    return await browser_step(ctx, 'press', use)
 
 
 @browser_tools.tool(requires_approval=True)

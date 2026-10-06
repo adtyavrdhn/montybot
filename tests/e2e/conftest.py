@@ -133,6 +133,8 @@ def app(database_url: str, request: pytest.FixtureRequest, tmp_path: Path) -> It
         'PYTHONPATH': os.pathsep.join([str(TESTS), os.environ.get('PYTHONPATH', '')]),
         'EXECUTOR_ID': 'local',
         'ALLOW_PRIVATE_NETWORKS': 'true',  # the fixture sites are on 127.0.0.1
+        # Full Monty (monty-server), if the test run names one; local Monty subprocesses otherwise.
+        **({'MONTY_URL': url} if (url := os.environ.get('MONTYBOT_TEST_MONTY_URL')) else {}),
     }
     app = App(env=env, log=tmp_path / 'app.log')
     app.start()
