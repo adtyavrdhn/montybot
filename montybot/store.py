@@ -225,6 +225,14 @@ async def handoff_of(connection: Connection, ask_id: str) -> str | None:
     return None if row is None else row['id']
 
 
+async def lock_open_ask(connection: Connection, ask_id: str) -> bool:
+    """Lock the ask's row for this transaction; True if it is still unanswered."""
+    cursor = await connection.execute(
+        'SELECT 1 FROM montybot.asks WHERE id = %s AND answer IS NULL FOR UPDATE', (ask_id,)
+    )
+    return await cursor.fetchone() is not None
+
+
 async def set_handoff(connection: Connection, ask_id: str, handoff_id: str) -> None:
     await connection.execute(
         "UPDATE montybot.asks SET details = jsonb_set(details, '{handoff_id}', to_jsonb(%s::text)) WHERE id = %s",

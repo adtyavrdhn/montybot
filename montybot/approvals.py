@@ -76,7 +76,8 @@ async def save_browser(resources: Resources, run_id: str, user_id: str) -> None:
     try:
         await resources.browser.save_state(run_id=run_id, user_id=user_id)
     except (UnknownRun, BrowserError):
-        pass  # no browser yet, or one that cannot export: nothing more to keep
+        return  # no browser yet, or one that cannot export: nothing more to keep
+    await resources.lease.acquire(user_id=user_id, run_id=run_id)  # renewed for at least as long as the wait
 
 
 async def open_ask(

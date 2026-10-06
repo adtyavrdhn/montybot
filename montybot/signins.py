@@ -6,7 +6,8 @@ browser service.
   except to the browser service.
 - **Versioned**: each save bumps `version`; the row holds the latest.
 - **One writer at a time**: a run holds the user's lease from its browser's start until it closes. The lease expires
-  (`LEASE_SECONDS`, longer than a run waits for the user) so a run that never ended cannot lock the user out forever.
+  (`LEASE_SECONDS`) so a run that never ended cannot lock the user out forever; a live run renews it on every browser
+  call and before every wait (`montybot.browsing.Session`, `montybot.approvals.save_browser`), and a wait is shorter.
 """
 
 from __future__ import annotations
@@ -15,7 +16,10 @@ import json
 from datetime import timedelta
 from typing import Any
 
+from cryptography.exceptions import InvalidTag
+
 from montybot import crypto
+from montybot.browser.contract import ActionFailed
 from montybot.browser.service import RunId, UserId
 from montybot.browser.state import BrowserState
 from montybot.db import Connection, Pool
@@ -30,36 +34,49 @@ async def user_key(connection: Connection, deployment_key: bytes, user_id: str) 
     if row is None:
         raise LookupError('no such user')
     if row['data_key'] is not None:
-        return crypto.open_sealed(deployment_key, bytes(row['data_key']), user_id=user_id)
+        return crypto.open_sealed(deployment_key, bytes(row['data_key']), label=f'{user_id}:data_key')
     key = crypto.deployment_key(crypto.new_key())
-    sealed = crypto.seal(deployment_key, key, user_id=user_id)
+    sealed = crypto.seal(deployment_key, key, label=f'{user_id}:data_key')
     await connection.execute('UPDATE montybot.users SET data_key = %s WHERE id = %s', (sealed, user_id))
     return key
 
 
+def state_label(user_id: str, version: int) -> str:
+    """Associated data for a saved state: an older version of the same user's row does not open as the current one."""
+    return f'{user_id}:sign_ins:{version}'
+
+
+class UnreadableSignIns(ActionFailed):
+    """The saved sign-ins do not decrypt: the deployment key changed, or the row was altered."""
+
+
 async def load_state(connection: Connection, deployment_key: bytes, user_id: str) -> BrowserState | None:
-    cursor = await connection.execute('SELECT state FROM montybot.sign_ins WHERE user_id = %s', (user_id,))
+    cursor = await connection.execute('SELECT state, version FROM montybot.sign_ins WHERE user_id = %s', (user_id,))
     row = await cursor.fetchone()
     if row is None:
         return None
-    key = await user_key(connection, deployment_key, user_id)
-    data: Any = json.loads(crypto.open_sealed(key, bytes(row['state']), user_id=user_id))
+    try:
+        key = await user_key(connection, deployment_key, user_id)
+        plain = crypto.open_sealed(key, bytes(row['state']), label=state_label(user_id, row['version']))
+    except (InvalidTag, ValueError) as error:
+        raise UnreadableSignIns('the saved sign-ins could not be read; the user needs to sign in again') from error
+    data: Any = json.loads(plain)
     return BrowserState.from_json(data)
 
 
 async def save_state(connection: Connection, deployment_key: bytes, user_id: str, state: BrowserState) -> int:
     """Store `state` as the user's latest. Returns the new version. Call inside a transaction."""
-    key = await user_key(connection, deployment_key, user_id)
-    sealed = crypto.seal(key, json.dumps(state.to_json()).encode(), user_id=user_id)
-    cursor = await connection.execute(
-        'INSERT INTO montybot.sign_ins (user_id, version, state) VALUES (%s, 1, %s) '
-        'ON CONFLICT (user_id) DO UPDATE SET version = montybot.sign_ins.version + 1, state = EXCLUDED.state, '
-        'updated_at = now() RETURNING version',
-        (user_id, sealed),
-    )
+    key = await user_key(connection, deployment_key, user_id)  # locks the user's row, so saves take turns
+    cursor = await connection.execute('SELECT version FROM montybot.sign_ins WHERE user_id = %s', (user_id,))
     row = await cursor.fetchone()
-    assert row is not None
-    return row['version']
+    version = 1 if row is None else row['version'] + 1
+    sealed = crypto.seal(key, json.dumps(state.to_json()).encode(), label=state_label(user_id, version))
+    await connection.execute(
+        'INSERT INTO montybot.sign_ins (user_id, version, state) VALUES (%s, %s, %s) '
+        'ON CONFLICT (user_id) DO UPDATE SET version = EXCLUDED.version, state = EXCLUDED.state, updated_at = now()',
+        (user_id, version, sealed),
+    )
+    return version
 
 
 class PostgresJar:

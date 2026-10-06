@@ -7,6 +7,7 @@ import uuid
 from collections.abc import AsyncIterator
 
 import pytest
+from cryptography.exceptions import InvalidTag
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 from montybot import crypto, memory, signins, store
@@ -89,13 +90,21 @@ async def test_sign_ins_are_encrypted_per_user(pool: Pool) -> None:
         sealed = bytes(row['state'])
         assert b's3cret-session' not in sealed and b'shop.test' not in sealed
 
-        # A's ciphertext in B's row does not open: the user id is bound into it, and the keys differ.
-        await c.execute('INSERT INTO montybot.sign_ins (user_id, version, state) VALUES (%s, 1, %s)', (b.id, sealed))
-    with pytest.raises(Exception):  # noqa: B017  cryptography's InvalidTag
-        await jar.load(user_id=b.id)
+        # The label binds a ciphertext to its user and version: the right key alone does not open it elsewhere.
+        a_key = await signins.user_key(c, KEY, a.id)
+        assert crypto.open_sealed(a_key, sealed, label=signins.state_label(a.id, 2))
+        with pytest.raises(InvalidTag):
+            crypto.open_sealed(a_key, sealed, label=signins.state_label(b.id, 2))
+
+    # An older version put back in place does not load as the current one.
+    async with pool.connection() as c:
+        await jar.save(user_id=a.id, state=BrowserState(url='https://shop.test/'))  # version 3, after forgetting
+        await c.execute('UPDATE montybot.sign_ins SET state = %s WHERE user_id = %s', (sealed, a.id))
+    with pytest.raises(signins.UnreadableSignIns):
+        await jar.load(user_id=a.id)
 
     # Another deployment key opens nothing.
-    with pytest.raises(Exception):  # noqa: B017
+    with pytest.raises(signins.UnreadableSignIns):
         await signins.PostgresJar(pool, crypto.deployment_key(crypto.new_key())).load(user_id=a.id)
 
 

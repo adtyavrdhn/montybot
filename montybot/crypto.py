@@ -6,7 +6,8 @@ ENCRYPTION_KEY (the deployment's key, from the environment; a KMS key later)
        └─ encrypts that user's sign-ins   montybot.sign_ins.state
 ```
 
-AES-256-GCM throughout, with the user's id as associated data, so a ciphertext copied to another user's row does not
+AES-256-GCM throughout. The associated data (`label`) names the user and what the ciphertext is (`<user>:data_key`,
+`<user>:sign_ins:<version>`), so a ciphertext copied to another user's row, or an older version put back, does not
 decrypt. Keys never leave this module in a log or an error message.
 """
 
@@ -41,13 +42,13 @@ def new_key() -> str:
     return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
 
 
-def seal(key: bytes, plaintext: bytes, *, user_id: str) -> bytes:
+def seal(key: bytes, plaintext: bytes, *, label: str) -> bytes:
     nonce = os.urandom(NONCE)
-    return VERSION + nonce + AESGCM(key).encrypt(nonce, plaintext, user_id.encode())
+    return VERSION + nonce + AESGCM(key).encrypt(nonce, plaintext, label.encode())
 
 
-def open_sealed(key: bytes, sealed: bytes, *, user_id: str) -> bytes:
+def open_sealed(key: bytes, sealed: bytes, *, label: str) -> bytes:
     if sealed[:1] != VERSION:
         raise ValueError('unknown ciphertext version')
     nonce, body = sealed[1 : 1 + NONCE], sealed[1 + NONCE :]
-    return AESGCM(key).decrypt(nonce, body, user_id.encode())
+    return AESGCM(key).decrypt(nonce, body, label.encode())

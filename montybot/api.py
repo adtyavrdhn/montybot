@@ -33,6 +33,7 @@ from montybot.browser.state import BLANK_URL
 from montybot.memory import delete_memory, list_memories
 from montybot.models import ACTIVE, Ask, Run, User
 from montybot.resources import Resources
+from montybot.signins import PostgresLease
 
 T = TypeVar('T')
 NOT_FOUND = JSONResponse({'detail': 'not found'}, status_code=404)
@@ -242,13 +243,25 @@ async def on_handoff(request: Request, user: User, use: Callable[[Run, str], Awa
         try:
             return await use(run, str(ask.details['handoff_id']))
         except (UnknownRun, HandoffNotActive):
-            await resources.browser.start(run_id=run.id, user_id=user.id)
-            handoff = await resources.browser.start_handoff(run_id=run.id, user_id=user.id, reason=ask.prompt)
-            async with resources.pool.connection() as connection:
-                await store.set_handoff(connection, ask.id, handoff.handoff_id)
-            return await use(run, handoff.handoff_id)
+            renewed = await renew_handoff(resources, run, ask)
+            if renewed is None:
+                return NOT_FOUND
+            return await use(run, renewed)
     except BrowserError as error:
         return JSONResponse({'detail': str(error)}, status_code=409)
+
+
+async def renew_handoff(resources: Resources, run: Run, ask: Ask) -> str | None:
+    """Start a new hand-off for a run whose browser service lost the old one (it restarted). Done while holding the
+    ask's row, unanswered, so it cannot race the user handing the browser back: an answer waits for this to commit, and
+    the run then ends the hand-off recorded here."""
+    async with resources.pool.connection() as connection, connection.transaction():
+        if not await store.lock_open_ask(connection, ask.id):
+            return None  # answered or expired meanwhile: the run has ended, or is ending, the hand-off
+        await resources.browser.start(run_id=run.id, user_id=run.user_id)
+        handoff = await resources.browser.start_handoff(run_id=run.id, user_id=run.user_id, reason=ask.prompt)
+        await store.set_handoff(connection, ask.id, handoff.handoff_id)
+    return handoff.handoff_id
 
 
 @auth.signed_in
@@ -303,7 +316,8 @@ async def forget_sign_in(request: Request, user: User) -> Response:
     resources = resources_of(request)
     site = str(request.path_params['site'])
     holder = f'forget:{uuid.uuid4()}'
-    if not await resources.lease.acquire(user_id=user.id, run_id=holder):
+    lease = PostgresLease(resources.pool, seconds=60)  # short: a crash here must not lock the user out for long
+    if not await lease.acquire(user_id=user.id, run_id=holder):
         return JSONResponse({'detail': 'a task is using your browser; try again when it has finished'}, 409)
     try:
         state = await resources.jar.load(user_id=user.id)
@@ -321,7 +335,7 @@ async def forget_sign_in(request: Request, user: User) -> Response:
             state.url = BLANK_URL
         await resources.jar.save(user_id=user.id, state=state)
     finally:
-        await resources.lease.release(user_id=user.id, run_id=holder)
+        await lease.release(user_id=user.id, run_id=holder)
     return JSONResponse({'ok': True})
 
 

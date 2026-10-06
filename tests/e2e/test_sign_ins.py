@@ -50,6 +50,13 @@ def test_a_sign_in_is_saved_and_reused(app: App, client: Client, shop: Shop, dat
     assert client.http.delete('/api/sign-ins/127.0.0.1').status_code == 200
     assert client.http.get('/api/sign-ins').json() == []
 
+    # Forgotten: the next order needs the user to sign in again.
+    third = client.ask(f'Order eggs from {shop.url}')
+    sign_in_through_hand_off(client, third)
+    client.answer(client.wait_for_ask(third, 'approval'), approved=False)
+    client.wait_for_reply(third)
+    assert shop.sign_ins == 2
+
     log = app.log.read_text()
     assert 'hunter2' not in log and sid not in log
 
@@ -77,6 +84,8 @@ def test_the_app_is_killed_while_an_approval_waits(app: App, client: Client, sho
     thread = client.ask(f'Order eggs from {shop.url}')
     sign_in_through_hand_off(client, thread)
     approval = client.wait_for_ask(thread, 'approval')
+    # The run holds the user's sign-ins while it waits, so they cannot be changed under it.
+    assert client.http.delete('/api/sign-ins/127.0.0.1').status_code == 409
 
     app.kill()
     app.start()  # replayed steps return their recorded pages; the browser reopens signed in, on the cart
