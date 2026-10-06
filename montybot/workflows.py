@@ -18,6 +18,9 @@ step returns its recorded result instead of running again.
 
 from __future__ import annotations
 
+import asyncio
+from contextvars import Context
+
 import logfire
 from dbos import DBOS, SetWorkflowID, StepOptions, WorkflowHandleAsync
 from dbos._error import DBOSException
@@ -93,9 +96,17 @@ async def _run_thread(run_id: str, *, stream: bool) -> str:
 
 @timed('run.dispatch')
 async def start(run_id: str) -> WorkflowHandleAsync[str]:
-    """Start the run's workflow. Starting it twice is harmless: the second start finds the first."""
+    """Retain a recorded child's identity, including pre-streaming scheduled parents."""
+    # DBOS's async status API records a checkpoint inside a workflow. Inserting
+    # one here would shift a scheduled parent's recorded child-start position.
+    # This public, read-only management query runs with an explicitly empty
+    # context: identity is immutable durable metadata, not a model/tool event.
+    status = await asyncio.get_running_loop().run_in_executor(
+        None, lambda: Context().run(DBOS.get_workflow_status, run_id)
+    )
+    workflow = run_thread if status is not None and status.name == 'montybot.run_thread' else run_thread_stream
     with SetWorkflowID(run_id):
-        return await DBOS.start_workflow_async(run_thread_stream, run_id)
+        return await DBOS.start_workflow_async(workflow, run_id)
 
 
 async def start_run(resources: Resources, run_id: str) -> tuple[Run, bytes, Schedule | None]:
