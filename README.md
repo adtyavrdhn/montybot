@@ -67,3 +67,12 @@ Dated files in [`notes/`](notes/), newest last. Later notes win over earlier one
 - [2026-10-06 monty-bot plan and browser design](<notes/2026-10-06 monty-bot plan and browser design.md>): the goals
   agreed so far (a hosted consumer bot built on Viktor), how the browser and user takeover work on one server, bot
   checks, speed, and milestones. Draft for discussion with Mike.
+
+### Nightly checks with a real model
+
+`.github/workflows/nightly.yml` runs the U1-U6 fixture paths and the small live-site list on Chromium with a real
+model. It is disabled by default to avoid surprise cost. Set the repository variable `ENABLE_NIGHTLY_MODEL_TESTS=true`
+and the Actions secret `ANTHROPIC_API_KEY` to opt in; then use Actions > Nightly user paths > Run workflow, or the nightly
+schedule. Calls are sequential and bounded. A live-site challenge is a signal to inspect, not proof of a completed
+sign-in or checkout. No live page or session artifacts are uploaded. Servo comparison and real bot-check evaluations
+remain the browser-engine issues, not a conclusion drawn from these Chromium checks.
