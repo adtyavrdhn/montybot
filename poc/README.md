@@ -67,6 +67,11 @@ finishing with your login and your item in the cart.
 - **Sites that bind a session to a device or address.** This test runs both sides on one machine. Real retail
   sites score risk by IP address and browser fingerprint. A login made on a home connection and then used from a
   datacenter may be challenged again or revoked. This is the main thing to test against walmart.com.
+- **The local window looks automated.** *Measured:* it reports `navigator.webdriver = true`, even with Playwright's
+  `--enable-automation` flag removed, because Playwright drives it over the CDP pipe. A bot check could flag the user's
+  own sign-in. A likely fix is to seed a throwaway profile headlessly, then start a plain Chrome subprocess on that
+  profile with no debugging connection. The user closes the window to return control, and the state is read back by
+  opening the profile headlessly again. sessionStorage and the Return bar would be lost that way. Not built yet.
 - **Transport.** The state is a set of live credentials. A real deployment needs TLS, and a signed token that is
   short-lived and good for one hand-off only, instead of one shared token on localhost.
 - **Servo.** WebDriver's Add Cookie only works for the current document's domain. A Servo backend would open each
