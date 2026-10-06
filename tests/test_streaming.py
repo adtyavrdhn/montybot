@@ -294,6 +294,8 @@ async def test_final_write_skips_already_finished_run(monkeypatch: pytest.Monkey
     monkeypatch.setattr(store, 'lock_finished', lock)
     monkeypatch.setattr(store, 'append_history', append)
     monkeypatch.setattr(store, 'finish_run', finish)
+    # Main's browser-before-terminal fix is independent of the final-history guard.
+    monkeypatch.setattr(workflows, 'close_browser', AsyncMock())
 
     await workflows.finish_run(resources, run, encoded, 'final answer')
     # The database committed but DBOS did not record the step: execute it again.
