@@ -25,7 +25,7 @@ from montybot import approvals, auth, schedules, store, streaming, workflows
 from montybot.browser.contract import (
     BrowserError,
 )
-from montybot.browser.state import BLANK_URL
+from montybot.browser.state import BLANK_URL, BrowserState
 from montybot.memory import delete_memory, list_memories
 from montybot.models import ACTIVE, Ask, Run, Schedule, User
 from montybot.notifications import TakenEndpoint, add_subscription, remove_subscription
@@ -409,14 +409,22 @@ async def remove_push_subscription(request: Request, user: User) -> Response:
 
 
 def site_of(domain: str) -> str:
-    return domain.lstrip('.')
+    return domain.lstrip('.').rstrip('.').lower()
+
+
+def saved_sites(state: BrowserState) -> set[str]:
+    sites = {site_of(cookie.domain) for cookie in state.cookies}
+    sites.update(
+        host for origin in (*state.local_storage, *state.session_storage) if (host := urlsplit(origin).hostname)
+    )
+    return sites
 
 
 @auth.signed_in
 async def read_sign_ins(request: Request, user: User) -> Response:
     """The sites the user's saved browser holds cookies for. Names only, never values."""
     state = await resources_of(request).jar.load(user_id=user.id)
-    sites = sorted({site_of(c.domain) for c in state.cookies}) if state is not None else []
+    sites = sorted(saved_sites(state)) if state is not None else []
     return JSONResponse([{'site': site} for site in sites])
 
 
@@ -424,21 +432,23 @@ async def read_sign_ins(request: Request, user: User) -> Response:
 async def forget_sign_in(request: Request, user: User) -> Response:
     """Drop the cookies and storage of one site. Refused while a task of the user's is using the browser."""
     resources = resources_of(request)
-    site = str(request.path_params['site'])
+    site = site_of(str(request.path_params['site']))
     holder = f'forget:{uuid.uuid4()}'
     lease = PostgresLease(resources.pool, seconds=60)  # short: a crash here must not lock the user out for long
     if not await lease.acquire(user_id=user.id, run_id=holder):
         return JSONResponse({'detail': 'a task is using your browser; try again when it has finished'}, 409)
     try:
         state = await resources.jar.load(user_id=user.id)
-        if state is None or not any(site_of(c.domain) == site for c in state.cookies):
+        if state is None or site not in saved_sites(state):
             return NOT_FOUND
 
         def of_site(origin: str) -> bool:
             host = urlsplit(origin).hostname or ''
             return host == site or host.endswith('.' + site)
 
-        state.cookies = [c for c in state.cookies if site_of(c.domain) != site]
+        state.cookies = [
+            c for c in state.cookies if site_of(c.domain) != site and not site_of(c.domain).endswith('.' + site)
+        ]
         state.local_storage = {o: items for o, items in state.local_storage.items() if not of_site(o)}
         state.session_storage = {o: items for o, items in state.session_storage.items() if not of_site(o)}
         if of_site(state.url):

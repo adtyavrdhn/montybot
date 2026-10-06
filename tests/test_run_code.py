@@ -208,4 +208,36 @@ if '[1] searchbox "Search"' in page:
     calls.clear()
     out, _ = await run(resources, state, 'await type_text("1", "milk", press_enter=True)\nawait click("2")')
     assert 'Use the `commit` tool' in out
-    assert calls == ['type', 'enter', 'snapshot']
+    assert calls == ['snapshot', 'type', 'enter', 'snapshot']
+
+
+@pytest.mark.parametrize(
+    'snippet',
+    [
+        'await click("#primary")',
+        'await click("3")',
+        'await press_key("Enter")',
+        'await press_key("Control+Enter")',
+        'await press_key("Space")',
+        'await type_text("1", "value", press_enter=True)',
+    ],
+)
+async def test_ordinary_input_cannot_submit_checkout(
+    resources: Any, snippet: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from montybot import code as code_module
+
+    class Checkout:
+        def __init__(self, *args: Any) -> None:
+            self.resources = resources
+            self.url = 'https://93.184.215.14/'
+
+        async def read(self) -> str:
+            return '[1] textbox "Quantity"\n[3] button "Place order"'
+
+        async def act(self, action: Any) -> None:
+            pytest.fail('Unapproved input reached the checkout')
+
+    monkeypatch.setattr(code_module, 'Session', Checkout)
+    out, _ = await run(resources, None, snippet)
+    assert 'commit' in out

@@ -57,9 +57,10 @@ session that keeps its variables for this whole task. Your browser is a set of a
 
 - `await goto(url) -> str`: open a page; returns what it shows, with numbered refs like [12] for things to click.
 - `await read_page() -> str`: the current page again.
-- `await click(target) -> str`: `target` is a ref from the latest page (`"12"`) or a CSS selector (`"#add-eggs"`).
+- `await click(target) -> str`: `target` must be a numbered ref from the latest page (`"12"`), not a CSS selector.
 - `await type_text(target, text, press_enter=False) -> str`: replace a text box's value.
-- `await press_key(key) -> str`: one key, such as `"Enter"` or `"Escape"`.
+- `await press_key(key) -> str`: one key. Enter is only allowed for a just-typed searchbox;
+  other submissions use approval or hand-off. Space activation is not available from code.
 
 Each returns the page afterwards: use that returned snapshot instead of immediately calling `read_page()` again.
 When the next steps are known, do them sequentially in one `run_code` call: open, inspect the returned page, search,
@@ -129,6 +130,7 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
     lock = asyncio.Lock()
     allow_private = session.resources.settings.allow_private_networks
     last_page = ['']
+    search_ready = [False]
 
     async def guarded(use: Callable[[], Awaitable[str]]) -> str:
         async with lock:
@@ -150,6 +152,7 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
     @timed('code.browser.goto')
     async def goto(url: str) -> str:
         async def use() -> str:
+            search_ready[0] = False
             refused = await refused_url(str(url), allow_private=allow_private)
             if refused is not None:
                 raise RuntimeError(refused.removeprefix('Error: '))
@@ -163,19 +166,35 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
     async def read_page() -> str:
         return await guarded(session.read)
 
+    async def current_page() -> str:
+        if not last_page[0]:
+            last_page[0] = await session.read()
+        return last_page[0]
+
+    def line_for_ref(target: str, page: str) -> str:
+        ref = target.strip().strip('[]')
+        return next((line for line in page.splitlines() if line.lstrip(' -').startswith(f'[{ref}]')), '')
+
+    def refuse_submission() -> None:
+        raise RuntimeError('This input can submit an action. Use the `commit` tool for approval or hand_off.')
+
     @timed('code.browser.click')
     async def click(target: str) -> str:
-        if str(target).strip().strip('[]').isdigit() and not last_page[0]:
-            await read_page()  # a ref from an earlier call: read what it names before deciding
-        what = looks_irreversible(str(target), last_page[0])
-        if what is not None:
-            raise RuntimeError(
-                f'{what} looks like it cannot be undone, so it is not clicked from code. '
-                'Use the `commit` tool for it: it asks the user first.'
-            )
-
         async def use() -> str:
-            await session.act(Click(target=target_of(str(target))))
+            search_ready[0] = False
+            ref = str(target).strip().strip('[]')
+            if not ref.isdigit():
+                raise RuntimeError(
+                    'Clicks from code require a numbered ref from read_page, not a CSS selector. '
+                    'Use the `commit` tool for an action requiring approval.'
+                )
+            page = await current_page()
+            if not line_for_ref(ref, page):
+                raise RuntimeError('That ref is not in the current page. Read the page before choosing again.')
+            what = looks_irreversible(ref, page)
+            if what is not None:
+                raise RuntimeError('That control looks like it cannot be undone. Use the `commit` tool for approval.')
+            await session.act(Click(target=target_of(ref)))
             return await session.read()
 
         return await guarded(use)
@@ -183,8 +202,14 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
     @timed('code.browser.type')
     async def type_text(target: str, text: str, press_enter: bool = False) -> str:
         async def use() -> str:
+            page = await current_page()
+            line = line_for_ref(str(target), page)
+            search_ready[0] = ' searchbox ' in line and not IRREVERSIBLE.search(page)
+            if press_enter and not search_ready[0]:
+                refuse_submission()  # do not type first and then refuse: typing itself may trigger site handlers
             await session.act(Type(text=str(text), target=target_of(str(target))))
-            if press_enter is True:
+            if press_enter:
+                search_ready[0] = False
                 await session.act(Press(key='Enter'))
             return await session.read()
 
@@ -193,7 +218,14 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
     @timed('code.browser.press')
     async def press_key(key: str) -> str:
         async def use() -> str:
-            await session.act(Press(key=str(key)))
+            key_text = str(key)
+            activates = any(
+                part.lower() in ('enter', 'return', 'numpadenter', 'space', ' ') for part in key_text.split('+')
+            )
+            if activates and not (key_text == 'Enter' and search_ready[0]):
+                refuse_submission()
+            search_ready[0] = False
+            await session.act(Press(key=key_text))
             return await session.read()
 
         return await guarded(use)
