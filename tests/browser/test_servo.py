@@ -82,7 +82,8 @@ async def test_jailed_servo_reaches_no_private_address_and_no_host_port(site: Si
             assert probe.connect_ex(('127.0.0.1', port)) != 0  # WebDriver is only on the socket in the profile
         with pytest.raises(ActionFailed):
             await browser.act(Navigate(url=f'{site.origin}/probe'))
-        assert (await browser.snapshot()).url != f'{site.origin}/probe'
+        page = await browser.snapshot()  # Servo's error page keeps the URL it was asked for
+        assert page.title == 'Error loading page' and 'server saw' not in page.text
 
 
 # --- Servo's own behaviour ---
