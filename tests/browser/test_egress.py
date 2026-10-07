@@ -101,6 +101,24 @@ async def test_too_many_connections_do_not_block_the_proxy(socket_dir: Path) -> 
         await proxy.stop()
 
 
+async def test_established_connection_outlives_handshake_deadline(socket_dir: Path) -> None:
+    server, port = await echo_server()
+    proxy = EgressProxy(socket_dir / 'egress.sock', allow_private=True)
+    await proxy.start()
+    try:
+        with patch('montybot.browser.egress._HANDSHAKE_TIMEOUT', 0.05):
+            status, reader, writer = await connect(proxy.path, '127.0.0.1', port)
+            assert status == 0
+            await asyncio.sleep(0.1)
+            writer.write(b'hello')
+            assert await asyncio.wait_for(reader.readexactly(5), 1) == b'hello'
+            writer.close()
+            await writer.wait_closed()
+    finally:
+        await proxy.stop()
+        server.close()
+
+
 async def test_carries_a_connection_where_allowed(socket_dir: Path) -> None:
     server, port = await echo_server()
     proxy = EgressProxy(socket_dir / 'egress.sock', allow_private=True)

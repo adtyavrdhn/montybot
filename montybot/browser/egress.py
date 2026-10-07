@@ -76,9 +76,18 @@ class EgressProxy:
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         async with asyncio.timeout(_HANDSHAKE_TIMEOUT):
-            await self._handshake(reader, writer)
+            request = await self._handshake(reader, writer)
+        if request is None:
+            return
+        try:
+            status, upstream = await asyncio.wait_for(self._connect(*request), _CONNECT_TIMEOUT)
+        except TimeoutError:
+            status, upstream = _HOST_UNREACHABLE, None
+        _reply(writer, status)
+        if upstream is not None:
+            await self._relay(reader, writer, upstream)
 
-    async def _handshake(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _handshake(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> tuple[str, int] | None:
         version, count = await reader.readexactly(2)
         methods = await reader.readexactly(count)
         if version != _VERSION or _NO_AUTH not in methods:
@@ -98,12 +107,8 @@ class EgressProxy:
         (port,) = struct.unpack('>H', await reader.readexactly(2))
         if version != _VERSION or command != _CONNECT:
             _reply(writer, _NOT_SUPPORTED)
-            return
-        status, upstream = await self._connect(host, port)
-        _reply(writer, status)
-        if upstream is None:
-            return
-        await self._relay(reader, writer, upstream)
+            return None
+        return host, port
 
     async def _relay(
         self,
