@@ -57,6 +57,25 @@ mode, a narrow window) as a new person, and saves each as `NN-name.png` and `NN-
 there, with every element's frame, so a review can check wording, labels, alignment and clipping without clicking
 through. `ALL.txt` has every screen in one file.
 
+## Telemetry
+
+Once signed in, the app asks the server (`GET /api/telemetry`) whether to send traces; with `LOGFIRE_TOKEN` set
+there, it sends them (OpenTelemetry, OTLP protobuf) to `/api/telemetry/v1/traces` through its own session, so the
+cookie and site login go with them, and the server forwards them to Logfire with its token: the app holds none.
+Otherwise, and when signed out, nothing is sent and spans are no-ops. `Telemetry.swift` has the rules.
+
+- Every API request is a client span named for its route (`GET /api/threads/{thread_id}`) and carries
+  `traceparent`, so the server's spans for it join the trace. The user's actions (send, answer, approve, deny, stop,
+  rename, delete, open a chat or page) are spans with the requests under them; a takeover is one span for as long as
+  it lasts (connections, reconnects, frames, how it ended); each run-events stream is one, with the run's statuses
+  as events. Also: launch and sign-in, run status changes, notifications, errors shown, foreground and background.
+  Polling (the chat list, the browser's picture) makes no spans.
+- Never sent: passwords (account, site login, anything typed while taking over), cookies, `Authorization`,
+  live-view links and hand-off ids (`/live/*`), push subscriptions, file names and paths, request and response
+  bodies. URLs are route templates (no query); ids are the random UUIDs the server uses.
+- What the user wrote and Monty said (messages, replies, questions, answers, reasons, error messages) only when the
+  server's `include_content` is on; otherwise their lengths and kinds.
+
 ## Design
 
 Monty looks like Logfire: its tokens (platform `src/services/logfire-frontend/src/styles/design-tokens.css`) are in

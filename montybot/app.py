@@ -18,6 +18,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from montybot import api, approvals, workflows
 from montybot.live import live_app
+from montybot.observability import ClientTraceContext
 from montybot.resources import Resources, open_resources
 from montybot.settings import Settings
 
@@ -72,8 +73,11 @@ def create_app(settings: Settings) -> ASGIApp:
             Route('/api/schedules/{schedule_id:uuid}', api.delete_schedule, methods=['DELETE']),
             Route('/api/memories', api.read_memories),
             Route('/api/memories/{memory_id:uuid}', api.remove_memory, methods=['DELETE']),
+            Route('/api/telemetry', api.telemetry_settings),
+            Route('/api/telemetry/{path:path}', api.forward_telemetry, methods=['POST']),
         ],
         middleware=[
+            Middleware(ClientTraceContext),
             Middleware(
                 SessionMiddleware,
                 secret_key=settings.session_secret.get_secret_value(),

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+@preconcurrency import OpenTelemetryApi
 
 /// Something to tell the user about what they just did, shown once above the composer.
 public struct ChatNotice: Equatable, Sendable {
@@ -23,7 +24,9 @@ public final class ChatModel {
     public private(set) var threadId: String?
     public private(set) var title: String
     public private(set) var messages: [ChatMessage] = []
-    public private(set) var run: Run?
+    public private(set) var run: Run? {
+        didSet { runChanged(from: oldValue) }
+    }
     /// What the bot is writing now; shown as a draft below the messages, never stored.
     public private(set) var preview: Preview?
     public private(set) var loading = false
@@ -90,6 +93,7 @@ public final class ChatModel {
 
     private weak var app: AppModel?
     private let client: APIClient
+    private var telemetry: Telemetry { client.telemetry }
     private var following: Task<Void, Never>?
     private var followingRun: String?
     private var watchTask: Task<Void, Never>?
@@ -138,11 +142,41 @@ public final class ChatModel {
             if closed { return false }
             if error == .signedOut { app?.sessionEnded(); return false }
             if error.status == 404 { app?.chatVanished(threadId); return false }
-            if messages.isEmpty { loadError = error.localizedDescription }
+            if messages.isEmpty {
+                loadError = error.localizedDescription
+                telemetry.shown(error, loadError, ids)
+            }
             return false
         } catch {
             return false
         }
+    }
+
+    /// The ids this chat's spans carry (random UUIDs, never content).
+    private var ids: [String: AttributeValue?] {
+        ["monty.thread_id": threadId.map { .string($0) }, "monty.run_id": run.map { .string($0.id) },
+         "monty.ask_id": run?.ask.map { .string($0.id) }]
+    }
+
+    /// The run went from one status to another (or a new run started) while the chat was open.
+    private func runChanged(from old: Run?) {
+        guard let run, let old, old.id != run.id || old.status != run.status, telemetry.isEnabled else { return }
+        telemetry.log("run status changed", [
+            "monty.thread_id": .string(run.threadId), "monty.run_id": .string(run.id),
+            "monty.run.status": .string(run.status.rawValue),
+            "monty.run.previous_status": old.id == run.id ? .string(old.status.rawValue) : nil,
+            "monty.ask_id": run.ask.map { .string($0.id) }, "monty.ask.kind": run.ask.map { .string($0.kind.rawValue) },
+        ]) { span in
+            if run.status == .waiting { span.content("monty.ask.prompt", run.ask?.prompt) }
+            span.content("monty.reply", run.output)
+        }
+    }
+
+    /// Tells the user what went wrong, and telemetry what kind of thing it was.
+    private func show(_ error: APIError, _ text: String? = nil) {
+        let text = text ?? error.localizedDescription
+        notice = .error(text)
+        telemetry.shown(error, text, ids)
     }
 
     private func apply(_ run: Run?) {
@@ -189,7 +223,10 @@ public final class ChatModel {
         guard followingRun != run, !closed else { return }
         stopFollowing()
         followingRun = run
-        following = Task { [weak self] in await self?.followLoop(run) }
+        // Following is its own trace (each stream one), not part of the action that started it: it can last for days.
+        following = Task { [weak self] in
+            await Telemetry.$parent.withValue(nil) { await Telemetry.$quiet.withValue(false) { await self?.followLoop(run) } }
+        }
     }
 
     private func stopFollowing() {
@@ -206,7 +243,7 @@ public final class ChatModel {
             var gotEvents = false
             var firstPreview = true  // a restarted server counts revisions from zero again
             do {
-                for try await event in client.events(run: runId) {
+                for try await event in client.events(run: runId, attempt: failures) {
                     guard followingRun == runId, !closed else { return }
                     gotEvents = true
                     failures = 0
@@ -238,6 +275,11 @@ public final class ChatModel {
                 if Task.isCancelled || closed { return }
                 failures += 1
                 reconnecting = true
+                telemetry.log("run events lost", [
+                    "monty.run_id": .string(runId), "monty.thread_id": threadId.map { .string($0) },
+                    "error.type": .string((error as? APIError)?.kind ?? String(describing: type(of: error))),
+                    "monty.stream.failures": .int(failures),
+                ])
             }
             if Task.isCancelled || followingRun != runId || closed { return }
             // The stream ended: the server closes it every few minutes, or the connection dropped. Check the stored
@@ -279,13 +321,25 @@ public final class ChatModel {
     }
 
     /// Sends `text` as the user's next message; false if the server did not take it.
-    private func submit(_ text: String) async -> Bool {
-        guard let app, !sending, !isActive, !closed else { return false }
+    private func submit(_ text: String, retry: Bool = false) async -> Bool {
+        guard app != nil, !sending, !isActive, !closed else { return false }
+        return await telemetry.action(threadId == nil ? "new chat" : "send message", ids.merging(["monty.retry": .bool(retry)]) { $1 }) { span in
+            span.content("monty.message", text)
+            let sent = await submitting(text, span)
+            span.set("monty.sent", sent)
+            return sent
+        }
+    }
+
+    private func submitting(_ text: String, _ span: TraceSpan) async -> Bool {
+        guard let app else { return false }
         sending = true
         pendingMessage = text
         defer { sending = false }
         do {
             let created = threadId == nil ? try await client.startThread(text) : try await client.send(text, to: threadId!)
+            span.set("monty.thread_id", created.threadId)
+            span.set("monty.run_id", created.runId)
             app.taskSent()
             guard !closed else { app.refreshThreads(); return true }
             if threadId == nil {
@@ -304,9 +358,10 @@ public final class ChatModel {
             return true
         } catch let error as APIError {
             pendingMessage = nil
+            span.fail(error)
             if error == .signedOut { app.sessionEnded(); return false }
             if closed { return false }
-            notice = .error(error.status == 409 ? "Monty is still on the last task in this chat. Wait for it, or stop it first." : error.localizedDescription)
+            show(error, error.status == 409 ? "Monty is still on the last task in this chat. Wait for it, or stop it first." : nil)
             return false
         } catch {
             pendingMessage = nil
@@ -316,7 +371,7 @@ public final class ChatModel {
 
     public func retry() async {
         guard canRetry, let last = messages.last(where: { $0.role == .user }) else { return }
-        _ = await submit(last.text)
+        _ = await submit(last.text, retry: true)
     }
 
     /// The messages to show: the stored ones, then the one being sent.
@@ -329,17 +384,29 @@ public final class ChatModel {
 
     public func answer(_ body: AnswerBody) async {
         guard let ask, !answering, !closed else { return }
+        let name = body.approved == true ? "approve" : body.approved == false ? "deny" : body.done == true ? "hand back" : "answer question"
+        await telemetry.action(name, ids.merging(["monty.ask.kind": .string(ask.kind.rawValue)]) { $1 }) { span in
+            span.content("monty.answer", body.text)
+            span.content("monty.deny_reason", body.reason)
+            span.content("monty.note", body.note)
+            await answering(ask, body, span)
+        }
+    }
+
+    private func answering(_ ask: Ask, _ body: AnswerBody, _ span: TraceSpan) async {
         answering = true
         answeringAsk = ask.id
         defer { answering = false; answeringAsk = nil }
         do {
             try await client.answer(ask.id, body)
+            span.set("monty.answered", true)
             app?.answerDrafts[ask.id] = nil
             guard !closed else { return }
             if let run { self.run = Run(id: run.id, threadId: run.threadId, status: .running, activity: run.activity) }
             app?.chatChanged(self)
             await refresh()
         } catch let error as APIError {
+            span.fail(error)
             if error == .signedOut { app?.sessionEnded(); return }
             if error.status == 409 {  // answered already, somewhere else
                 if let text = app?.answerDrafts.removeValue(forKey: ask.id)?.text.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -355,7 +422,7 @@ public final class ChatModel {
                 await refresh()
                 return
             }
-            notice = .error(error.localizedDescription)
+            show(error)
         } catch {}
     }
 
@@ -363,37 +430,52 @@ public final class ChatModel {
         guard let run, run.status.isActive, !stopping, !closed else { return }
         stopping = true
         defer { stopping = false }
-        do {
-            try await client.stop(run: run.id)
-        } catch let error as APIError {
-            if error == .signedOut { app?.sessionEnded(); return }
-            if error.status != 409 { notice = .error(error.localizedDescription) }
-        } catch {}
-        live?.close()
-        await refresh()
-        app?.refreshThreads()
+        await telemetry.action("stop task", ids) { span in
+            do {
+                try await client.stop(run: run.id)
+            } catch let error as APIError {
+                span.fail(error)
+                if error == .signedOut { app?.sessionEnded(); return }
+                if error.status != 409 { show(error) }
+            } catch {}
+            live?.close()
+            await refresh()
+            app?.refreshThreads()
+        }
     }
 
     // MARK: the bot's browser
 
     /// Opens the run's browser for the user to drive, when the bot handed off to them. One at a time.
-    public func takeOver() async {
+    /// The takeover's span lasts until it is over (the live session ends it); the link and its hand-off id never
+    /// go in it.
+    public func takeOver(retry: Bool = false) async {
         guard let run, let ask, ask.kind == .handoff, !takingOver, !closed else { return }
         if let live, !live.state.isOver { return }
         takingOver = true
         defer { takingOver = false }
+        let span = telemetry.span("takeover", ids.merging(["monty.retry": .bool(retry)]) { $1 })
         do {
-            let link = try await client.liveLink(run: run.id)
-            guard !closed, self.ask?.id == ask.id, let request = client.liveSocketRequest(link) else { return }
+            let link = try await Telemetry.$parent.withValue(span.context) { try await client.liveLink(run: run.id) }
+            guard !closed, self.ask?.id == ask.id, let request = client.liveSocketRequest(link, trace: span.context) else {
+                span.set("monty.live.outcome", "abandoned")
+                span.end()
+                return
+            }
             live?.close()
-            let session = LiveSession(request: request, reason: link.reason, session: client.session)
+            let session = LiveSession(request: request, reason: link.reason, session: client.session, span: span)
             live = session
             session.connect()
         } catch let error as APIError {
+            span.fail(error)
+            span.end()
             if error == .signedOut { app?.sessionEnded(); return }
             if error.status == 404 { await refresh(); return }
-            notice = .error(error.localizedDescription)
-        } catch {}
+            show(error)
+        } catch {
+            span.fail(error)
+            span.end()
+        }
     }
 
     /// Closes the live view without giving the browser back; the bot keeps waiting.
@@ -411,7 +493,7 @@ public final class ChatModel {
     /// The live view gave up (it could not connect): start a new one with a fresh link.
     public func retryTakeOver() async {
         live = nil
-        await takeOver()
+        await takeOver(retry: true)
     }
 
     private func startWatching() {

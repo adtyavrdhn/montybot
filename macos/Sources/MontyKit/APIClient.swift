@@ -1,4 +1,5 @@
 import Foundation
+@preconcurrency import OpenTelemetryApi
 
 public enum APIError: Error, Equatable, LocalizedError {
     /// The session is over (signed out elsewhere, expired, or never signed in).
@@ -68,10 +69,17 @@ public final class APIClient: Sendable {
     let cookies: HTTPCookieStorage
     /// A private server's site login, as the `Authorization` header every request carries.
     let siteLogin: String?
+    /// The app's traces for this server: off until `startTelemetry`, and when the server takes none.
+    public let telemetry = Telemetry()
 
     /// `cookies` keeps the session: the app's shared storage outlives restarts; tests pass their own, one per user.
     /// `siteLogin` is a private server's login, from `basicAuthorization`.
-    public init(baseURL: URL, cookies: HTTPCookieStorage = .shared, siteLogin: String? = nil) {
+    public convenience init(baseURL: URL, cookies: HTTPCookieStorage = .shared, siteLogin: String? = nil) {
+        self.init(baseURL: baseURL, cookies: cookies, siteLogin: siteLogin, protocols: nil)
+    }
+
+    /// `protocols` stand in for the network, in tests.
+    init(baseURL: URL, cookies: HTTPCookieStorage, siteLogin: String?, protocols: [AnyClass]?) {
         self.baseURL = baseURL
         self.cookies = cookies
         self.siteLogin = siteLogin
@@ -84,6 +92,7 @@ public final class APIClient: Sendable {
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 30
         configuration.waitsForConnectivity = false
+        if let protocols { configuration.protocolClasses = protocols }
         session = URLSession(configuration: configuration)
     }
 
@@ -95,6 +104,22 @@ public final class APIClient: Sendable {
     /// Forgets the session cookie: on sign-out, and when the server says it is over.
     public func clearSession() {
         for cookie in cookies.cookies(for: baseURL) ?? [] { cookies.deleteCookie(cookie) }
+    }
+
+    // MARK: telemetry
+
+    /// Whether the server takes the app's telemetry, and with content or not (signed in only).
+    public func telemetrySettings() async throws -> TelemetrySettings {
+        try await decode(request("GET", "/api/telemetry"), quiet: true)
+    }
+
+    /// Sends the app's traces for this user if the server takes them, through this client's session and site login;
+    /// stops if it no longer does. Never fails: telemetry is not worth bothering the user about.
+    public func startTelemetry(userId: String) async {
+        let settings = (try? await telemetrySettings()) ?? .off
+        guard !telemetry.isConfigured(settings, userId: userId) else { return }
+        let exporter = Telemetry.exporter(settings, baseURL: baseURL, session: session, siteLogin: siteLogin)
+        telemetry.configure(settings, exporter: exporter, userId: userId)
     }
 
     // MARK: accounts
@@ -166,25 +191,41 @@ public final class APIClient: Sendable {
 
     /// The bot's browser as it works, as PNG; nil when there is nothing to show (not running, or busy).
     public func screen(run: String) async throws -> Data? {
-        let (data, response) = try await raw(request("GET", "/api/runs/\(run)/screen"))
-        switch response.statusCode {
-        case 200: return data
-        case 404: return nil
-        default: throw error(response.statusCode, data)
+        // Every second while the user watches: no span of its own.
+        try await raw(request("GET", "/api/runs/\(run)/screen"), quiet: true) { data, response in
+            switch response.statusCode {
+            case 200: return data
+            case 404: return nil
+            default: throw error(response.statusCode, data)
+            }
         }
     }
 
     /// The run's live updates. Ends when the run finishes or the server closes the stream (every few minutes, to
-    /// check the session again); the caller reconnects while the run is active.
-    public func events(run: String) -> AsyncThrowingStream<RunEvent, Error> {
+    /// check the session again); the caller reconnects while the run is active, `attempt` counting the reconnections.
+    /// Its span lasts as long as the stream, with each status the run goes through as an event.
+    public func events(run: String, attempt: Int = 0) -> AsyncThrowingStream<RunEvent, Error> {
         // The server sends a keep-alive every 0.75 s, so 15 s of silence is a dead connection (sleep, a Wi-Fi change).
-        let request = request("GET", "/api/runs/\(run)/events", accept: "text/event-stream", timeout: 15)
+        var request = request("GET", "/api/runs/\(run)/events", accept: "text/event-stream", timeout: 15)
+        let span = telemetry.request(&request)
+        span.set("monty.run_id", run)
+        span.set("monty.stream.attempt", attempt)
         let session = session
+        let traced = request
         return AsyncThrowingStream { continuation in
             let task = Task {
+                var statuses = 0, previews = 0
+                func end(_ how: String, _ error: Error? = nil) {
+                    span.set("monty.stream.end", how)
+                    span.set("monty.stream.statuses", statuses)
+                    span.set("monty.stream.previews", previews)
+                    if let error { span.fail(error) }
+                    span.end()
+                }
                 do {
-                    let (bytes, response) = try await session.bytes(for: request)
+                    let (bytes, response) = try await session.bytes(for: traced)
                     guard let http = response as? HTTPURLResponse else { throw APIError.unexpected("no HTTP response") }
+                    span.response(http.statusCode)
                     if let realm = Self.basicRealm(http) { throw APIError.siteLogin(realm: realm) }
                     if http.statusCode == 401 { throw APIError.signedOut }
                     guard http.statusCode == 200 else { throw APIError.server(status: http.statusCode, detail: nil) }
@@ -197,16 +238,28 @@ public final class APIClient: Sendable {
                         }
                         if line.last == UInt8(ascii: "\r") { line.removeLast() }
                         if let event = parser.feed(String(decoding: line, as: UTF8.self)), let decoded = RunEvent(event) {
+                            switch decoded {
+                            case .status(let run):
+                                statuses += 1
+                                span.event("run status", ["monty.run.status": .string(run.status.rawValue),
+                                                          "monty.ask.kind": run.ask.map { .string($0.kind.rawValue) }])
+                            case .preview: previews += 1
+                            }
                             continuation.yield(decoded)
                         }
                         line.removeAll(keepingCapacity: true)
                     }
+                    end(Task.isCancelled ? "cancelled" : "closed")
                     continuation.finish()
                 } catch let error as URLError where error.code == .cancelled {
+                    end("cancelled")
                     continuation.finish()
                 } catch let error as URLError {
-                    continuation.finish(throwing: APIError.offline(error.localizedDescription))
+                    let lost = APIError.offline(error.localizedDescription)
+                    end("lost", lost)
+                    continuation.finish(throwing: lost)
                 } catch {
+                    end("failed", error)
                     continuation.finish(throwing: error)
                 }
             }
@@ -246,18 +299,19 @@ public final class APIClient: Sendable {
         var request = request("POST", "/api/files/download")
         request.httpBody = try JSONEncoder().encode(["path": path])
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let (data, response) = try await raw(request)
-        guard response.statusCode == 200 else { throw error(response.statusCode, data) }
-        let disposition = response.value(forHTTPHeaderField: "Content-Disposition") ?? ""
-        let name = disposition.components(separatedBy: "filename*=UTF-8''").dropFirst().first?.removingPercentEncoding
-        return (data, name ?? (path as NSString).lastPathComponent)
+        return try await raw(request) { data, response in
+            guard response.statusCode == 200 else { throw error(response.statusCode, data) }
+            let disposition = response.value(forHTTPHeaderField: "Content-Disposition") ?? ""
+            let name = disposition.components(separatedBy: "filename*=UTF-8''").dropFirst().first?.removingPercentEncoding
+            return (data, name ?? (path as NSString).lastPathComponent)
+        }
     }
 
     // MARK: the live view
 
     /// The WebSocket request of a live-view link, with the session cookie. No `Origin`: the server accepts clients
-    /// that are not browsers without one.
-    public func liveSocketRequest(_ link: LiveLink) -> URLRequest? {
+    /// that are not browsers without one. `trace` is the takeover's span, for the server's spans to join.
+    public func liveSocketRequest(_ link: LiveLink, trace: SpanContext? = Telemetry.parent) -> URLRequest? {
         guard var parts = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
         parts.scheme = parts.scheme == "https" ? "wss" : "ws"
         parts.path = link.url.hasSuffix("/") ? link.url + "ws" : link.url + "/ws"
@@ -267,6 +321,7 @@ public final class APIClient: Sendable {
             request.setValue(value, forHTTPHeaderField: name)
         }
         request.setValue(siteLogin, forHTTPHeaderField: "Authorization")
+        telemetry.inject(trace, into: &request)
         return request
     }
 
@@ -293,32 +348,44 @@ public final class APIClient: Sendable {
         return try await decode(request)
     }
 
-    private func decode<T: Decodable>(_ request: URLRequest) async throws -> T {
-        let (data, response) = try await raw(request)
-        guard (200..<300).contains(response.statusCode) else {
-            // Signing in with the wrong password is a 401 too, but not a session that ended.
-            let signingIn = ["/api/signin", "/api/signup", "/api/password/reset/confirm"].contains(request.url?.path ?? "")
-            throw error(response.statusCode, data, signingIn: signingIn)
-        }
-        do {
-            return try Self.decoder.decode(T.self, from: data)
-        } catch {
-            throw APIError.unexpected("\(request.url?.path ?? ""): \(error)")
+    private func decode<T: Decodable>(_ request: URLRequest, quiet: Bool = false) async throws -> T {
+        try await raw(request, quiet: quiet) { data, response in
+            guard (200..<300).contains(response.statusCode) else {
+                // Signing in with the wrong password is a 401 too, but not a session that ended.
+                let signingIn = ["/api/signin", "/api/signup", "/api/password/reset/confirm"].contains(request.url?.path ?? "")
+                throw error(response.statusCode, data, signingIn: signingIn)
+            }
+            do {
+                return try Self.decoder.decode(T.self, from: data)
+            } catch {
+                throw APIError.unexpected("\(request.url?.path ?? ""): \(error)")
+            }
         }
     }
 
-    private func raw(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let data: Data
-        let response: URLResponse
+    /// Sends `request` and reads its answer with `read`, in a client span (none when `quiet`) whose trace the
+    /// request carries.
+    private func raw<T>(_ request: URLRequest, quiet: Bool = false, _ read: (Data, HTTPURLResponse) throws -> T) async throws -> T {
+        var request = request
+        let span = Telemetry.$quiet.withValue(quiet || Telemetry.quiet) { telemetry.request(&request) }
+        defer { span.end() }
         do {
-            (data, response) = try await session.data(for: request)
-        } catch let error as URLError {
-            if error.code == .cancelled { throw CancellationError() }
-            throw APIError.offline(error.localizedDescription)
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await session.data(for: request)
+            } catch let error as URLError {
+                if error.code == .cancelled { throw CancellationError() }
+                throw APIError.offline(error.localizedDescription)
+            }
+            guard let http = response as? HTTPURLResponse else { throw APIError.unexpected("no HTTP response") }
+            span.response(http.statusCode)
+            if let realm = Self.basicRealm(http) { throw APIError.siteLogin(realm: realm) }
+            return try read(data, http)
+        } catch {
+            span.fail(error)
+            throw error
         }
-        guard let http = response as? HTTPURLResponse else { throw APIError.unexpected("no HTTP response") }
-        if let realm = Self.basicRealm(http) { throw APIError.siteLogin(realm: realm) }
-        return (data, http)
     }
 
     /// The realm of a private server's site login, when this answer asks for one (a 401 that wants basic auth).

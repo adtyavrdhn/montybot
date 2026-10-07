@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Annotated, Any, TypeVar
 from urllib.parse import quote, urlsplit
 
+import logfire
 from pydantic import AfterValidator, BaseModel, Field, StrictBool, StringConstraints
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
@@ -674,6 +675,40 @@ async def remove_memory(request: Request, user: User) -> Response:
     async with resources_of(request).pool.connection() as connection:
         deleted = await delete_memory(connection, user.id, str(request.path_params['memory_id']))
     return JSONResponse({'ok': True}) if deleted else NOT_FOUND
+
+
+# --- the apps' own telemetry (`montybot/observability.py`) ---
+
+OTLP_TYPES = ('application/json', 'application/x-protobuf')
+MAX_TELEMETRY_BYTES = 5 * 1024 * 1024
+
+
+@auth.signed_in
+async def telemetry_settings(request: Request, user: User) -> Response:
+    """Whether the apps should send telemetry, and with content or not: the server's own settings."""
+    settings = resources_of(request).settings
+    return JSONResponse(
+        {
+            'enabled': settings.logfire_token is not None,
+            'include_content': settings.logfire_include_content,
+            'environment': settings.environment,
+            'version': settings.commit or None,
+        }
+    )
+
+
+async def forward_telemetry(request: Request) -> Response:
+    """OTLP from a signed-in app (`/api/telemetry/v1/traces`, `metrics` or `logs`), sent on to Logfire with the
+    server's token, so no token is in the apps. Only the body and its content type are forwarded, never cookies.
+
+    Not `auth.signed_in`, which takes only JSON: OTLP protobuf needs a CORS preflight too, so it is as safe.
+    Without `LOGFIRE_TOKEN` the answer is 403 and nothing is sent.
+    """
+    if await auth.signed_in_user(request) is None:
+        return JSONResponse({'detail': 'sign in first'}, status_code=401)
+    if request.headers.get('content-type', '').split(';')[0].strip() not in OTLP_TYPES:
+        return JSONResponse({'detail': 'send OTLP'}, status_code=415)
+    return await logfire.forward_export_request_starlette(request, max_body_size=MAX_TELEMETRY_BYTES)
 
 
 # --- shapes ---
