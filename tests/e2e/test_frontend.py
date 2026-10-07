@@ -267,11 +267,11 @@ def test_asks(frontend: tuple[Page, MockAPI], kind: str) -> None:
         expect(page.locator('#live')).to_be_visible()
         expect(page.locator('#takeover')).to_contain_text('You are driving')
         assert ('POST', '/api/runs/run/live', {}) in mock.calls
-        assert page.locator('#layout').evaluate('(element) => element.inert')  # the page behind cannot be reached
+        expect(page.get_by_role('dialog')).to_be_visible()  # modal: the page behind cannot be reached
+        assert page.locator('#takeover').evaluate("(element) => element.matches(':modal')")
         page.keyboard.press('Escape')
         expect(page.locator('#takeover')).not_to_be_visible()
         expect(page.get_by_role('button', name='Take over the browser')).to_be_focused()
-        assert not page.locator('#layout').evaluate('(element) => element.inert')
         page.get_by_role('button', name='Take over the browser', exact=True).click()
         page.get_by_role('button', name='Back to chat').click()
         expect(page.locator('#takeover')).not_to_be_visible()
@@ -587,7 +587,8 @@ def test_replies_are_formatted_and_safe(frontend: tuple[Page, MockAPI]) -> None:
             'text': 'Here are the **top 2**:\n\n1. *First* story\n2. `second` story\n\n'
             '| Title | Points |\n|---|---|\n| One | 410 |\n\n'
             'More at https://news.example.test/top. [Bad](javascript:alert(1)) <img src=x onerror=alert(1)>\n\n'
-            '3. Third, see [Python](https://en.wikipedia.org/wiki/Python_(programming_language)).',
+            '3. Third, see [Python](https://en.wikipedia.org/wiki/Python_(programming_language)).\n\n'
+            '````\nshow ``` in code\n````',
         },
     ]
     page.goto(f'http://monty.test/#/t/{THREAD}')
@@ -595,7 +596,7 @@ def test_replies_are_formatted_and_safe(frontend: tuple[Page, MockAPI]) -> None:
     expect(reply.locator('strong')).to_have_text('top 2')
     expect(reply.locator('ol').first.locator('li')).to_have_count(2)
     expect(reply.locator('em')).to_have_text('First')
-    expect(reply.locator('code')).to_have_text('second')
+    expect(reply.locator('li code')).to_have_text('second')
     expect(reply.locator('td').first).to_have_text('One')
     expect(reply.locator('a')).to_have_count(2)
     expect(reply.locator('a').first).to_have_attribute('href', 'https://news.example.test/top')
@@ -603,6 +604,7 @@ def test_replies_are_formatted_and_safe(frontend: tuple[Page, MockAPI]) -> None:
         'href', 'https://en.wikipedia.org/wiki/Python_(programming_language)'
     )
     expect(reply.locator('ol').last).to_have_attribute('start', '3')
+    expect(reply.locator('pre code')).to_have_text('show ``` in code')  # a shorter fence does not close it
     expect(reply).to_contain_text('[Bad](javascript:alert(1)) <img src=x onerror=alert(1)>')
     expect(reply.locator('img')).to_have_count(0)
     expect(page.locator('.msg.user')).to_have_text('Top stories, **please**')  # the user's words, as typed

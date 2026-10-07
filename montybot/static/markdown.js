@@ -20,8 +20,10 @@ function renderMarkdown(text) {
     if (!line.trim()) {
       i++;
     } else if (line.trimStart().startsWith('```')) {
+      const fence = line.trim().match(/^`+/)[0];
+      const closes = (next) => /^`+$/.test(next.trim()) && next.trim().length >= fence.length;
       const code = [];
-      for (i++; i < lines.length && !lines[i].trimStart().startsWith('```'); i++) code.push(lines[i]);
+      for (i++; i < lines.length && !closes(lines[i]); i++) code.push(lines[i]);
       i++;  // past the closing fence
       blocks.append(node('pre', [node('code', [code.join('\n')])]));
     } else if (HEADING.test(line)) {

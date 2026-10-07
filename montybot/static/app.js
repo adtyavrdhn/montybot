@@ -443,29 +443,22 @@ async function takeOver(ask) {
   stopWatching();
   state.takeoverAskId = ask.id;
   $('live').src = link.url;
-  $('takeover').hidden = false;
-  setBehindTakeover(true);
+  // A modal dialog: the page behind cannot be reached and Escape closes it.
+  $('takeover').showModal();
   $('close-takeover').focus();
-}
-
-function setBehindTakeover(inert) {
-  // While the user drives the browser, the page behind it cannot be reached with Tab.
-  for (const behind of [document.querySelector('.bar'), $('drawer'), $('layout')]) behind.inert = inert;
-  if (!inert) updateBrowserButton();  // which sets the drawer's and the chat's own inert state again
 }
 
 function closeTakeover() {
   // The hand-off goes on until the user gives the browser back; "Take over" opens it again.
-  state.takeoverAskId = null;
-  if ($('takeover').hidden) return;
-  $('takeover').hidden = true;
-  $('live').src = 'about:blank';
-  setBehindTakeover(false);
-  const takeOverButton = $('ask').querySelector('button');
-  if (takeOverButton) takeOverButton.focus(); else $('message').focus();
+  if ($('takeover').open) $('takeover').close();
 }
 $('close-takeover').addEventListener('click', closeTakeover);
-document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !$('takeover').hidden) closeTakeover(); });
+$('takeover').addEventListener('close', () => {  // also after Escape
+  state.takeoverAskId = null;
+  $('live').src = 'about:blank';
+  const takeOverAgain = $('ask').hidden ? null : $('ask').querySelector('button');
+  (takeOverAgain || $('message')).focus();
+});
 
 // --- the bot's browser, while it works ---
 
