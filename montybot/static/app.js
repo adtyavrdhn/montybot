@@ -851,7 +851,7 @@ async function start() {
     return;
   }
   show('main');
-  report(showNotificationButton());
+  showNotificationButton().catch(console.error);  // optional: the button simply stays hidden
   await route();
 }
 
