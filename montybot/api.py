@@ -253,7 +253,8 @@ async def delete_thread(request: Request, user: User) -> Response:
         await schedules.delete(resources.pool, user.id, schedule.id)
     async with resources.pool.connection() as connection:
         deleted = await store.delete_thread(connection, user.id, thread_id)
-    return JSONResponse({'ok': True}) if deleted else NOT_FOUND
+    # A schedule that never ran takes its empty thread with it (store.delete_schedule): gone either way.
+    return JSONResponse({'ok': True}) if deleted or schedule is not None else NOT_FOUND
 
 
 @auth.signed_in
