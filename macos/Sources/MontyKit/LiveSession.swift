@@ -230,8 +230,14 @@ public final class LiveSession {
         guard !state.isOver else { return }
         givingBack = false
         givingBackTimeout?.cancel()
-        // A refused upgrade never opens the socket: the HTTP status says why.
-        switch (task?.response as? HTTPURLResponse)?.statusCode {
+        // A refused upgrade never opens the socket: the HTTP status says why. A 401 asking for basic auth is the
+        // private server's site login, not Monty's session: the user is still signed in.
+        let response = task?.response as? HTTPURLResponse
+        if let response, APIClient.basicRealm(response) != nil {
+            state = .failed("Monty's server didn't accept its site login. Quit and reopen Monty to enter it again.")
+            return
+        }
+        switch response?.statusCode {
         case 401: signedOut = true; state = .failed("You were signed out. Sign in again to take over."); return
         case 403: state = .failed("Monty's server refused this connection."); return
         case 404: state = .failed("This hand-off is no longer open."); return

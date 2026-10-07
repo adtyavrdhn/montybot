@@ -82,6 +82,25 @@ import Testing
     }
 }
 
+/// A private server's site login goes with every request by hand, so URLSession never asks the keychain for it.
+@Suite struct SiteLoginTests {
+    let login = APIClient.basicAuthorization(user: "montybot", password: "pa:ss")
+    var client: APIClient { APIClient(baseURL: URL(string: "https://monty.test")!, siteLogin: login) }
+
+    @Test func everyRequestCarriesIt() throws {
+        #expect(login == "Basic " + Data("montybot:pa:ss".utf8).base64EncodedString())
+        #expect(client.request("GET", "/api/me").value(forHTTPHeaderField: "Authorization") == login)
+        let link = LiveLink(url: "/live/h1/", reason: "Sign in")
+        let socket = try #require(client.liveSocketRequest(link))
+        #expect(socket.value(forHTTPHeaderField: "Authorization") == login)
+        #expect(APIClient(baseURL: URL(string: "https://monty.test")!).request("GET", "/").value(forHTTPHeaderField: "Authorization") == nil)
+    }
+
+    @Test func theKeychainIsNeverAsked() {
+        #expect(client.session.configuration.urlCredentialStorage == nil)
+    }
+}
+
 @Suite struct KeyMappingTests {
     func action(_ code: UInt16, _ chars: String, command: Bool = false, option: Bool = false, control: Bool = false, shift: Bool = false) -> KeyAction {
         KeyMapping.action(for: MacKey(keyCode: code, characters: chars, command: command, option: option, control: control, shift: shift))

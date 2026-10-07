@@ -66,12 +66,19 @@ public final class APIClient: Sendable {
     public let baseURL: URL
     public let session: URLSession
     let cookies: HTTPCookieStorage
+    /// A private server's site login, as the `Authorization` header every request carries.
+    let siteLogin: String?
 
     /// `cookies` keeps the session: the app's shared storage outlives restarts; tests pass their own, one per user.
-    public init(baseURL: URL, cookies: HTTPCookieStorage = .shared) {
+    /// `siteLogin` is a private server's login, from `basicAuthorization`.
+    public init(baseURL: URL, cookies: HTTPCookieStorage = .shared, siteLogin: String? = nil) {
         self.baseURL = baseURL
         self.cookies = cookies
+        self.siteLogin = siteLogin
         let configuration = URLSessionConfiguration.default
+        // No credential storage: on macOS it is the keychain, and every 401 would have it ask the user for access
+        // (once per request, again after each rebuild of the ad-hoc-signed app). The site login is sent by hand.
+        configuration.urlCredentialStorage = nil
         configuration.httpCookieStorage = cookies
         configuration.httpCookieAcceptPolicy = .always
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -259,6 +266,7 @@ public final class APIClient: Sendable {
         for (name, value) in HTTPCookie.requestHeaderFields(with: cookies.cookies(for: baseURL) ?? []) {
             request.setValue(value, forHTTPHeaderField: name)
         }
+        request.setValue(siteLogin, forHTTPHeaderField: "Authorization")
         return request
     }
 
@@ -270,6 +278,7 @@ public final class APIClient: Sendable {
         var request = URLRequest(url: baseURL.appending(path: path), timeoutInterval: timeout)
         request.httpMethod = method
         request.setValue(accept, forHTTPHeaderField: "Accept")
+        request.setValue(siteLogin, forHTTPHeaderField: "Authorization")
         return request
     }
 
@@ -320,14 +329,9 @@ public final class APIClient: Sendable {
         return challenge.firstMatch(of: /realm="([^"]*)"/).map { String($0.1) } ?? ""
     }
 
-    /// Keeps the site login in the keychain; URLSession answers the server's challenge with it from then on, for the
-    /// API, the live updates and the live view alike.
-    public func saveSiteLogin(user: String, password: String, realm: String) {
-        let space = URLProtectionSpace(
-            host: baseURL.host() ?? "", port: baseURL.port ?? (baseURL.scheme == "https" ? 443 : 80),
-            protocol: baseURL.scheme, realm: realm, authenticationMethod: NSURLAuthenticationMethodHTTPBasic
-        )
-        URLCredentialStorage.shared.setDefaultCredential(URLCredential(user: user, password: password, persistence: .permanent), for: space)
+    /// The `Authorization` header value of a site login.
+    public static func basicAuthorization(user: String, password: String) -> String {
+        "Basic " + Data("\(user):\(password)".utf8).base64EncodedString()
     }
 
     private func error(_ status: Int, _ data: Data, signingIn: Bool = false) -> APIError {
