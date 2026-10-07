@@ -30,7 +30,7 @@ Python (pandas, PDFs) runs through `run_python` in real CPython, in a bubblewrap
 [`montybot/observability.py`](montybot/observability.py):
 
 - **Always:** Pydantic AI's agent, model and tool spans with model, provider and tool names, token and cache usage
-  (so Logfire shows cost) and the conversation's shape; HTTP method, route template and status; database, run,
+  (so Logfire shows cost) and the conversation's shape; database, run,
   browser and Monty timings; the site a browser step opens (host only); `run_id` on every span of a run and
   `thread_id`/`user_id` on `run.lifecycle`; exception types; the commit (`service.version`) and `ENVIRONMENT`;
   token and system (CPU, memory) metrics.
@@ -38,8 +38,7 @@ Python (pandas, PDFs) runs through `run_python` in real CPython, in a bubblewrap
   memories), the agent's code, page snapshots, and exception messages and tracebacks. Turn it off before real users'
   data flows through.
 - **Never:** cookies and browser state, saved sign-ins, passwords typed in live view, session cookies, app secrets,
-  hand-off ids and links, push subscription URLs. None reach the agent, and HTTP spans never carry the raw path,
-  query or headers. Logfire's default scrubbing stays on as a backstop: it replaces values that mention a password,
+  hand-off ids and links, push subscription URLs. None reach the agent. HTTP server requests are not traced. Logfire's default scrubbing stays on as a backstop: it replaces values that mention a password,
   cookie, session and so on, including a sign-in page's snapshot.
 
 `tests/e2e/test_traces.py` holds these lines through a whole sign-in hand-off and order, with content on and off.

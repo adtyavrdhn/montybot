@@ -1,7 +1,7 @@
 """Logfire tracing: what is exported, and what never is.
 
 Always exported: span names, model/provider/tool names, token usage and cost, the conversation's shape, the deploy's
-commit and environment, the run/thread/user ids (random UUIDs), HTTP method, route template and status, the site
+commit and environment, the run/thread/user ids (random UUIDs), the site
 (host) a browser step visits, exception types, metrics and system metrics.
 
 Exported only with `LOGFIRE_INCLUDE_CONTENT` (on by default for the demo): messages, replies, instructions (which
@@ -9,7 +9,7 @@ include the user's memories), the code the agent writes, page snapshots, and exc
 
 Never exported, whatever the settings: cookies and browser state, saved sign-ins, passwords typed in live view,
 session cookies, app secrets and API keys, hand-off ids and links, and push subscription URLs. None of these reach
-the agent, and HTTP spans carry the route template, never the raw path, query or headers.
+the agent. HTTP server requests are not traced.
 `tests/e2e/test_traces.py` holds these lines.
 """
 
@@ -25,7 +25,6 @@ import logfire
 from opentelemetry import trace
 from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.trace import Span, StatusCode
-from starlette.types import ASGIApp, Receive, Scope, Send
 
 from montybot.settings import Settings
 
@@ -82,41 +81,3 @@ def timed(name: str) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Corout
         return wrapped
 
     return decorate
-
-
-def route_template(scope: Scope) -> str | None:
-    """The matched route with its parameters as names, such as `/live/handoff/{handoff_id}`; None if none matched."""
-    if 'endpoint' not in scope:
-        return None
-    path: str = scope['path']  # under a Mount too, Starlette keeps the full path here
-    for name, value in scope.get('path_params', {}).items():
-        path = path.replace(str(value), '{' + name + '}')
-    return path
-
-
-class HTTPtimings:
-    """HTTP wall time, method, route template and status, including mounted live-view requests.
-
-    Never the raw path (hand-off ids are in it), query, headers or body.
-    """
-
-    def __init__(self, app: ASGIApp) -> None:
-        self.app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope['type'] != 'http':
-            await self.app(scope, receive, send)
-            return
-        with timing('http.server') as span:
-            span.set_attribute('http.request.method', scope['method'])
-
-            async def sent(message: Any) -> None:
-                if message['type'] == 'http.response.start':
-                    span.set_attribute('http.response.status_code', message['status'])
-                await send(message)
-
-            try:
-                await self.app(scope, receive, sent)
-            finally:
-                if (route := route_template(scope)) is not None:
-                    span.set_attribute('http.route', route)
