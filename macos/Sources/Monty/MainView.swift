@@ -29,10 +29,10 @@ struct MainView: View {
             // Taking over the browser fills the window: the dogfood found a side panel too small to sign in with.
             if let chat = app.chat, let live = chat.live {
                 TakeoverView(chat: chat, live: live)
-                    .transition(.opacity)
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
             }
         }
-        .animation(.easeOut(duration: 0.2), value: app.chat?.live == nil)
+        .motion(.spring(response: 0.38, dampingFraction: 0.9), value: app.chat?.live == nil)
     }
 }
 
@@ -107,7 +107,7 @@ struct Sidebar: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if app.offline {
                 HStack(spacing: 6) {
-                    ProgressView().controlSize(.mini).accessibilityHidden(true)
+                    MontyMark(mood: .failed, size: 9).frame(width: 16, height: 16)
                     Text("Connection lost. Reconnecting…")
                 }
                 .font(.system(size: 12))
@@ -156,7 +156,7 @@ struct ThreadRow: View {
             case .waiting:
                 Circle().fill(Palette.logfire).frame(width: 7, height: 7).accessibilityHidden(true)
             case .running, .queued:
-                ProgressView().controlSize(.mini).accessibilityHidden(true)
+                MontyMark(mood: .working, size: 9).frame(width: 16, height: 16)
             default:
                 switch thread.outcome {
                 case .failed:

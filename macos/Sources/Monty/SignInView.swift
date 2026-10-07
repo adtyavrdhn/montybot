@@ -8,7 +8,7 @@ struct RootView: View {
         Group {
             switch app.phase {
             case .launching:
-                Logomark(size: 40).frame(maxWidth: .infinity, maxHeight: .infinity)
+                MontyMark(mood: .working, size: 40).frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityElement()
                     .accessibilityLabel("Opening Monty")
             case .unreachable:
@@ -56,7 +56,7 @@ struct SignInView: View {
             Spacer(minLength: 40)
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 10) {
-                    Logomark(size: 26)
+                    MontyMark(mood: .idle, size: 22)
                     Text("Monty").font(.system(size: 17, weight: .semibold))
                 }
                 .padding(.bottom, 22)

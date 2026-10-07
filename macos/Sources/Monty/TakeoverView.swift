@@ -119,7 +119,7 @@ struct TakeoverView: View {
 
     private func message(spinner: Bool = false, icon: String? = nil, _ text: String) -> some View {
         HStack(spacing: 10) {
-            if spinner { ProgressView().controlSize(.small).accessibilityHidden(true) }
+            if spinner { MontyMark(mood: .working, size: 14) }
             if let icon { Image(systemName: icon).foregroundStyle(Palette.onSurfaceVariant).accessibilityHidden(true) }
             Text(text).font(.system(size: 13, weight: .medium))
         }
