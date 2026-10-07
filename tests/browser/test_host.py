@@ -195,7 +195,7 @@ async def test_a_run_that_ends_is_saved_and_closed() -> None:
     assert saved.url == f'{SHOP}/shop'
     assert [c.name for c in saved.cookies] == ['sid']
     assert saved.local_storage == {SHOP: {'cart': 'eggs'}}
-    assert await setup.lease.holder(user_id='alice') is None
+    assert not await setup.lease.holds(**ALICE)
 
 
 async def test_a_run_closed_before_its_first_call_never_opens_a_browser() -> None:
@@ -206,7 +206,7 @@ async def test_a_run_closed_before_its_first_call_never_opens_a_browser() -> Non
     with pytest.raises(UnknownRun):
         await host.start(**ALICE)  # a call that was already on its way
     assert setup.made == []
-    assert await setup.lease.holder(user_id='alice') is None
+    assert not await setup.lease.holds(**ALICE)
 
 
 async def test_unknown_closed_and_other_users_runs_look_the_same() -> None:
@@ -297,7 +297,7 @@ async def test_one_run_per_user_at_a_time() -> None:
     await host.close(**ALICE)
     assert await host.start(**second) == Started(url=f'{SHOP}/shop', reused=False)
     assert await page_text(host, second) == 'Signed in. In cart: eggs'
-    assert await setup.lease.holder(user_id='alice') == 'run-2'
+    assert await setup.lease.holds(**second)
 
 
 async def test_an_engine_that_cannot_export_leaves_the_jar_alone() -> None:

@@ -145,20 +145,37 @@ async def test_one_run_at_a_time_holds_a_users_sign_ins(pool: Pool) -> None:
     assert await lease.acquire(user_id=a.id, run_id='run-1')  # again, as on a retry
     assert not await lease.acquire(user_id=a.id, run_id='run-2')
     await lease.release(user_id=a.id, run_id='run-2')  # not the holder: no effect
-    assert await lease.holder(user_id=a.id) == 'run-1'
+    assert await lease.holds(user_id=a.id, run_id='run-1')
     await lease.release(user_id=a.id, run_id='run-1')
     assert await lease.acquire(user_id=a.id, run_id='run-2')
 
     # A lease that outlived its run expires, so the user is not locked out for good.
     short = signins.PostgresLease(pool, seconds=-1)
     assert await short.acquire(user_id=a.id, run_id='run-2')
-    assert await lease.holder(user_id=a.id) is None
+    assert not await lease.holds(user_id=a.id, run_id='run-2')
     assert await lease.acquire(user_id=a.id, run_id='run-3')
 
     # Renewing never takes a free lease: a stopped run must not lock the user's browser again.
     await lease.release(user_id=a.id, run_id='run-3')
     await lease.renew(user_id=a.id, run_id='run-3')
-    assert await lease.holder(user_id=a.id) is None
+    assert not await lease.holds(user_id=a.id, run_id='run-3')
+
+
+async def test_runs_sharing_one_browser_share_the_lease_on_one_server_only(pool: Pool) -> None:
+    async with pool.connection() as c:
+        a = await store.create_user(c, 'a@example.test', 'x')
+    assert a is not None
+    here, there = signins.PostgresLease(pool, owner='vm-1'), signins.PostgresLease(pool, owner='vm-2')
+    assert await here.acquire(user_id=a.id, run_id='run-1', shared=True)
+    assert await here.acquire(user_id=a.id, run_id='run-2', shared=True)  # a tab of the same browser
+    assert not await here.acquire(user_id=a.id, run_id='run-3')  # an engine without tabs: a browser of its own
+    assert not await there.acquire(user_id=a.id, run_id='run-4', shared=True)  # another server: another browser
+    forget = signins.PostgresLease(pool, seconds=60)  # forgetting a site edits the jar alone
+    assert not await forget.acquire(user_id=a.id, run_id='forget:1')
+    await here.release(user_id=a.id, run_id='run-1')
+    await here.release(user_id=a.id, run_id='run-2')
+    assert await forget.acquire(user_id=a.id, run_id='forget:1')
+    assert not await here.acquire(user_id=a.id, run_id='run-5', shared=True)  # nor shares it
 
 
 async def test_user_b_cannot_reach_user_a_files(tmp_path: Path) -> None:

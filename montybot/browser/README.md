@@ -136,7 +136,8 @@ run.
 | `save_state(run_id, user_id)` | `None` | Saves without closing. Allowed during a hand-off |
 | `close(run_id, user_id)` | `bool`: saved | Saves, closes, and ends any hand-off |
 
-`start` raises `UserBusy` while another run of the same user holds the user's sign-ins: one run per user at a time.
+`start` raises `UserBusy` while another browser holds the user's sign-ins: another run's, on an engine without tabs,
+or another server's. On an engine with tabs, runs of the same user share one browser (below).
 
 - **Hand-off is a lease.** While a hand-off is active, `act` and `screenshot` are accepted only with its `handoff_id`
   (the live view); without it they raise `HandoffActive`, and `snapshot` always does. So no screenshot reaches the
@@ -157,9 +158,15 @@ async with BrowserHost(new_backend=make_backend, jar=InMemoryJar(), lease=InMemo
     await host.start(run_id='run-1', user_id='alice')
 ```
 
-- **One browser per run.** `start` calls `new_backend()` once per run and opens it from the user's jar. A retry of the
-  run gets the same browser (`reused=True`). `close` saves, closes it and frees the user's lease.
-- **One run per user.** A run holds the user's `JarLease` from `start` to `close`, and saves only while it holds it.
+- **One browser per run, or one tab per run.** `start` calls `new_backend()` and opens it from the user's jar. With
+  `share_browser=True` (the app sets it when the engine is a `TabsBackend`, as `ChromiumCDPBackend` is), a run of a
+  user whose browser is open gets a tab of it instead: one Chrome per user, cookies shared live, runs side by side,
+  and a hand-off pauses only its own tab. A retry of the run gets the same browser or tab (`reused=True`). `close`
+  saves, closes it (Chrome with its last tab) and frees the run's hold on the lease.
+- **One browser per user.** A run holds the user's `JarLease` from `start` to `close`, and saves only while it holds
+  it. Runs sharing a browser hold it together (`shared`, on one `owner`: the server's `EXECUTOR_ID`); otherwise one
+  run holds it at a time, so two browsers never save over each other. `max_open_browsers` counts a user's tabs once,
+  and makes room by saving and closing a whole browser whose runs are idle.
 - **Saving.** `save_state`, `end_handoff`, `close` and the reaper save. Call `save_state` before pausing a run, so a
   crash during the pause loses nothing.
 - **Idle reaper.** Inside `async with`, browsers unused for `idle_timeout` seconds (default 10 minutes) are saved and
@@ -171,8 +178,8 @@ async with BrowserHost(new_backend=make_backend, jar=InMemoryJar(), lease=InMemo
   `Restarted('the browser service restarted')`. Active hand-offs do not survive a restart.
 - **Wire.** In-process for now. Everything is a plain dataclass, so an HTTP wire can go in front of it unchanged.
 
-`InMemoryJar` and `InMemoryJarLease` stand in for #4. The real lease also needs an expiry, so a lease held by a
-process that died is freed.
+`InMemoryJar` and `InMemoryJarLease` stand in for #4's `PostgresJar` and `PostgresLease`, whose lease rows expire, so
+a lease held by a process that died is freed.
 
 ## `FakeBrowser`
 

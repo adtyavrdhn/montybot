@@ -325,3 +325,15 @@ class DownloadsBackend(Protocol):
         """The downloads finished since the last call, oldest first. Each is returned once. Downloads not taken when
         the browser closes are lost."""
         ...
+
+
+@runtime_checkable
+class TabsBackend(Protocol):
+    """Optional: a browser that can give another run a tab of its own, sharing its cookies and storage. The browser
+    service then keeps one browser per user, and runs of the same user work side by side in its tabs."""
+
+    def new_tab(self) -> BrowserBackend:
+        """A closed backend for a new tab of this open browser. Its `open(state)` only goes to `state.url`: the
+        cookies and storage are the browser's own, already live. Its `export()` reads the whole browser, with its own
+        tab's URL. `close()` closes only that tab; the browser stops when its last tab closes."""
+        ...

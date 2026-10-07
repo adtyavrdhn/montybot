@@ -41,8 +41,8 @@ _log = logging.getLogger(__name__)
 
 
 class CDPFrameSource:
-    """A `FrameSource` for the tabs of one Chrome, starting on `home`, the run's tab. Use `await
-    CDPFrameSource.start(connection, home=target_id)`."""
+    """A `FrameSource` for `home`, the run's tab, and the tabs and popups opened from it, starting on `home`. Other
+    runs' tabs of the same Chrome are never shown. Use `await CDPFrameSource.start(connection, home=target_id)`."""
 
     def __init__(self, connection: CDPConnection, *, home: str, quality: int = 80) -> None:
         self._connection = connection
@@ -73,8 +73,12 @@ class CDPFrameSource:
     async def start(cls, connection: CDPConnection, *, home: str, quality: int = 80) -> CDPFrameSource:
         source = cls(connection, home=home, quality=quality)
         targets = cast(list[CDPParams], (await connection.send('Target.getTargets'))['targetInfos'])
-        for info in targets:
-            source._track(info, follow=False)
+        while True:  # a popup is ours only once its opener is, whatever order Chrome lists them in
+            known = len(source._tabs)
+            for info in targets:
+                source._track(info, follow=False)
+            if len(source._tabs) == known:
+                break
         await source._activate(home)
         return source
 
@@ -146,8 +150,8 @@ class CDPFrameSource:
     def _track(self, info: CDPParams, *, follow: bool) -> None:
         """Note a target's info. A page's new tab or popup is shown, and followed if `follow`."""
         target = str(info['targetId'])
-        if info.get('type') != 'page' or (target != self._home and not info.get('openerId')):
-            return
+        if info.get('type') != 'page' or (target != self._home and info.get('openerId') not in self._tabs):
+            return  # not ours: another run's tab, or a hidden tab of the backend's
         new = target not in self._tabs
         self._tabs[target] = info
         if new:
