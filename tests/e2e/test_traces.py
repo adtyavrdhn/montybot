@@ -36,6 +36,8 @@ from starlette.types import ASGIApp, Message, Scope
 
 from montybot import observability
 from montybot.app import create_app
+from montybot.browser.contract import ActionFailed, LifecycleError
+from montybot.browser.service import UnknownRun
 from montybot.observability import configure_observability, timed, timing
 from montybot.settings import Settings
 
@@ -224,6 +226,28 @@ def test_timing_exceptions(
         assert [event.name for event in span.events] == (['exception'] if include_content else [])
     assert (str(error) in dump_spans(spans)) is include_content
     assert 'function-argument' not in dump_spans(spans)
+
+
+def test_only_our_failures_are_errors(local_traces: InMemorySpanExporter) -> None:
+    """A page that would not load, the browser service's answers by design, the agent's own code errors and a user's
+    stop are not failures of ours: error rates count only the rest."""
+    cases: list[tuple[BaseException, StatusCode, dict[str, object]]] = [
+        (
+            ActionFailed('could not load the page'),
+            StatusCode.UNSET,
+            {'error.kind': 'expected', 'logfire.level_num': 13},
+        ),
+        (UnknownRun('no browser to watch'), StatusCode.UNSET, {'error.kind': 'expected', 'logfire.level_num': 13}),
+        (asyncio.CancelledError(), StatusCode.UNSET, {'error.kind': 'cancelled'}),
+        (LifecycleError('not open'), StatusCode.ERROR, {}),
+        (KeyError('bug'), StatusCode.ERROR, {}),
+    ]
+    for error, _, _ in cases:
+        with pytest.raises(type(error)), timing('test.outcome'):
+            raise error
+    for span, (error, status, attributes) in zip(local_traces.get_finished_spans(), cases, strict=True):
+        assert span.status.status_code == status, error
+        assert dict(span.attributes or {}) == {'error.type': type(error).__qualname__, **attributes}
 
 
 def asgi_call(app: ASGIApp, path: str, secret: str, *, method: str = 'POST') -> list[Message]:
