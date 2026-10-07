@@ -135,43 +135,50 @@ def test_the_web_app_is_served_over_https_behind_a_login(stack: Stack) -> None:
         assert http.get('/healthz').json() == {'status': 'ok'}
 
 
-# Run inside the app container: the same Chromium-in-bwrap the app uses, on public and private addresses.
+# Run inside the app container: the same Chromium-in-bwrap the app uses, on public and private addresses, for the
+# default engine (our CDP pipe) and the Playwright one kept to roll back to.
+ENGINES = ('chromium_cdp_server', 'chromium_server')
 PROBE = """
 import asyncio
+from montybot import engines
 from montybot.browser.contract import ActionFailed, Navigate
-from montybot.engines import chromium_server
 
-async def main():
-    browser = chromium_server()
+async def main(name):
+    browser = getattr(engines, name)()
     await browser.open(None)
     for url in ['chrome://sandbox', 'https://example.com/', 'http://postgres:5432/', 'http://10.0.0.1/',
                 'http://169.254.169.254/', 'http://127.0.0.1:8000/healthz']:
         try:
             await browser.act(Navigate(url=url))
             page = await browser.snapshot()
-            print(url, 'OPENED', page.title, page.text.replace(chr(10), ' ')[:300])
+            print(name, url, 'OPENED', page.title, page.text.replace(chr(10), ' ')[:300])
         except ActionFailed as error:
-            print(url, 'REFUSED', error)
+            print(name, url, 'REFUSED', error)
     await browser.close()
 
-asyncio.run(main())
-"""
+for name in ENGINES:
+    asyncio.run(main(name))
+""".replace('ENGINES', repr(ENGINES))
 
 
 def test_the_browser_runs_in_bwrap_and_reaches_only_public_addresses(stack: Stack) -> None:
     lines = {
-        line.split(' ', 1)[0]: line
+        tuple(line.split(' ', 2)[:2]): line
         for line in stack.compose('exec', '-T', 'app', 'python3', '-', input=PROBE).splitlines()
+        if line.split(' ', 1)[0] in ENGINES
     }
-    assert 'Layer 1 Sandbox Namespace' in lines['chrome://sandbox']  # Chrome's own sandbox, inside bwrap
-    assert 'OPENED' in lines['https://example.com/'] and 'Example Domain' in lines['https://example.com/']
-    for url in (
-        'http://postgres:5432/',
-        'http://10.0.0.1/',
-        'http://169.254.169.254/',
-        'http://127.0.0.1:8000/healthz',
-    ):
-        assert 'REFUSED' in lines[url] and 'ERR_SOCKS_CONNECTION_FAILED' in lines[url], lines[url]
+    for engine in ENGINES:
+        sandbox, public = lines[engine, 'chrome://sandbox'], lines[engine, 'https://example.com/']
+        assert 'Layer 1 Sandbox Namespace' in sandbox, sandbox  # Chrome's own sandbox, inside bwrap
+        assert 'OPENED' in public and 'Example Domain' in public, public
+        for url in (
+            'http://postgres:5432/',
+            'http://10.0.0.1/',
+            'http://169.254.169.254/',
+            'http://127.0.0.1:8000/healthz',
+        ):
+            line = lines[engine, url]
+            assert 'REFUSED' in line and 'ERR_SOCKS_CONNECTION_FAILED' in line, line
 
 
 def test_a_run_reads_a_public_page(stack: Stack) -> None:
