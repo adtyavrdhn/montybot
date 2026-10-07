@@ -6,7 +6,7 @@ the source of truth and this page is the map.
 | Module | Holds | Built on it |
 |---|---|---|
 | `state.py` | `BrowserState`, `Cookie`: one tab's URL, cookies (HttpOnly included), localStorage and sessionStorage per origin | the sign-in jar (#4) |
-| `contract.py` | `BrowserBackend`, the actions and targets, `Snapshot`, `Screenshot`, the errors | Chromium (#11), Servo (#12), snapshot (#13), E2B Desktop (#22) |
+| `contract.py` | `BrowserBackend`, the actions and targets, `Snapshot`, `Screenshot`, the errors | Chromium (#11), Servo (#12), snapshot (#13) |
 | `service.py` | `BrowserService`: the API the agent and the web app call, with run id and user id on every call | browser service (#10), live view (#14), Monty host functions (#5) |
 | `live.py` | `FrameSource`, `Frame`, `Tabs`, `LiveViewBackend`: the live picture and the user's input, for the live view | live view (#14), Chromium (#11), Servo (#12) |
 | `host.py` | `BrowserHost`: the browser service, which owns every browser (#10) | live view (#14), Monty host functions (#5) |
