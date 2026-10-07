@@ -11,7 +11,7 @@ import time
 from collections.abc import AsyncIterator
 
 from montybot.browser.contract import ActionFailed, BrowserBackend, BrowserError, NotSupported
-from montybot.browser.live import Frame, LiveInput, Tab, Tabs
+from montybot.browser.live import Frame, LiveInput, Tab, Tabs, Viewport
 from montybot.liveview.latest import Latest
 
 TAB_ID = 'tab'
@@ -51,6 +51,9 @@ class PollingFrameSource:
     async def switch_tab(self, tab_id: str) -> None:
         if tab_id != TAB_ID:
             raise ActionFailed('no such tab')
+
+    async def set_viewport(self, viewport: Viewport | None) -> None:
+        raise NotSupported('viewport', engine='a polled live view', detail='the backend has no way to resize')
 
     async def close(self) -> None:
         if self._poller is not None:

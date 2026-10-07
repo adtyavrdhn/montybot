@@ -34,6 +34,18 @@ class Frame:
 
 
 @dataclass(frozen=True, kw_only=True)
+class Viewport:
+    """A small screen to lay pages out for, as a phone's browser would: the user's room for the picture."""
+
+    width: int
+    """In CSS pixels."""
+    height: int
+    """In CSS pixels."""
+    scale: float
+    """The screen's device pixels per CSS pixel (`devicePixelRatio`)."""
+
+
+@dataclass(frozen=True, kw_only=True)
 class Tab:
     tab_id: str
     url: str
@@ -72,9 +84,15 @@ class FrameSource(Protocol):
         """Show `tab_id` and send input to it. An unknown id raises `ActionFailed`."""
         ...
 
+    async def set_viewport(self, viewport: Viewport | None) -> None:
+        """Lay the pages out at `viewport`, with a phone's layout, so a user on a phone can read and tap them.
+        `None`, and `close()`, give the browser its own size back. An engine that cannot raises
+        `NotSupported('viewport')`; the user then sees its normal size, scaled down."""
+        ...
+
     async def close(self) -> None:
-        """Stop streaming, release any held mouse button, and go back to the run's tab. The browser stays open.
-        Safe to call more than once."""
+        """Stop streaming, release any held mouse button, restore the browser's own size, and go back to the run's
+        tab. The browser stays open. Safe to call more than once."""
         ...
 
 

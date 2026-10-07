@@ -479,6 +479,15 @@ _POPUP_HTML = """<!doctype html><title>Opener</title>
 
 _POPUP_TARGET_HTML = '<!doctype html><title>Popup</title><p>In the popup</p>'
 
+_SIZE_HTML = """<!doctype html><title>Size</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<p id="size"></p>
+<script>
+const show = () => { document.getElementById('size').textContent = 'size: ' + innerWidth + 'x' + innerHeight; };
+addEventListener('resize', show);
+show();
+</script>"""
+
 
 class _FixtureHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
@@ -518,12 +527,14 @@ _PAGES = {
     '/animate': _ANIMATE_HTML,
     '/popup': _POPUP_HTML,
     '/popup-target': _POPUP_TARGET_HTML,
+    '/size': _SIZE_HTML,
 }
 
 
 @contextmanager
 def serve_fixtures() -> Iterator[str]:
-    """The hold check (`/protected`, `/hold`), `/bench`, `/animate` and `/popup`, on a free port."""
+    """The hold check (`/protected`, `/hold`), `/bench`, `/animate`, `/popup` and `/size` (the page's own size), on a
+    free port."""
     with serve_http(_FixtureHandler) as origin:
         yield origin
 

@@ -203,9 +203,11 @@ Feature = Literal[
     'snapshot',
     'screenshot',
     'export',
+    'viewport',
 ]
 """What `NotSupported` names. Each action is one feature (`mouse` covers down, move and up); `selector`, `ref` and
-`point` are the target kinds; `export` covers `export()` and `release()`."""
+`point` are the target kinds; `export` covers `export()` and `release()`; `viewport` is the live view's
+`FrameSource.set_viewport`."""
 
 
 def features_of(action: Action) -> tuple[Feature, ...]:

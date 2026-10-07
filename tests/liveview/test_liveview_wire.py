@@ -16,6 +16,7 @@ from montybot.liveview.wire import (
     Hello,
     ServerMessage,
     SwitchTab,
+    ViewportSize,
     WireError,
     decode_client,
     decode_frame,
@@ -42,6 +43,7 @@ AT = Point(x=10.5, y=20)
         Scroll(delta_y=120),
         Scroll(delta_x=-5, delta_y=0, at=AT),
         SwitchTab(tab_id='2'),
+        ViewportSize(width=390, height=700, scale=3),
         GiveBackRequest(),
     ],
 )
@@ -62,6 +64,10 @@ def test_client_messages_round_trip(message: ClientMessage) -> None:
         '{"kind": "press", "key": "a", "modifiers": ["Hyper"]}',
         '{"kind": "type"}',
         '{"kind": "switch_tab", "tab_id": 3}',
+        '{"kind": "viewport", "width": 390, "height": 700}',
+        '{"kind": "viewport", "width": 0, "height": 700, "scale": 2}',
+        '{"kind": "viewport", "width": 390, "height": 1e9, "scale": 2}',
+        '{"kind": "viewport", "width": 390, "height": 700, "scale": 100}',
         '{"kind": "type", "text": "' + 'x' * 70_000 + '"}',
     ],
 )

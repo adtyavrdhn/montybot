@@ -60,7 +60,7 @@ All subclass `BrowserError`, and their messages are safe to show the model (no c
 
 | Error | Means |
 |---|---|
-| `NotSupported(feature, engine=...)` | The engine cannot do this at all. `feature` is one of `Feature`: an action (`navigate`, `click`, `type`, `press`, `scroll`, `mouse`), a target kind (`selector`, `ref`, `point`), or `snapshot`, `screenshot`, `export`. `features_of(action)` lists what an action needs |
+| `NotSupported(feature, engine=...)` | The engine cannot do this at all. `feature` is one of `Feature`: an action (`navigate`, `click`, `type`, `press`, `scroll`, `mouse`), a target kind (`selector`, `ref`, `point`), or `snapshot`, `screenshot`, `export`, and the live view's `viewport`. `features_of(action)` lists what an action needs |
 | `TargetNotFound(target)` | No element matched, after the backend's short wait |
 | `ActionFailed` | The engine tried and failed: an unreachable site, a timeout |
 | `LifecycleError` | Called in the wrong state, such as `act` before `open`: a bug in the caller |
