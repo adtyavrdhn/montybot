@@ -68,7 +68,7 @@ def deps(run_id: str, monkeypatch: pytest.MonkeyPatch) -> Any:
         return ''
 
     monkeypatch.setattr(agent_module, 'recall', no_memories)
-    return SimpleNamespace(run_id=run_id, run=SimpleNamespace(id=run_id, prompt='hello'), schedule=None)
+    return SimpleNamespace(run_id=run_id, run=SimpleNamespace(id=run_id, prompt='hello'), schedule=None, local_time='')
 
 
 async def test_handler_publishes_text_before_event_stream_finishes(run_id: str) -> None:
