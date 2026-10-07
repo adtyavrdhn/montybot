@@ -463,6 +463,57 @@ async def test_runs_of_one_user_share_one_browser_in_the_service() -> None:
             assert state is not None and [c.name for c in state.cookies] == ['sid']
 
 
+_ASK_FOR_A_PASSKEY = """<script>
+const report = (text) => (window.opener || window).document.getElementById('out').textContent += text + ' ';
+navigator.credentials.get({publicKey: {challenge: new Uint8Array(16), rpId: 'localhost', timeout: 30000}})
+  .then(() => report('got one'), (error) => report(error.name));
+</script>"""
+
+
+class _Passkeys(BaseHTTPRequestHandler):
+    """`/` asks for a passkey and has a button that opens `/popup`, which asks too and reports to its opener."""
+
+    def do_GET(self) -> None:
+        if self.path == '/popup':
+            body = '<title>Popup</title>' + _ASK_FOR_A_PASSKEY
+        else:
+            body = '<title>Sign in</title><p id="out"></p><button onclick="window.open(\'/popup\')">Popup</button>'
+            body += _ASK_FOR_A_PASSKEY
+        data = f'<!doctype html>{body}'.encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+@needs_chrome
+async def test_passkey_requests_fail_at_once_in_the_tab_and_its_popups() -> None:
+    """Chrome's passkey dialog would cover the page where the live view cannot show it. Instead the request fails
+    as on a computer without passkeys, and the site offers another way to sign in."""
+    server = ThreadingHTTPServer(('127.0.0.1', 0), _Passkeys)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    origin = f'http://localhost:{server.server_address[1]}'  # passkeys need a secure context, and a name, not an IP
+    try:
+        async with chrome() as browser:
+            await browser.open(BrowserState(url=f'{origin}/'))
+            await wait_for_text(browser, 'NotAllowedError', timeout=15)
+            await browser.act(Click(target=Selector(css='button')))
+            await wait_for_text(browser, 'NotAllowedError NotAllowedError', timeout=15)
+            other_run = browser.new_tab()  # another run's tab of the same Chrome
+            try:
+                await other_run.open(BrowserState(url=f'{origin}/'))
+                await wait_for_text(other_run, 'NotAllowedError', timeout=15)
+            finally:
+                await other_run.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 # --- without Chrome ---
 
 

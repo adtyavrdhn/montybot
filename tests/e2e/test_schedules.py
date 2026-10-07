@@ -164,6 +164,48 @@ def test_a_weekly_cart_fill_over_two_weeks(
     assert dbos.list_schedules() == []
 
 
+def approvals_in(database_url: str, thread_id: str) -> int:
+    with psycopg.connect(database_url) as connection:
+        row = connection.execute(
+            'SELECT count(*) FROM montybot.asks a JOIN montybot.runs r ON r.id = a.run_id '
+            "WHERE r.thread_id = %s AND a.kind = 'approval'",
+            (thread_id,),
+        ).fetchone()
+    assert row is not None
+    return row[0]
+
+
+@pytest.mark.u4
+def test_a_scheduled_order_is_placed_without_asking_again(
+    client: Client, shop: Shop, dbos: DBOSClient, database_url: str
+) -> None:
+    """The user approves the schedule, order included, once. Its runs then place the order with nobody there."""
+    client.sign_up()
+    chat = client.ask(f'Every Friday at 8, order eggs from {shop.url}')
+    approval = client.wait_for_ask(chat, 'approval')
+    assert 'without asking you again' in approval['prompt']
+    client.answer(approval, approved=True)
+    assert 'Scheduled' in client.wait_for_reply(chat)
+    (weekly,) = schedules(client)
+    thread = weekly['thread_id']
+
+    # Week 1 signs in through a hand-off; week 2 has the saved sign-in. Neither asks to place the order.
+    for week in (1, 2):
+        handle = fire(dbos, weekly)
+        if week == 1:
+            eventually(lambda: client.thread(thread)['run'], what='the first run')
+            client.wait_for_ask(thread, 'handoff')
+            Human(client, client.thread(thread)['run']['id']).sign_in('alice', 'hunter2')
+        finished(handle)
+        assert reply_of(client, thread).startswith(f'Done. Order #{week}: eggs')
+    assert len(shop.orders) == 2 and approvals_in(database_url, thread) == 0
+
+    # Asked in chat, the same order still waits for the user's yes.
+    chat = client.ask(f'Order eggs from {shop.url}')
+    client.wait_for_ask(chat, 'approval')
+    assert len(shop.orders) == 2
+
+
 @pytest.mark.u4
 def test_a_slot_watch_notifies_once(
     client: Client,

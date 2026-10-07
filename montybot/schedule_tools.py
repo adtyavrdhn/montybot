@@ -23,7 +23,9 @@ opens"), set up a schedule with `schedule_task`. Each run of it happens in its o
 
 SCHEDULED = """\
 This task was started by a schedule the user set up ("{name}", {when}), not by a message: the user is not watching.
-Use the saved sign-ins; hand off only if a site asks to sign in again. Reply with what you did, in a line or two."""
+Use the saved sign-ins; hand off only if a site asks to sign in again. The user approved this task when they set up
+the schedule, so `commit` does not ask them again: commit only what the task asks for, and nothing else that cannot
+be undone. Reply with what you did, in a line or two."""
 
 WATCH = """\
 This schedule is a watch. Check, and if what the user waits for is there, call `notify_user`, then reply with what
@@ -58,7 +60,8 @@ def check_schedule(
 async def schedule_task(
     ctx: RunContext[RunDeps], name: str, cron: str, timezone: str, when: str, prompt: str, watch: bool = False
 ) -> str:
-    """Run a task on a schedule, for the user. They are asked to approve it first.
+    """Run a task on a schedule, for the user. They are asked to approve it first; its runs then do what it asks,
+    orders and messages included, without asking again.
 
     Args:
         name: A short label, such as "Weekly groceries".

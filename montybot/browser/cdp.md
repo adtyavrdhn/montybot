@@ -32,6 +32,7 @@ Playwright), or `$MONTYBOT_CHROME_BINARY`. CI pins Chrome for Testing 153.0.8010
 | Live view | `liveview/cdp.py`: `Page.startScreencast` on its own session per tab, tabs from target discovery, phone size with `Emulation.setDeviceMetricsOverride`, outline for screen readers |
 | Downloads | `Browser.setDownloadBehavior` into the profile folder, `Browser.downloadWillBegin` and `downloadProgress` |
 | Dialogs | Dismissed, as Playwright does; `beforeunload` is accepted so navigation goes on |
+| Passkeys (WebAuthn) | Each tab and popup has an empty virtual security key and Chrome's passkey dialog is off, so a request fails at once (`NotAllowedError`) and the site offers another way to sign in. The dialog is Chrome's own window: the live view could not show it, and it blocked clicks on the page |
 
 ### Automation tells
 

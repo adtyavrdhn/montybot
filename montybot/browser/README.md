@@ -17,6 +17,7 @@ the source of truth and this page is the map.
 | `chromium.py`, `chromium_linux.py` | `ChromiumBackend`: real Chrome through Playwright; Xvfb and bwrap on Linux. See [`CHROMIUM.md`](CHROMIUM.md) | #11 |
 | `cdp.py`, `cdp_client.py` | `ChromiumCDPBackend`: the same Chrome over our own CDP pipe, no Playwright; evaluation. See [`cdp.md`](cdp.md) | #18 |
 | `lightpanda.py` | `LightpandaBackend`: Lightpanda over CDP, evaluation only, no pixels. See [`lightpanda.md`](lightpanda.md) | #18 |
+| `cloak.py` | `with_cloak`: CloakBrowser's binary in place of Chrome under `ChromiumCDPBackend`; evaluation, licensed separately. See [`cloak.md`](cloak.md) | #18 |
 
 ## `BrowserBackend`
 

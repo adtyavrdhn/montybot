@@ -312,6 +312,13 @@ SCRIPTS: dict[str, Script] = {
         prompt='Fill my cart at {url} with eggs and milk',
     ),
     'Fill my cart at': fill_cart,
+    'Every Friday at 8, order eggs from': schedule(
+        name='Weekly eggs',
+        cron='0 8 * * 5',
+        timezone='Europe/London',
+        when='Fridays at 08:00',
+        prompt='Order eggs from {url}',  # each run is `order_eggs`, which ends in `commit`
+    ),
     'Tell me when a delivery slot opens at': schedule(
         name='Delivery slot',
         cron='*/30 * * * *',
