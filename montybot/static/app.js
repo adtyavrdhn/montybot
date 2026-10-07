@@ -47,13 +47,14 @@ async function api(path, { method = 'GET', body } = {}) {
     init.body = JSON.stringify(body);
   }
   let response;
+  let data;
   try {
     response = await fetch(path, init);
+    data = (response.headers.get('Content-Type') || '').includes('application/json') ? await response.json() : null;
   } catch (error) {
     if (error.name === 'AbortError') throw error;
     throw new Error('Could not reach Monty. Check your connection, and try again.');  // not the browser's words
   }
-  const data = (response.headers.get('Content-Type') || '').includes('application/json') ? await response.json() : null;
   if (response.status === 401 && !['/api/signin', '/api/me'].includes(path)) signedOut();
   if (!response.ok) {
     const error = new Error(problem(response.status, data && typeof data.detail === 'string' ? data.detail : null));
@@ -172,10 +173,12 @@ async function loadThreads() {
   const load = ++state.threadLoads;
   const threads = await api('/api/threads');
   if (load !== state.threadLoads) return;  // a later load is drawing the list
+  // The open chat catches up when the list knows better: a run started elsewhere (a schedule, another tab), or
+  // finished while the chat's event stream was down for good (an HTTP error closes it; only a reload reopens it).
   const open = $('layout').hidden ? null : threads.find((thread) => thread.id === state.threadId);
-  if (open && open.status && !(state.run && ACTIVE.includes(state.run.status))) {
-    report(loadChat());  // a run started in the open chat elsewhere (a schedule, another tab): show it
-  }
+  const shownWorking = Boolean(state.run && ACTIVE.includes(state.run.status));
+  const streamDown = !events || events.readyState === EventSource.CLOSED;
+  if (open && (Boolean(open.status) !== shownWorking || (shownWorking && streamDown))) report(loadChat());
   const currentId = $('layout').hidden ? null : state.threadId;  // on Files or Schedules no chat is the current page
   const shown = JSON.stringify([currentId, threads]);
   if (shown === state.threadsShown) return;
@@ -847,6 +850,7 @@ async function start() {
   try {
     await api('/api/me');
   } catch (error) {
+    if (error.status !== 401) $('signin-error').textContent = error.message;  // offline, not signed out
     show('signin');
     return;
   }

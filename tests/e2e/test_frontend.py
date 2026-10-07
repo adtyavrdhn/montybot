@@ -50,11 +50,12 @@ class MockAPI:
             self.signed_in = True
             status = 201 if path == '/api/signup' else 200
         elif path == '/api/threads' and method == 'GET':
-            result = (
-                [{'id': THREAD, 'title': 'Compare flights to Lisbon', 'status': self.thread_status}]
-                if self.messages
-                else []
+            # As the server does: the list's status is the open run's, unless a test sets it on its own.
+            running = (
+                self.run['status'] if self.run and self.run['status'] in ('queued', 'running', 'waiting') else None
             )
+            listed = {'id': THREAD, 'title': 'Compare flights to Lisbon', 'status': self.thread_status or running}
+            result = [listed] if self.messages else []
         elif path == '/api/threads' and method == 'POST':
             assert isinstance(body, dict)
             self.messages = [
@@ -773,3 +774,22 @@ def test_no_connection_says_so_in_plain_words(frontend: tuple[Page, MockAPI]) ->
     page.fill('#message', 'Compare flights')
     page.click('#send')
     expect(page.locator('#notice-text')).to_have_text('Could not reach Monty. Check your connection, and try again.')
+
+
+def test_a_chat_whose_stream_closed_for_good_catches_up_from_the_list(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    streaming_chat(page, mock)
+    page.evaluate('window.eventSources[0].close()')  # as an HTTP error (a 502 in a restart) closes it for good
+    mock.messages.append({'role': 'assistant', 'text': 'All done.'})
+    mock.run = {'id': 'run', 'thread_id': THREAD, 'status': 'done', 'activity': [], 'ask': None}
+    page.evaluate('loadThreads()')  # as the 15-second refresh does
+    expect(page.locator('.msg.assistant')).to_have_text('All done.')
+    expect(page.locator('#send')).to_be_visible()
+
+
+def test_offline_at_start_says_so_instead_of_looking_signed_out(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    page.route('**/api/me', lambda route: route.abort())
+    page.goto('http://monty.test/')
+    expect(page.locator('#signin-error')).to_have_text('Could not reach Monty. Check your connection, and try again.')
