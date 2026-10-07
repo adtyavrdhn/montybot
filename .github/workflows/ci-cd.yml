@@ -96,15 +96,22 @@ jobs:
       ENCRYPTION_KEY: bW9udHlib3QtdGVzdC1rZXktMzItYnl0ZXMtbG9uZyE=
       BASIC_AUTH_USER: test
       BASIC_AUTH_HASH: test
+      MODEL: script:e2e.scripts:model
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - run: docker compose -f deploy/compose.yaml up -d --build --wait --wait-timeout 240 app
+      - name: Start the actual Compose stack with the scripted model
+        run: |
+          docker compose -f deploy/compose.yaml -f deploy/compose.smoke.yaml up -d --build --wait --wait-timeout 240 app || {
+            docker compose -f deploy/compose.yaml -f deploy/compose.smoke.yaml ps
+            docker compose -f deploy/compose.yaml -f deploy/compose.smoke.yaml logs --no-color --tail=100 app browser-egress
+            exit 1
+          }
       - name: Browser uses sidecar to reach public sites but not Postgres
         run: |
-          docker compose -f deploy/compose.yaml exec -T app python - <<'PY'
+          docker compose -f deploy/compose.yaml -f deploy/compose.smoke.yaml exec -T app python - <<'PY'
           import asyncio
           from montybot.browser.contract import ActionFailed, Navigate
           from montybot.engines import chromium_server
@@ -127,7 +134,7 @@ jobs:
           asyncio.run(check())
           PY
       - if: always()
-        run: docker compose -f deploy/compose.yaml down --volumes --remove-orphans
+        run: docker compose -f deploy/compose.yaml -f deploy/compose.smoke.yaml down --volumes --remove-orphans
 
   deploy:
     needs: [lint, test, sidecar-smoke]
