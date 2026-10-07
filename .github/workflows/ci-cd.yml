@@ -194,6 +194,48 @@ jobs:
       - run: uv run pytest -q -p no:cacheprovider -rs tests/liveview/test_liveview_engines.py -k cdp
       - run: uv run pytest -q -p no:cacheprovider -n 4 --durations=10 tests/e2e --browser=cdp
 
+  # CloakBrowser in place of Chrome under the same CDP backend is evaluated, not deployed (cloak.md): its conformance,
+  # unjailed and in the server's jail, and the end-to-end suite. Not a deploy gate. Its license forbids redistribution,
+  # so each run downloads the free build from GitHub Releases, pinned by SHA-256 and checked against CloakHQ's signed
+  # SHA256SUMS (tests/linux/fetch_cloak.sh). No license key.
+  cloak-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-retries 30
+        ports:
+          - 5432:5432
+    env:
+      MONTYBOT_TEST_POSTGRES: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      # The fonts are the baseline from CloakBrowser's README (emoji and CJK for canvas hashes).
+      - name: Allow user namespaces, install Xvfb, bwrap, socat, fonts and CPython dependencies
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb bubblewrap socat python3-pandas python3-pypdf \
+            fonts-noto-color-emoji fonts-freefont-ttf fonts-unifont fonts-ipafont-gothic fonts-wqy-zenhei \
+            fonts-tlwg-loma-otf
+      - run: uv sync --locked
+      # Playwright's install brings the system libraries Chromium loads. Its headless shell is not the engine: the
+      # end-to-end tests drive the web app as its user would, in it.
+      - run: uv run playwright install --with-deps --only-shell chromium
+      - name: CloakBrowser, free build, verified
+        run: echo "MONTYBOT_CLOAK_BINARY=$(sh tests/linux/fetch_cloak.sh "$RUNNER_TEMP/cloak")" >> "$GITHUB_ENV"
+      - run: uv run pytest -q -p no:cacheprovider -rs tests/browser/test_cloak.py
+      - run: uv run pytest -q -p no:cacheprovider -n 4 --durations=10 tests/e2e --browser=cloak
+
   sidecar-smoke:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

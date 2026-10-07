@@ -203,6 +203,9 @@ class CDPOptions:
     navigation_timeout: float = 30
     """How long a page may take to load, in seconds."""
     extra_args: tuple[str, ...] = ()
+    software_webgl: bool = True
+    """Pass `--enable-unsafe-swiftshader`, for WebGL with no GPU. A browser that reports a GPU of its own, such as
+    CloakBrowser (`cloak.py`), goes without it."""
 
     @classmethod
     def server(cls, *, egress_socket: Path | None = None, headless: bool = False) -> CDPOptions:
@@ -214,7 +217,7 @@ class CDPOptions:
         argv = [
             str(self.executable),
             f'--user-data-dir={profile}',
-            *_ARGS,
+            *(arg for arg in _ARGS if self.software_webgl or arg != '--enable-unsafe-swiftshader'),
             f'--window-size={self.window_width},{self.window_height}',
         ]
         if self.headless:
