@@ -28,6 +28,7 @@ from montybot.browser.contract import (
     Click,
     ElementTarget,
     Navigate,
+    NotSupported,
     Press,
     Ref,
     Selector,
@@ -184,7 +185,13 @@ async def hand_off(ctx: RunContext[RunDeps], reason: str) -> str:
 
     async def start(session: Session) -> str:
         await session.start()
-        await session.browser.save_state(run_id=session.run_id, user_id=session.user_id)
+        try:
+            await session.browser.save_state(run_id=session.run_id, user_id=session.user_id)
+        except NotSupported as error:
+            if error.feature != 'export':
+                raise
+            # An engine that cannot export (stock Servo) keeps the session only while its browser is open, as
+            # `approvals.save_browser` does for other waits: the hand-off still works, it just is not saved.
         handoff = await session.browser.start_handoff(run_id=session.run_id, user_id=session.user_id, reason=reason)
         return handoff.handoff_id
 

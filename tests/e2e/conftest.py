@@ -42,6 +42,12 @@ T = TypeVar('T')
 BACKENDS = {
     'fake': 'sites.html_browser:new_backend',
     'chromium': 'montybot.engines:chromium_headless',
+    # Unjailed headless servoshell at MONTYBOT_SERVO_BINARY, for the engine evaluation (#18).
+    'servo': 'montybot.browser.servo:ServoBackend',
+    # Chrome over our own CDP pipe, no Playwright, headless and unjailed (cdp.md).
+    'cdp': 'montybot.engines:chromium_cdp_headless',
+    # Unjailed Lightpanda at MONTYBOT_LIGHTPANDA_BINARY, for the same evaluation.
+    'lightpanda': 'montybot.browser.lightpanda:LightpandaBackend',
 }
 
 
@@ -57,7 +63,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     real_browser = config.getoption('--browser') != 'fake'
-    live = pytest.mark.skip(reason='real sites: run with --live, --browser=chromium and MONTYBOT_TEST_MODEL')
+    live = pytest.mark.skip(reason='real sites: run with --live, a real --browser and MONTYBOT_TEST_MODEL')
     scripted = pytest.mark.skip(reason='needs the scripted model')
     for item in items:
         if 'live' in item.keywords and not (config.getoption('--live') and real_browser):

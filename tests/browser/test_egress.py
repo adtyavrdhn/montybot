@@ -54,6 +54,49 @@ async def connect(proxy: Path, host: str, port: int) -> tuple[int, asyncio.Strea
     return reply[1], reader, writer
 
 
+async def http_connect(proxy: Path, request: bytes) -> tuple[bytes, asyncio.StreamReader, asyncio.StreamWriter]:
+    """An HTTP proxy request, as Servo makes one; returns the status line."""
+    reader, writer = await asyncio.open_unix_connection(str(proxy))
+    writer.write(request)
+    status = (await reader.readuntil(b'\r\n\r\n')).split(b'\r\n')[0]
+    return status, reader, writer
+
+
+async def test_http_connect_refuses_private_addresses_and_other_methods(socket_dir: Path) -> None:
+    server, port = await echo_server()
+    proxy = EgressProxy(socket_dir / 'egress.sock')
+    await proxy.start()
+    try:
+        for host in ('127.0.0.1', 'localhost', '[::1]', '169.254.169.254'):
+            request = f'CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n'.encode()
+            status, _, writer = await http_connect(proxy.path, request)
+            writer.close()
+            assert status == b'HTTP/1.1 403 Forbidden', host
+        for request in (b'GET http://example.com/ HTTP/1.1\r\n\r\n', b'CONNECT example.com HTTP/1.1\r\n\r\n'):
+            status, _, writer = await http_connect(proxy.path, request)
+            writer.close()
+            assert status == b'HTTP/1.1 405 Method Not Allowed', request
+    finally:
+        await proxy.stop()
+        server.close()
+
+
+async def test_http_connect_carries_a_connection_where_allowed(socket_dir: Path) -> None:
+    server, port = await echo_server()
+    proxy = EgressProxy(socket_dir / 'egress.sock', allow_private=True)
+    await proxy.start()
+    try:
+        request = f'CONNECT localhost:{port} HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n'.encode()
+        status, reader, writer = await http_connect(proxy.path, request)
+        assert status == b'HTTP/1.1 200 Connection established'
+        writer.write(b'hello')
+        assert await reader.read(100) == b'hello'
+        writer.close()
+    finally:
+        await proxy.stop()
+        server.close()
+
+
 async def test_proxy_can_restart_on_its_socket_path(socket_dir: Path) -> None:
     path = socket_dir / 'egress.sock'
     path.touch()  # a crashed sidecar can leave a stale socket in its volume

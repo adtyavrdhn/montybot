@@ -1,4 +1,4 @@
-"""The way out of a jailed Chrome's network namespace: a SOCKS5 proxy on a Unix socket, one per browser.
+"""The way out of a jailed browser's network namespace: a proxy on a Unix socket, shared or one per browser.
 
 On the server, bwrap gives Chrome its own network namespace with only a loopback interface (`--unshare-net`). Inside
 it, `socat` listens on `127.0.0.1:PROXY_PORT` and passes each connection to this proxy's Unix socket, which is mounted
@@ -12,6 +12,10 @@ Chrome --TCP--> socat (in the jail) --Unix socket--> EgressProxy (sidecar on the
 Only public addresses are allowed (`ipaddress.is_global`), unless `allow_private`: a page cannot reach the app's own
 services, the host, or anything else on a private network, by name or by address, redirects and subresources too.
 Only TCP leaves the jail, so QUIC and WebRTC's UDP have nowhere to go.
+
+The same socket also takes an HTTP `CONNECT` request, which is the only kind of proxy Servo speaks (it tunnels
+`http://` as well as `https://`). The first byte tells them apart: 5 for SOCKS5, a letter for HTTP. Both go through the
+same address check.
 """
 
 from __future__ import annotations
@@ -37,8 +41,27 @@ _MAX_CONNECTIONS = 128
 _CLOSE_GRACE = 5
 
 
+async def proxy_answers(path: Path, *, attempts: int = 5) -> bool:
+    """Whether a shared proxy on `path` answers a SOCKS5 greeting, trying once a second up to `attempts` times. The
+    browser checks it before starting, so it fails closed when the sidecar is down."""
+    for attempt in range(attempts):
+        try:
+            reader, writer = await asyncio.wait_for(asyncio.open_unix_connection(path), 2)
+            try:
+                writer.write(bytes([_VERSION, 1, _NO_AUTH]))
+                return await asyncio.wait_for(reader.readexactly(2), 2) == bytes([_VERSION, _NO_AUTH])
+            finally:
+                writer.close()
+                with contextlib.suppress(OSError):
+                    await writer.wait_closed()
+        except (OSError, TimeoutError, asyncio.IncompleteReadError):
+            if attempt < attempts - 1:
+                await asyncio.sleep(1)
+    return False
+
+
 class EgressProxy:
-    """A SOCKS5 server (CONNECT only, no authentication) on the Unix socket `path`."""
+    """A SOCKS5 and HTTP `CONNECT` server (no authentication) on the Unix socket `path`."""
 
     def __init__(self, path: Path, *, allow_private: bool = False) -> None:
         self.path = path
@@ -79,21 +102,24 @@ class EgressProxy:
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         async with asyncio.timeout(_HANDSHAKE_TIMEOUT):
-            request = await self._handshake(reader, writer)
+            (first,) = await reader.readexactly(1)
+            socks = first == _VERSION
+            request = await (self._handshake(reader, writer) if socks else _http_connect(first, reader, writer))
         if request is None:
             return
         try:
             status, upstream = await asyncio.wait_for(self._connect(*request), _CONNECT_TIMEOUT)
         except TimeoutError:
             status, upstream = _HOST_UNREACHABLE, None
-        _reply(writer, status)
+        (_reply if socks else _http_reply)(writer, status)
         if upstream is not None:
             await self._relay(reader, writer, upstream)
 
     async def _handshake(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> tuple[str, int] | None:
-        version, count = await reader.readexactly(2)
+        """The rest of a SOCKS5 greeting and request, after its version byte."""
+        (count,) = await reader.readexactly(1)
         methods = await reader.readexactly(count)
-        if version != _VERSION or _NO_AUTH not in methods:
+        if _NO_AUTH not in methods:
             writer.write(bytes([_VERSION, 0xFF]))
             return
         writer.write(bytes([_VERSION, _NO_AUTH]))
@@ -157,6 +183,35 @@ class EgressProxy:
 
 def _reply(writer: asyncio.StreamWriter, status: int) -> None:
     writer.write(bytes([_VERSION, status, 0, _IPV4, 0, 0, 0, 0, 0, 0]))
+
+
+_HTTP_STATUS = {
+    _SUCCEEDED: b'200 Connection established',
+    _NOT_ALLOWED: b'403 Forbidden',
+    _NOT_SUPPORTED: b'405 Method Not Allowed',
+}
+
+
+async def _http_connect(
+    first: int, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+) -> tuple[str, int] | None:
+    """An HTTP `CONNECT host:port` request, after its first byte. Headers are read and ignored."""
+    try:
+        head = bytes([first]) + await reader.readuntil(b'\r\n\r\n')
+    except asyncio.LimitOverrunError:
+        head = b''
+    method, _, rest = head.partition(b' ')
+    target = rest.partition(b' ')[0].decode('ascii', errors='replace')
+    host, _, port = target.rpartition(':')
+    host = host.removeprefix('[').removesuffix(']')
+    if method != b'CONNECT' or not host or not port.isdigit() or not 0 < int(port) < 65536:
+        _http_reply(writer, _NOT_SUPPORTED)
+        return None
+    return host, int(port)
+
+
+def _http_reply(writer: asyncio.StreamWriter, status: int) -> None:
+    writer.write(b'HTTP/1.1 ' + _HTTP_STATUS.get(status, b'502 Bad Gateway') + b'\r\n\r\n')
 
 
 async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:

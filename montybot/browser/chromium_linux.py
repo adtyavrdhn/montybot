@@ -22,6 +22,7 @@ import os
 import secrets
 import shlex
 import struct
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -173,15 +174,22 @@ def bwrap_command(
     display: Display | None,
     proxy: Path | None = None,
     proxy_directory: Path | None = None,
+    expose: tuple[int, Path] | None = None,
+    env: Mapping[str, str] | None = None,
     bwrap: str = 'bwrap',
 ) -> list[str]:
-    """The bwrap command line that runs `chrome` with `profile` as its only writable folder.
+    """The bwrap command line that runs `chrome` (or another browser, such as servoshell) with `profile` as its only
+    writable folder. `env` adds to the few variables the jail sets.
 
     Chrome's own arguments, which Playwright passes (`--user-data-dir=PROFILE`, `--remote-debugging-pipe`, ...),
     go after this. The profile is mounted at the same path inside, so Playwright's `--user-data-dir` works unchanged.
 
     With `proxy`, the Unix socket of the browser's `EgressProxy`, Chrome gets its own network namespace with only
     loopback, and socat inside forwards `127.0.0.1:PROXY_PORT` to the socket (see `egress.py`).
+
+    `expose=(port, socket)`, with `proxy`, makes a TCP port inside the jail reachable from the host only as the Unix
+    socket `socket`, which must be in `profile`: how Servo's WebDriver server, which listens on every interface, is
+    driven from outside without a TCP port on the host.
     """
     command = [
         bwrap,
@@ -206,27 +214,27 @@ def bwrap_command(
     command += ['--ro-bind', chrome_dir, chrome_dir]
     command += ['--proc', '/proc', '--dev', '/dev', '--tmpfs', '/dev/shm', '--tmpfs', '/tmp']
     command += ['--bind', str(profile), str(profile), '--chdir', str(profile)]
-    env = {'HOME': str(profile), 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
+    variables = {'HOME': str(profile), 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', **(env or {})}
     if display is not None:
         command += ['--bind', str(display.socket), str(display.socket)]
         command += ['--ro-bind', str(display.xauthority), str(display.xauthority)]
-        env |= {'DISPLAY': display.name, 'XAUTHORITY': str(display.xauthority)}
-    for name, value in env.items():
+        variables |= {'DISPLAY': display.name, 'XAUTHORITY': str(display.xauthority)}
+    for name, value in variables.items():
         command += ['--setenv', name, value]
     if proxy is None:
+        if expose is not None:
+            raise ValueError('expose needs a proxy: without its own network namespace the port is already on the host')
         return [*command, str(chrome)]
     # A shared proxy may restart: bind its directory so socat sees the new socket inode on its next connection.
     if proxy_directory is not None:
         command += ['--ro-bind', str(proxy_directory), str(proxy_directory)]
     else:
         command += ['--bind', str(proxy), str(proxy)]
-    return [
-        *command,
-        '/bin/sh',
-        '-c',
-        _FORWARD_THEN_EXEC.format(port=PROXY_PORT, socket=shlex.quote(str(proxy))),
-        str(chrome),
-    ]
+    script = _FORWARD_THEN_EXEC.format(port=PROXY_PORT, socket=shlex.quote(str(proxy)))
+    if expose is not None:
+        port, socket = expose
+        script = _EXPOSE.format(port=port, socket=shlex.quote(str(socket))) + script
+    return [*command, '/bin/sh', '-c', script, str(chrome)]
 
 
 # Inside the jail: start the forwarder, wait until it listens (state 0A in /proc/net/tcp, for at most 5 s), then become
@@ -237,6 +245,8 @@ _FORWARD_THEN_EXEC = (
     'i=$((i+1)); [ $i -gt 500 ] && echo "socat did not start" >&2 && exit 1; sleep 0.01; done; '
     'exec "$0" "$@"'
 )
+# Inside the jail: the host connects to the Unix socket (mode 600, in the profile folder) to reach PORT on loopback.
+_EXPOSE = 'socat UNIX-LISTEN:{socket},mode=600,unlink-early,fork TCP:127.0.0.1:{port} 3>&- 4>&- & '
 
 
 def write_bwrap_script(
