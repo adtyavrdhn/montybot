@@ -71,6 +71,12 @@ function problem(status, detail) {
   return detail || `Something went wrong (${status}). Please try again.`;
 }
 
+function reportUnlessOffline(promise) {
+  // For refreshes nobody asked for: offline, the page already says it is reconnecting, so only a server's answer
+  // (an error with a status) is worth a notice.
+  report(promise.catch((error) => { if (error.status) throw error; }));
+}
+
 function report(promise) {
   // For event handlers: show what went wrong, but not for requests of a page the user has left.
   promise.catch((error) => {
@@ -145,6 +151,10 @@ $('signin-form').addEventListener('submit', async (event) => {
       method: 'POST', body: { email: $('email').value, password: $('password').value },
     });
     await start();
+    if (!$('signin').hidden && !$('signin-error').textContent) {
+      // Signed in, yet still signed out: the browser did not keep the session cookie.
+      $('signin-error').textContent = 'You were signed in, but this browser did not keep it. Allow cookies for this site, then try again.';
+    }
   } catch (error) {
     $('signin-error').textContent = error.message;
   } finally {
@@ -208,7 +218,7 @@ async function loadThreads() {
 
 setInterval(() => {
   // Another chat may start needing the user at any time.
-  if (!$('main').hidden && document.visibilityState === 'visible') report(loadThreads());
+  if (!$('main').hidden && document.visibilityState === 'visible') reportUnlessOffline(loadThreads());
 }, 15000);
 
 // --- the drawer, on small screens ---
@@ -362,7 +372,7 @@ function renderStatus() {
   // The draft's activity while the model thinks or writes; the run's own log ("Opening example.com") while it acts.
   const logged = run.activity.length ? run.activity[run.activity.length - 1] : 'Working…';
   const now = (state.draft && state.draft.activity) || logged;
-  $('status').textContent = state.draftLost ? `${now} · Live preview unavailable; checking for updates…` : now;
+  $('status').textContent = state.draftLost ? `${now} · Reconnecting…` : now;
 }
 
 function renderDraft() {
@@ -419,12 +429,14 @@ function follow(run) {
     // EventSource reconnects by itself, and the server ends each stream every few minutes on purpose. Only if it is
     // still not back after a moment: warn, and reload the chat (which says whether the run ended or the user was
     // signed out).
-    setTimeout(() => {
+    if (source.lostTimer) return;  // one check at a time, however often the browser retries
+    source.lostTimer = setTimeout(() => {
+      source.lostTimer = null;
       if (!live() || source.readyState === EventSource.OPEN) return;
       state.draftLost = true;
       renderStatus();
       renderDraft();
-      report(loadChat());
+      reportUnlessOffline(loadChat());
     }, 2000);
   };
 }

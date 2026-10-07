@@ -502,7 +502,7 @@ def test_sse_snapshots_error_recovery_and_committed_reply(frontend: tuple[Page, 
     emit(page, 'preview', {'revision': 'invalid', 'text': 'Bad draft', 'activity': 'Bad activity'})
     expect(page.locator('#messages')).not_to_contain_text('Bad draft')
     emit(page, 'error')
-    expect(page.locator('#status')).to_contain_text('Live preview unavailable')
+    expect(page.locator('#status')).to_contain_text('Reconnecting')
     expect(page.locator('.msg.assistant')).to_contain_text('Connection lost; this may be incomplete')
     emit(page, 'open')
     expect(page.locator('#status')).to_have_text('Comparing fares')
@@ -793,3 +793,23 @@ def test_offline_at_start_says_so_instead_of_looking_signed_out(frontend: tuple[
     page.route('**/api/me', lambda route: route.abort())
     page.goto('http://monty.test/')
     expect(page.locator('#signin-error')).to_have_text('Could not reach Monty. Check your connection, and try again.')
+
+
+def test_background_refreshes_stay_quiet_offline(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    workspace(page, mock)
+    page.route('**/api/threads', lambda route: route.abort())
+    page.evaluate('reportUnlessOffline(loadThreads())')  # as the 15-second refresh does
+    page.wait_for_timeout(300)
+    expect(page.locator('#notice')).to_be_hidden()
+
+
+def test_a_sign_in_the_browser_does_not_keep_is_explained(frontend: tuple[Page, MockAPI]) -> None:
+    page, _ = frontend
+    page.goto('http://monty.test/')
+    # Signed in, but the session cookie is not kept, so /api/me still answers 401.
+    page.route('**/api/signin', lambda route: route.fulfill(status=200, content_type='application/json', body='{}'))
+    page.fill('#email', 'pat@example.test')
+    page.fill('#password', 'correct horse')
+    page.click('#signin-button')
+    expect(page.locator('#signin-error')).to_contain_text('Allow cookies for this site')
