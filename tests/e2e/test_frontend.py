@@ -94,7 +94,11 @@ class MockAPI:
         elif path.endswith('/live'):
             result = {'url': '/mock-live'}
         elif path == '/mock-live':
-            route.fulfill(body='<html><body><button>Give browser back</button></body></html>', content_type='text/html')
+            back = "parent.postMessage({kind: 'close-takeover'}, location.origin)"  # as the live view's button does
+            route.fulfill(
+                body=f'<html><body><button onclick="{back}">Back to chat</button></body></html>',
+                content_type='text/html',
+            )
             return
         elif path.endswith('/screen'):
             route.fulfill(
@@ -265,16 +269,12 @@ def test_asks(frontend: tuple[Page, MockAPI], kind: str) -> None:
     else:
         page.get_by_role('button', name='Take over the browser', exact=True).click()
         expect(page.locator('#live')).to_be_visible()
-        expect(page.locator('#takeover')).to_contain_text('You are driving')
         assert ('POST', '/api/runs/run/live', {}) in mock.calls
         expect(page.get_by_role('dialog')).to_be_visible()  # modal: the page behind cannot be reached
         assert page.locator('#takeover').evaluate("(element) => element.matches(':modal')")
-        page.keyboard.press('Escape')
+        page.frame_locator('#live').get_by_role('button', name='Back to chat').click()
         expect(page.locator('#takeover')).not_to_be_visible()
         expect(page.get_by_role('button', name='Take over the browser')).to_be_focused()
-        page.get_by_role('button', name='Take over the browser', exact=True).click()
-        page.get_by_role('button', name='Back to chat').click()
-        expect(page.locator('#takeover')).not_to_be_visible()
         expect(page.locator('#ask')).to_be_visible()  # the hand-off waits until the browser is given back
 
 

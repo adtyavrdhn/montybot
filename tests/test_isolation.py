@@ -296,3 +296,35 @@ async def test_saved_browser_data_includes_storage_and_forgets_subdomains(pool: 
     assert state.session_storage == {} and state.url == BLANK_URL
     assert (await api.forget_sign_in(request('DELETE', 'storage-only.test'))).status_code == 200
     assert state.local_storage == {}
+
+
+async def test_an_answered_run_shows_as_working_until_it_carries_on(pool: Pool) -> None:
+    """Between the user's answer and the run waking up, the run is still `waiting` in the database, but it waits for
+    nobody: the user sees it working, not an empty "waiting"."""
+    from montybot import api
+
+    async with pool.connection() as connection:
+        user = await store.create_user(connection, 'answered@example.test', 'x')
+        assert user is not None
+        thread = await store.create_thread(connection, user.id, 'answered')
+        run_id = str(uuid.uuid4())
+        await store.create_run(
+            connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt='hello', trigger='message'
+        )
+        ask_id = str(uuid.uuid4())
+        await store.create_ask(
+            connection,
+            ask_id=ask_id,
+            run_id=run_id,
+            user_id=user.id,
+            occurrence=1,
+            kind='question',
+            prompt='Which?',
+            details={},
+        )
+        await store.set_run_status(connection, run_id, 'waiting')
+        waiting = await api.run_view(connection, user, await store.load_run(connection, run_id))
+        assert waiting['status'] == 'waiting' and waiting['ask']['id'] == ask_id
+        await store.answer_ask(connection, user.id, ask_id, {'text': 'that one'})
+        answered = await api.run_view(connection, user, await store.load_run(connection, run_id))
+        assert answered['status'] == 'running' and answered['ask'] is None

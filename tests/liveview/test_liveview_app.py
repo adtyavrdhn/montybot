@@ -124,7 +124,7 @@ async def test_the_page_is_only_for_the_requester() -> None:
         assert (await get(f'{setup.base}/handoff/nope', setup.alice)).status_code == 404
         page = await get(path, setup.alice)
         assert page.status_code == 200
-        assert 'Give back to the bot' in page.text
+        assert 'Give back to Monty' in page.text
         assert "script-src 'self'" in page.headers['content-security-policy']
         assert page.headers['cache-control'] == 'no-store'
         script = await get(f'{setup.base}/live.js')

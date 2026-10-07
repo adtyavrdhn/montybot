@@ -1,6 +1,6 @@
 """The live view's ASGI app: one page and one WebSocket per hand-off.
 
-    GET /handoff/{handoff_id}      the page: frames, input, tabs and "Give back to the bot"
+    GET /handoff/{handoff_id}      the page: frames, input, tabs and "Give back to Monty"
     WS  /handoff/{handoff_id}/ws   the WebSocket the page (or the web app's own client) talks to; see `wire.py`
     GET /live.js                   the page's script
 

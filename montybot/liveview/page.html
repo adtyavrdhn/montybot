@@ -12,7 +12,8 @@
          background: #f3f4f6; color: #111827; }
   header { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 14px;
            background: #111827; color: #f9fafb; }
-  header p { margin: 0; }
+  header p { flex: 1; min-width: 0; margin: 0; }
+  #back { background: #374151; color: #f9fafb; }
   nav { display: flex; gap: 8px; align-items: center; padding: 6px 14px; background: #e5e7eb; }
   nav #url { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #374151; }
   button { padding: 6px 12px; border: 0; border-radius: 6px; font: inherit; cursor: pointer; }
@@ -30,8 +31,9 @@
 </head>
 <body>
 <header>
+  <button id="back" hidden>Back to chat</button>
   <p id="reason">Connecting...</p>
-  <button id="give-back" disabled>Give back to the bot</button>
+  <button id="give-back" disabled>Give back to Monty</button>
 </header>
 <nav>
   <select id="tabs" aria-label="Tabs" hidden></select>

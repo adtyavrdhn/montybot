@@ -266,7 +266,14 @@ async function openChat(threadId) {
     return;
   }
   renderRun(null);
-  await loadChat();
+  $('send').disabled = true;  // until the chat has loaded and says whether it is still working
+  const mine = page;
+  try {
+    await loadChat();
+  } catch (error) {
+    if (page === mine) $('send').disabled = false;  // let the user try again
+    throw error;
+  }
 }
 
 async function loadChat() {
@@ -294,6 +301,7 @@ function renderRun(run) {
   const active = Boolean(run && ACTIVE.includes(run.status));
   const working = Boolean(run && WORKING.includes(run.status));
   $('send').hidden = active;
+  $('send').disabled = false;
   $('stop').hidden = !active;
   $('status').hidden = !working;
   renderStatus();
@@ -445,14 +453,17 @@ async function takeOver(ask) {
   $('live').src = link.url;
   // A modal dialog: the page behind cannot be reached and Escape closes it.
   $('takeover').showModal();
-  $('close-takeover').focus();
+  $('live').focus();
 }
 
 function closeTakeover() {
   // The hand-off goes on until the user gives the browser back; "Take over" opens it again.
   if ($('takeover').open) $('takeover').close();
 }
-$('close-takeover').addEventListener('click', closeTakeover);
+window.addEventListener('message', (event) => {
+  // The live view's own "Back to chat" button.
+  if (event.origin === location.origin && event.data && event.data.kind === 'close-takeover') closeTakeover();
+});
 $('takeover').addEventListener('close', () => {  // also after Escape
   state.takeoverAskId = null;
   $('live').src = 'about:blank';
@@ -479,7 +490,7 @@ function startWatching() {
 
 async function showScreenshot(runId, signal) {
   const response = await fetch(`/api/runs/${runId}/screen`, { credentials: 'same-origin', signal });
-  if (!response.ok) return;
+  if (response.status !== 200) return;  // 204: no picture yet
   const url = URL.createObjectURL(await response.blob());
   if (signal.aborted) { URL.revokeObjectURL(url); return; }
   const old = $('screen').src;
@@ -526,8 +537,8 @@ $('composer').addEventListener('submit', (event) => {
   if ($('send').disabled || $('send').hidden) return;  // Enter obeys the same guard as the button
   const text = $('message').value.trim();
   if (!text) return;
-  $('send').disabled = true;
-  report(send(text).finally(() => { $('send').disabled = false; }));
+  $('send').disabled = true;  // the chat enables it again once it has loaded the new message's run
+  report(send(text).catch((error) => { $('send').disabled = false; throw error; }));
 });
 
 async function send(text) {

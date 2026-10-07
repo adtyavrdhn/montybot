@@ -12,6 +12,7 @@ const tabs = document.getElementById('tabs');
 const url = document.getElementById('url');
 const status = document.getElementById('status');
 const useHere = document.getElementById('use-here');
+const back = document.getElementById('back');
 
 const BUTTONS = ['left', 'middle', 'right'];
 const MODIFIERS = ['Alt', 'Control', 'Meta', 'Shift'];
@@ -183,5 +184,12 @@ document.getElementById('keyboard').addEventListener('click', () => keys.focus()
 tabs.addEventListener('change', () => send({ kind: 'switch_tab', tab_id: tabs.value }));
 giveBack.addEventListener('click', () => { giveBack.disabled = true; send({ kind: 'give_back' }); });
 useHere.addEventListener('click', connect);
+
+// Inside the web app (an iframe of its own origin), "Back to chat" asks it to close the live view; the hand-off goes
+// on until the browser is given back. Opened on its own, the page has no chat to go back to.
+if (window.parent !== window) {
+  back.hidden = false;
+  back.addEventListener('click', () => window.parent.postMessage({ kind: 'close-takeover' }, location.origin));
+}
 
 connect();

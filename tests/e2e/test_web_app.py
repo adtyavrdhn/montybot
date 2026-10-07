@@ -81,6 +81,10 @@ def test_take_over_sign_in_and_approve(app: App, person: Page, shop: Shop) -> No
     person.get_by_role('button', name='Take over the browser').click()
     live = person.frame_locator('#live')
     expect(live.locator('#give-back')).to_be_enabled()
+    live.get_by_role('button', name='Back to chat').click()  # not yet: the hand-off waits
+    expect(person.locator('#takeover')).to_be_hidden()
+    person.get_by_role('button', name='Take over the browser').click()
+    expect(live.locator('#give-back')).to_be_enabled()
     expect(live.locator('#url')).to_contain_text('/login')
     assert_fits_the_window(person, '#view')
     live.locator('#keyboard').click()

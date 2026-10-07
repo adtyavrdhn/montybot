@@ -361,10 +361,12 @@ async def run_events(request: Request, user: User) -> Response:
 
 async def run_view(connection: Any, user: User, run: Run) -> dict[str, Any]:
     ask = await store.open_ask(connection, user.id, run.id) if run.status == 'waiting' else None
+    # Answered, and about to carry on: for the user it is working again, not waiting for them.
+    status = 'running' if run.status == 'waiting' and ask is None else run.status
     return {
         'id': run.id,
         'thread_id': run.thread_id,
-        'status': run.status,
+        'status': status,
         'output': run.output,
         'activity': await store.list_activity(connection, user.id, run.id),
         'ask': None if ask is None else ask_json(ask),
@@ -478,7 +480,7 @@ async def watch_screen(request: Request, user: User) -> Response:
     try:
         screenshot = await resources.browser.peek_screenshot(run_id=run.id, user_id=user.id)
     except BrowserError:
-        return NOT_FOUND  # no open browser, busy with a call, or a hand-off began meanwhile
+        return Response(status_code=204)  # no picture now: no browser yet, busy with a call, or a hand-off began
     return Response(screenshot.png, media_type='image/png', headers={'Cache-Control': 'no-store'})
 
 

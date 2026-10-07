@@ -72,7 +72,7 @@ class ViewportSize:
 
 @dataclass(frozen=True, kw_only=True)
 class GiveBackRequest:
-    """The user pressed "Give back to the bot"."""
+    """The user pressed "Give back to Monty"."""
 
     kind: Literal['give_back'] = 'give_back'
 
