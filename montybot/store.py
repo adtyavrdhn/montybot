@@ -9,7 +9,7 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-from psycopg.errors import UniqueViolation
+from psycopg.errors import ForeignKeyViolation, UniqueViolation
 from psycopg.types.json import Jsonb
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
@@ -19,6 +19,10 @@ from montybot.models import FINISHED, Ask, AskKind, Run, RunStatus, Schedule, Th
 
 class ActiveRun(Exception):
     """The thread already has a run that has not finished."""
+
+
+class ThreadGone(Exception):
+    """The thread was deleted (with its schedule) while a run for it was being created."""
 
 
 USER_COLUMNS = 'id, email, name, timezone'
@@ -117,10 +121,14 @@ async def list_threads(connection: Connection, user_id: str) -> list[Thread]:
 
 
 async def active_runs(connection: Connection, user_id: str) -> dict[str, RunStatus]:
-    """The status of each of the user's unfinished runs, by thread id."""
+    """The status of each of the user's unfinished runs, by thread id. A run waiting with every ask answered is
+    about to carry on, so it counts as running (as in `api.run_view`)."""
     cursor = await connection.execute(
+        "SELECT r.thread_id, CASE WHEN r.status = 'waiting' AND NOT EXISTS "
+        '(SELECT 1 FROM montybot.asks a WHERE a.run_id = r.id AND a.answer IS NULL) '
+        "THEN 'running' ELSE r.status END AS status "
         # The same condition as the index runs_active_by_user.
-        "SELECT thread_id, status FROM montybot.runs WHERE user_id = %s AND status IN ('queued', 'running', 'waiting')",
+        "FROM montybot.runs r WHERE r.user_id = %s AND r.status IN ('queued', 'running', 'waiting')",
         (user_id,),
     )
     return {str(row['thread_id']): row['status'] for row in await cursor.fetchall()}
@@ -167,7 +175,8 @@ async def thread_schedule(connection: Connection, user_id: str, thread_id: str) 
 async def create_run(
     connection: Connection, *, run_id: str, user_id: str, thread_id: str, prompt: str, trigger: Trigger
 ) -> Run:
-    """Raises `ActiveRun` when the thread has an unfinished run. Call inside a transaction."""
+    """Raises `ActiveRun` when the thread has an unfinished run, `ThreadGone` when it was deleted. Call inside a
+    transaction."""
     try:
         async with connection.transaction():
             cursor = await connection.execute(
@@ -176,7 +185,9 @@ async def create_run(
                 (run_id, user_id, thread_id, trigger, prompt),
             )
     except UniqueViolation as error:
-        raise ActiveRun('this thread is still working on the last message') from error
+        raise ActiveRun('Monty is still working on the last message in this chat.') from error
+    except ForeignKeyViolation as error:
+        raise ThreadGone('this chat was deleted') from error
     row = await cursor.fetchone()
     assert row is not None
     return run_from(row)
@@ -431,10 +442,21 @@ async def list_schedules(connection: Connection, user_id: str) -> list[Schedule]
 
 
 async def delete_schedule(connection: Connection, user_id: str, schedule_id: str) -> bool:
+    """Its chat goes too if the schedule never ran: with nothing in it, it would only clutter the chat list."""
     cursor = await connection.execute(
-        'DELETE FROM montybot.schedules WHERE id = %s AND user_id = %s', (schedule_id, user_id)
+        'DELETE FROM montybot.schedules WHERE id = %s AND user_id = %s RETURNING thread_id', (schedule_id, user_id)
     )
-    return cursor.rowcount == 1
+    row = await cursor.fetchone()
+    if row is None:
+        return False
+    # Lock the thread first: a run starting in it right now must either be seen below or wait for this to commit.
+    await connection.execute('SELECT 1 FROM montybot.threads WHERE id = %s FOR UPDATE', (row['thread_id'],))
+    await connection.execute(
+        'DELETE FROM montybot.threads t WHERE t.id = %s '
+        'AND NOT EXISTS (SELECT 1 FROM montybot.runs r WHERE r.thread_id = t.id)',
+        (row['thread_id'],),
+    )
+    return True
 
 
 async def load_schedule(connection: Connection, schedule_id: str) -> Schedule | None:

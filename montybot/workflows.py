@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 import logfire
 from dbos import DBOS, SetWorkflowID, StepOptions, WorkflowHandleAsync
-from dbos._error import DBOSException
+from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException, DBOSWorkflowCancelledError
 from pydantic_ai.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
@@ -46,6 +46,18 @@ RETRIED: StepOptions = {'retries_allowed': True, 'max_attempts': 5, 'interval_se
 """For the steps that end a run: a passing database error must not leave a run unfinished and the browser open."""
 
 logger = logging.getLogger(__name__)
+
+
+class HideStoppedRuns(logging.Filter):
+    """DBOS logs a cancelled workflow as an error with its traceback. A run the user stopped (`stop`) is cancelled on
+    purpose, so that would bury real errors in noise."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        error = record.exc_info[1] if record.exc_info else None
+        return not isinstance(error, (DBOSAwaitedWorkflowCancelledError, DBOSWorkflowCancelledError))
+
+
+logging.getLogger('dbos').addFilter(HideStoppedRuns())
 
 FAILURE_NOTICE = 'Something went wrong while working on this, and I could not finish. Please try again.'
 STOPPED_NOTICE = 'You stopped this.'

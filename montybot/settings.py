@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     vapid_subject: str = 'mailto:montybot@example.com'
     smtp_url: str | None = None
     """Email: `smtp://user:password@host:25`, `smtp+starttls://...:587` or `smtps://...:465`. Unset: no email."""
-    mail_from: str = 'monty-bot <montybot@example.com>'
+    mail_from: str = 'Monty <montybot@example.com>'
 
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""

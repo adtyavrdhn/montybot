@@ -12,6 +12,7 @@ const tabs = document.getElementById('tabs');
 const url = document.getElementById('url');
 const status = document.getElementById('status');
 const useHere = document.getElementById('use-here');
+const back = document.getElementById('back');
 
 const BUTTONS = ['left', 'middle', 'right'];
 const MODIFIERS = ['Alt', 'Control', 'Meta', 'Shift'];
@@ -44,12 +45,14 @@ function send(message) {
 
 function connect() {
   useHere.hidden = true;
+  shown = 0;  // a new connection numbers its frames from 1 again
   socket = new WebSocket(socketUrl());
   socket.binaryType = 'arraybuffer';
   socket.onopen = () => { retries = 0; status.textContent = 'You are driving the browser.'; };
+  const mine = socket;
   socket.onmessage = (event) => {
     if (typeof event.data === 'string') onMessage(JSON.parse(event.data));
-    else onFrame(event.data);
+    else onFrame(event.data, mine);
   };
   socket.onclose = (event) => onClose(event.code);
 }
@@ -68,16 +71,17 @@ function onMessage(message) {
   } else if (message.kind === 'error') {
     status.textContent = message.message;
   } else if (message.kind === 'ended') {
-    finish(message.given_back ? 'Thanks. The bot has the browser again; you can close this page.'
-                              : 'This hand-off is over.');
+    finish(message.given_back ? 'Thanks. Monty has its browser back.'
+                              : 'Monty has its browser back. Nothing more to do here.');
   }
 }
 
-async function onFrame(buffer) {
+async function onFrame(buffer, from) {
   const length = new DataView(buffer).getUint32(0);
   const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 4, length)));
   const bitmap = await createImageBitmap(new Blob([new Uint8Array(buffer, 4 + length)], { type: header.mime }));
-  if (header.seq < shown) { bitmap.close(); return; }  // decoded out of order; a newer frame is already up
+  // Decoded out of order (a newer frame is already up), or from a connection that has since been replaced.
+  if (from !== socket || header.seq < shown) { bitmap.close(); return; }
   shown = header.seq;
   size = { width: header.width, height: header.height };
   if (view.width !== bitmap.width || view.height !== bitmap.height) {
@@ -91,15 +95,15 @@ async function onFrame(buffer) {
 function onClose(code) {
   socket = null;
   if (finished) return;
-  if (code === 4410) return finish('This hand-off is over.');
-  if (code === 4404) return finish('There is no such hand-off for you.');
-  if (code === 4401) return finish('Sign in, then open this link again.');
+  if (code === 4410) return finish('Monty has its browser back. Nothing more to do here.');
+  if (code === 4404) return finish('This takeover has ended. Go back to the chat, and take over again if Monty still needs you.');
+  if (code === 4401) return finish('You were signed out. Sign in again, then take over the browser from the chat.');
   if (code === 4409) {
-    status.textContent = 'You opened this hand-off somewhere else.';
+    status.textContent = 'You are driving Monty\'s browser in another window or on another device.';
     useHere.hidden = false;
     return;
   }
-  status.textContent = 'Connection lost. Reconnecting...';
+  status.textContent = 'Connection lost. Reconnecting…';
   setTimeout(connect, Math.min(500 * 2 ** retries++, 10000));
 }
 
@@ -183,5 +187,12 @@ document.getElementById('keyboard').addEventListener('click', () => keys.focus()
 tabs.addEventListener('change', () => send({ kind: 'switch_tab', tab_id: tabs.value }));
 giveBack.addEventListener('click', () => { giveBack.disabled = true; send({ kind: 'give_back' }); });
 useHere.addEventListener('click', connect);
+
+// Inside the web app (an iframe of its own origin), "Back to chat" asks it to close the live view; the hand-off goes
+// on until the browser is given back. Opened on its own, the page has no chat to go back to.
+if (window.parent !== window) {
+  back.hidden = false;
+  back.addEventListener('click', () => window.parent.postMessage({ kind: 'close-takeover' }, location.origin));
+}
 
 connect();

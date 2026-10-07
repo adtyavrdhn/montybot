@@ -122,9 +122,11 @@ async def test_the_page_is_only_for_the_requester() -> None:
         assert (await get(path)).status_code == 401
         assert (await get(path, setup.bob)).status_code == 404
         assert (await get(f'{setup.base}/handoff/nope', setup.alice)).status_code == 404
+        # Still the page, so inside the web app its "Back to chat" button gets the user out.
+        assert 'id="back"' in (await get(f'{setup.base}/handoff/nope', setup.alice)).text
         page = await get(path, setup.alice)
         assert page.status_code == 200
-        assert 'Give back to the bot' in page.text
+        assert 'Give back to Monty' in page.text
         assert "script-src 'self'" in page.headers['content-security-policy']
         assert page.headers['cache-control'] == 'no-store'
         script = await get(f'{setup.base}/live.js')
@@ -333,6 +335,40 @@ async def test_the_whole_picture_fits_the_screen(width: int, height: int, phone:
                     await page.locator('#status', has_text='Thanks').wait_for()
                 after = (await service.snapshot(run_id=RUN, user_id='alice')).snapshot.text
                 assert 'size: 1280x720' in after
+            finally:
+                await browser.close()
+                await service.close_all()
+
+
+async def test_the_picture_keeps_coming_after_the_page_reconnects() -> None:
+    """A dropped connection reconnects by itself. The new one numbers its frames from 1 again, and they are drawn,
+    not taken for frames older than those of the long first connection."""
+    with serve_fixtures() as origin:
+        async with backends('chromium') as new, async_playwright() as playwright:
+            service = StubBrowserService(new)
+            handoffs = InMemoryHandoffs()
+            auth = StubAuthenticator()
+            await service.start(run_id=RUN, user_id='alice')
+            await service.act(run_id=RUN, user_id='alice', action=Navigate(url=f'{origin}/size'))
+            handoff = await service.start_handoff(run_id=RUN, user_id='alice', reason='Please sign in')
+            handoffs.add(handoff)
+            browser = await playwright.chromium.launch(headless=True)
+            try:
+                async with serve_app(live_view_app(service=service, handoffs=handoffs, auth=auth)) as base:
+                    # bypass_csp: the page's policy forbids the evaluated test code, not anything the page does.
+                    context = await browser.new_context(viewport={'width': 1280, 'height': 800}, bypass_csp=True)
+                    await context.add_cookies([{'name': SESSION_COOKIE, 'value': auth.sign_in('alice'), 'url': base}])
+                    page = await context.new_page()
+                    await page.goto(f'{base}/handoff/{handoff.handoff_id}')
+                    await page.wait_for_function('shown >= 1')
+                    await page.evaluate("""() => {
+                        shown = 1000;  // as after a long first connection
+                        window.draws = 0;
+                        const draw = context.drawImage.bind(context);
+                        context.drawImage = (...args) => { window.draws++; draw(...args); };
+                        socket.close();  // a dropped connection
+                    }""")
+                    await page.wait_for_function('window.draws > 0')
             finally:
                 await browser.close()
                 await service.close_all()

@@ -116,7 +116,7 @@ def test_a_weekly_cart_fill_over_two_weeks(
     assert 'Scheduled' in client.wait_for_reply(chat)
     (weekly,) = schedules(client)
     assert weekly['name'] == 'Weekly groceries' and not weekly['paused']
-    assert weekly['when'] == 'Mondays at 09:00 (0 9 * * 1, Europe/London)'
+    assert weekly['when'] == 'Mondays at 09:00 (Europe/London)'
     thread = weekly['thread_id']
 
     # Week 1: no saved sign-in yet, so the run hands off and the user signs in.
@@ -180,7 +180,7 @@ def test_a_slot_watch_notifies_once(
     for _ in range(2):
         finished(fire(dbos, watch))
         assert reply_of(client, thread) == 'Not yet.'
-    assert mails(mailbox, 'monty-bot found') == 0 and mails(mailbox, 'monty-bot finished') == 0
+    assert mails(mailbox, 'Monty found') == 0 and mails(mailbox, 'Monty finished') == 0
 
     slots.open_slot = SLOT
     finished(fire(dbos, watch))
@@ -192,11 +192,21 @@ def test_a_slot_watch_notifies_once(
     # Later occurrences (one enqueued before the pause, say) do not tell the user again.
     finished(fire(dbos, watch))
     assert runs_in(database_url, thread) == 3
-    assert mails(mailbox, 'monty-bot found') == 1 and mails(mailbox, 'monty-bot finished') == 0
+    assert mails(mailbox, 'Monty found') == 1 and mails(mailbox, 'Monty finished') == 0
 
     assert client.wait_for_reply(client.ask(f'Delete the schedule {watch["id"]}')) == 'Deleted.'
     assert schedules(client) == []
     assert dbos.list_schedules() == []
+    assert reply_of(client, thread)  # it ran, so its chat stays, with what it found
+
+
+@pytest.mark.u4
+def test_deleting_a_schedule_that_never_ran_takes_its_empty_chat(client: Client, slots: Slots) -> None:
+    client.sign_up()
+    watch = set_up(client, f'Tell me when a delivery slot opens at {slots.url}')
+    assert watch['thread_id'] in [t['id'] for t in client.http.get('/api/threads').json()]
+    assert client.http.delete(f'/api/schedules/{watch["id"]}').status_code == 200
+    assert watch['thread_id'] not in [t['id'] for t in client.http.get('/api/threads').json()]
 
 
 @pytest.mark.u4

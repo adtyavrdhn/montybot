@@ -81,6 +81,10 @@ def test_take_over_sign_in_and_approve(app: App, person: Page, shop: Shop) -> No
     person.get_by_role('button', name='Take over the browser').click()
     live = person.frame_locator('#live')
     expect(live.locator('#give-back')).to_be_enabled()
+    live.get_by_role('button', name='Back to chat').click()  # not yet: the hand-off waits
+    expect(person.locator('#takeover')).to_be_hidden()
+    person.get_by_role('button', name='Take over the browser').click()
+    expect(live.locator('#give-back')).to_be_enabled()
     expect(live.locator('#url')).to_contain_text('/login')
     assert_fits_the_window(person, '#view')
     live.locator('#keyboard').click()
@@ -175,8 +179,8 @@ def test_files_panel_downloads_browser_and_generated_csv(app: App, person: Page,
     expect(person.locator('#files')).to_be_visible()
     expect(person.locator('#layout')).to_be_hidden()
     expect(person.locator('#file-list li')).to_have_count(2)
-    for path, content in [('/work/downloads/export.csv', downloaded), ('/work/generated.csv', generated)]:
-        row = person.locator('#file-list li').filter(has_text=path)
+    for path, content in [('downloads/export.csv', downloaded), ('generated.csv', generated)]:
+        row = person.locator('#file-list li').filter(has_text=path)  # shown without /work/, where code sees them
         with person.expect_download() as pending:
             row.get_by_role('button', name='Download', exact=True).click()
         download = pending.value

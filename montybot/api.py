@@ -10,6 +10,7 @@ import base64
 import binascii
 import contextlib
 import json
+import logging
 import re
 import secrets
 import uuid
@@ -34,6 +35,7 @@ from montybot.signins import PostgresLease
 from montybot.workspaces import MAX_DOWNLOAD_BYTES, FileTooLarge, download_name
 
 T = TypeVar('T')
+logger = logging.getLogger(__name__)
 NOT_FOUND = JSONResponse({'detail': 'not found'}, status_code=404)
 
 
@@ -87,7 +89,7 @@ async def sign_up(request: Request) -> Response:
             connection, body.email.strip().lower(), auth.hash_password(body.password), body.name.strip()
         )
     if user is None:
-        return JSONResponse({'detail': 'that email already has an account'}, status_code=409)
+        return JSONResponse({'detail': 'That email already has an account. Sign in instead.'}, status_code=409)
     auth.sign_in(request, user)
     return JSONResponse(user_json(user), status_code=201)
 
@@ -99,7 +101,7 @@ async def sign_in(request: Request) -> Response:
     async with resources_of(request).pool.connection() as connection:
         found = await store.find_login(connection, body.email.strip().lower())
     if found is None or not auth.check_password(body.password, found[1]):
-        return JSONResponse({'detail': 'wrong email or password'}, status_code=401)
+        return JSONResponse({'detail': 'Wrong email or password.'}, status_code=401)
     auth.sign_in(request, found[0])
     return JSONResponse(user_json(found[0]))
 
@@ -206,6 +208,8 @@ async def add_message(request: Request, user: User) -> Response:
             )
         except store.ActiveRun as error:
             return JSONResponse({'detail': str(error)}, status_code=409)
+        except store.ThreadGone:
+            return NOT_FOUND
     await workflows.start(run_id)
     return JSONResponse({'thread_id': thread.id, 'run_id': run_id}, status_code=201)
 
@@ -249,7 +253,8 @@ async def delete_thread(request: Request, user: User) -> Response:
         await schedules.delete(resources.pool, user.id, schedule.id)
     async with resources.pool.connection() as connection:
         deleted = await store.delete_thread(connection, user.id, thread_id)
-    return JSONResponse({'ok': True}) if deleted else NOT_FOUND
+    # A schedule that never ran takes its empty thread with it (store.delete_schedule): gone either way.
+    return JSONResponse({'ok': True}) if deleted or schedule is not None else NOT_FOUND
 
 
 @auth.signed_in
@@ -326,6 +331,7 @@ async def run_events(request: Request, user: User) -> Response:
     async def events() -> AsyncIterator[str]:
         previous_view: dict[str, Any] | None = None
         previous_preview: dict[str, Any] | None = None
+        yield 'retry: 1000\n\n'  # reconnect after a second, well before the page would warn about a lost connection
         # Periodically reconnect so SessionMiddleware validates the cookie signature/age again.
         deadline = asyncio.get_running_loop().time() + 300
         while asyncio.get_running_loop().time() < deadline and not await request.is_disconnected():
@@ -361,10 +367,12 @@ async def run_events(request: Request, user: User) -> Response:
 
 async def run_view(connection: Any, user: User, run: Run) -> dict[str, Any]:
     ask = await store.open_ask(connection, user.id, run.id) if run.status == 'waiting' else None
+    # Answered, and about to carry on: for the user it is working again, not waiting for them.
+    status = 'running' if run.status == 'waiting' and ask is None else run.status
     return {
         'id': run.id,
         'thread_id': run.thread_id,
-        'status': run.status,
+        'status': status,
         'output': run.output,
         'activity': await store.list_activity(connection, user.id, run.id),
         'ask': None if ask is None else ask_json(ask),
@@ -380,7 +388,7 @@ async def stop_run(request: Request, user: User) -> Response:
     if run is None:
         return NOT_FOUND
     if not await workflows.stop(resources, run):
-        return JSONResponse({'detail': 'that task has finished already'}, status_code=409)
+        return JSONResponse({'detail': 'That task has finished already.'}, status_code=409)
     return JSONResponse({'ok': True})
 
 
@@ -409,7 +417,7 @@ async def answer_ask(request: Request, user: User) -> Response:
                 return JSONResponse({'detail': 'answer with done: true when you hand the browser back'}, 422)
             value = {'done': True, 'note': body.note or ''}
     if not await approvals.answer(resources, user.id, ask.id, value):
-        return JSONResponse({'detail': 'that was answered already'}, status_code=409)
+        return JSONResponse({'detail': 'That was answered already.'}, status_code=409)
     return JSONResponse({'ok': True})
 
 
@@ -460,7 +468,9 @@ async def live_link(request: Request, user: User) -> Response:
     try:
         handoff_id = await active_handoff(resources_of(request), run, ask)
     except BrowserError as error:
-        return JSONResponse({'detail': str(error)}, status_code=409)
+        # The error's own words are for us (they can name engines and paths), not for the user.
+        logger.warning('Opening the live view of run %s failed: %s', run.id, type(error).__qualname__)
+        return JSONResponse({'detail': "Monty's browser could not be opened. Please try again in a moment."}, 409)
     if handoff_id is None:
         return NOT_FOUND
     return JSONResponse({'url': f'/live/handoff/{handoff_id}', 'reason': ask.prompt})
@@ -478,7 +488,7 @@ async def watch_screen(request: Request, user: User) -> Response:
     try:
         screenshot = await resources.browser.peek_screenshot(run_id=run.id, user_id=user.id)
     except BrowserError:
-        return NOT_FOUND  # no open browser, busy with a call, or a hand-off began meanwhile
+        return Response(status_code=204)  # no picture now: no browser yet, busy with a call, or a hand-off began
     return Response(screenshot.png, media_type='image/png', headers={'Cache-Control': 'no-store'})
 
 
@@ -544,7 +554,7 @@ async def add_push_subscription(request: Request, user: User) -> Response:
         try:
             await add_subscription(connection, user.id, body.endpoint, body.keys.model_dump())
         except TakenEndpoint:
-            return JSONResponse({'detail': 'that push subscription belongs to another account'}, status_code=409)
+            return JSONResponse({'detail': 'Notifications on this device belong to another account.'}, status_code=409)
     return JSONResponse({'ok': True}, status_code=201)
 
 
@@ -587,7 +597,7 @@ async def forget_sign_in(request: Request, user: User) -> Response:
     holder = f'forget:{uuid.uuid4()}'
     lease = PostgresLease(resources.pool, seconds=60)  # short: a crash here must not lock the user out for long
     if not await lease.acquire(user_id=user.id, run_id=holder):
-        return JSONResponse({'detail': 'a task is using your browser; try again when it has finished'}, 409)
+        return JSONResponse({'detail': 'A task is using your browser. Try again when it has finished.'}, 409)
     try:
         state = await resources.jar.load(user_id=user.id)
         if state is None or site not in saved_sites(state):
@@ -668,7 +678,7 @@ def schedule_json(schedule: Schedule, paused: bool) -> dict[str, Any]:
     return {
         'id': schedule.id,
         'name': schedule.name,
-        'when': f'{schedule.when} ({schedule.cron}, {schedule.timezone})',
+        'when': f'{schedule.when} ({schedule.timezone})',
         'paused': paused,
         'watch': schedule.watch,
         'thread_id': schedule.thread_id,

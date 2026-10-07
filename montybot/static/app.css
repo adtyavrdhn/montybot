@@ -124,6 +124,7 @@ h1, h2 { letter-spacing: -.045em; font-weight: 600; line-height: 1.15; }
 .suggestion > span:first-child { width: 28px; color: var(--accent); font-size: 1.4rem; text-align: center; flex-shrink: 0; }
 .suggestion strong { display: block; font-size: .9rem; font-weight: 600; }
 .suggestion small { display: block; color: var(--muted); font-size: .8rem; margin-top: 3px; }
+.empty-chat { margin: auto; color: var(--muted); text-align: center; }
 .status { padding: 12px 24px; color: var(--muted); font-size: .85rem; }
 .status::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 8px; animation: pulse 1s infinite alternate; }
 @keyframes pulse { to { opacity: .35; } }

@@ -1,9 +1,9 @@
-// monty-bot web app: chat with the bot, watch its browser, take over when it asks. No build step, no framework.
+// The Monty web app: chat with Monty, watch its browser, take over when it asks. No build step, no framework.
 //
-// Staying correct while the user moves around: everything that belongs to what is on screen (its requests, the run's
-// event stream, the browser screenshots) is tied to `page.signal`. Opening another chat or page aborts it, which
-// cancels those requests and closes the stream, so an old chat can never draw over a new one. The user's own actions
-// (sending, answering, stopping) are not tied to it: they always finish.
+// Staying correct while the user moves around: `newPage()` tears down everything that belongs to what is on screen.
+// It aborts `page`, whose signal every read (`api()` GET) uses, and closes the run's event stream and the browser
+// screenshots, so an old chat can never draw over a new one. The user's own actions (sending, answering,
+// stopping) are not tied to it: they always finish.
 'use strict';
 
 const $ = (id) => document.getElementById(id);
@@ -18,10 +18,14 @@ const state = {
   draft: null,  // the running run's live draft: { text, activity }
   draftLost: false,  // the live connection dropped, so the draft may be behind
   chatLoads: 0,  // numbers each chat load, so only the latest one is drawn
+  threadLoads: 0,  // the same for the chat list
   takeoverAskId: null,  // the hand-off whose live view is open
+  chatShown: false,  // the open chat has been drawn at least once
   browserClosed: false,  // the user closed the browser panel in this chat, so it does not open by itself again
   threadsShown: '',  // the chat list as last drawn, so an unchanged list is not redrawn under the user's focus
   signingUp: false,
+  pushKey: null,  // the server's web push key, or null when it sends no notifications
+  offlineNoticed: false,  // a background refresh has told the user they are offline, since the server last answered
 };
 let page = new AbortController();
 let events = null;  // the open run's EventSource
@@ -43,23 +47,71 @@ async function api(path, { method = 'GET', body } = {}) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
-  const response = await fetch(path, init);
-  const data = (response.headers.get('Content-Type') || '').includes('application/json') ? await response.json() : null;
+  let response;
+  try {
+    response = await fetch(path, init);
+  } catch (error) {
+    throw offlineError(error);
+  }
+  // A proxy in front of a server that is down or restarting answers for it: that is not reaching Monty either.
+  if ([502, 503, 504].includes(response.status)) throw offlineError(new Error('gateway'));
+  if (state.offlineNoticed) {  // the server answers again: take back the offline notice, and say it again next time
+    state.offlineNoticed = false;
+    if ($('notice-text').textContent === offlineError(new Error()).message) hideNotice();
+  }
+  let data = null;
+  if ((response.headers.get('Content-Type') || '').includes('application/json')) {
+    try {
+      data = await response.json();
+    } catch (error) {
+      if (error.name !== 'SyntaxError') throw offlineError(error);  // the connection dropped mid-reply
+      if (response.ok) throw new Error('Monty sent a reply this page could not read. Reload to see where things stand.');
+    }
+  }
   if (response.status === 401 && !['/api/signin', '/api/me'].includes(path)) signedOut();
   if (!response.ok) {
-    const error = new Error(data && typeof data.detail === 'string' ? data.detail : `Request failed (${response.status})`);
+    const error = new Error(problem(response.status, data && typeof data.detail === 'string' ? data.detail : null));
     error.status = response.status;
     throw error;
   }
   return data;
 }
 
+function offlineError(error) {
+  // The browser's own words for a failed request ("Failed to fetch", ...) mean nothing to the user.
+  if (error.name === 'AbortError') return error;
+  const offline = new Error('Could not reach Monty. Check your connection, and try again.');
+  offline.offline = true;
+  return offline;
+}
+
+function problem(status, detail) {
+  // The server's words where they are meant for the user; plain ones where they are not.
+  if (status === 404) return 'That is no longer here. It may have been deleted, or the task may have finished.';
+  if (status === 422) return 'Please check what you typed, and try again.';
+  return detail || `Something went wrong (${status}). Please try again.`;
+}
+
+function showError(error) {
+  if (error.name === 'AbortError') return;  // a request of a page the user has left
+  console.error(error);
+  showNotice(error.message);
+}
+
 function report(promise) {
-  // For event handlers: show what went wrong, but not for requests of a page the user has left.
+  // For event handlers: show what went wrong.
+  promise.catch(showError);
+}
+
+function reportUnlessOffline(promise) {
+  // For refreshes nobody asked for, which retry by themselves: being offline is said once (until the server is
+  // reached again), not on every retry, so a dismissed notice stays dismissed.
   promise.catch((error) => {
-    if (error.name === 'AbortError') return;
-    console.error(error);
-    showNotice(error.message);
+    if (!error.offline) showError(error);
+    else if (!state.offlineNoticed) {
+      state.offlineNoticed = true;
+      showError(error);
+    }
   });
 }
 
@@ -69,6 +121,10 @@ function showNotice(text) {
 }
 function hideNotice() { $('notice').hidden = true; }
 $('close-notice').addEventListener('click', hideNotice);
+document.querySelector('.skip-link').addEventListener('click', (event) => {
+  event.preventDefault();  // a #message hash would be routed as a page
+  $('message').focus();
+});
 
 function element(tag, text = '', className = '') {
   const made = document.createElement(tag);
@@ -123,25 +179,37 @@ $('signin-form').addEventListener('submit', async (event) => {
     await api(state.signingUp ? '/api/signup' : '/api/signin', {
       method: 'POST', body: { email: $('email').value, password: $('password').value },
     });
-    await start();
   } catch (error) {
     $('signin-error').textContent = error.message;
+    return;
   } finally {
     $('signin-button').disabled = false;
     $('signup-button').disabled = false;
+  }
+  try {
+    await start();
+  } catch (error) {
+    showError(error);  // signed in, but the first chat or list did not load: a notice on the page that opened
+    return;
+  }
+  if (!$('signin').hidden && !$('signin-error').textContent) {
+    // Signed in, yet still signed out: the browser did not keep the session cookie. The account exists now either way.
+    if (state.signingUp) $('signup-button').click();  // back to signing in
+    $('signin-error').textContent = 'You were signed in, but this browser did not save your sign-in. Allow cookies for this site, then sign in.';
   }
 });
 
 $('signout').addEventListener('click', () => report(signOut()));
 
 async function signOut() {
-  signedOut();
   try {
-    await stopNotifications();
+    await stopNotifications();  // while still signed in: removing this browser's subscription needs the session
   } catch (error) {
     console.error(error);  // signing out matters more than the push subscription
   }
-  await api('/api/signout', { method: 'POST', body: {} });
+  $('notifications-label').textContent = 'Notify me when Monty needs me';  // this browser's subscription is gone
+  await api('/api/signout', { method: 'POST', body: {} });  // first: a failed sign-out must not look like one
+  signedOut();
   location.hash = '';
   location.reload();
 }
@@ -149,28 +217,45 @@ async function signOut() {
 // --- the chat list ---
 
 async function loadThreads() {
+  const load = ++state.threadLoads;
   const threads = await api('/api/threads');
-  const shown = JSON.stringify([state.threadId, threads]);
+  if (load !== state.threadLoads) return;  // a later load is drawing the list
+  // The open chat catches up when the list knows better: a run started elsewhere (a schedule, another tab), or
+  // finished while the chat's event stream was down for good (an HTTP error closes it; only a reload reopens it).
+  const open = $('layout').hidden ? null : threads.find((thread) => thread.id === state.threadId);
+  const shownWorking = Boolean(state.run && ACTIVE.includes(state.run.status));
+  const streamDown = !events || events.readyState === EventSource.CLOSED;
+  if (open && (Boolean(open.status) !== shownWorking || (shownWorking && streamDown))) reportUnlessOffline(loadChat());
+  const currentId = $('layout').hidden ? null : state.threadId;  // on Files or Schedules no chat is the current page
+  const shown = JSON.stringify([currentId, threads]);
   if (shown === state.threadsShown) return;
   state.threadsShown = shown;
+  const focusedId = $('threads').contains(document.activeElement) ? document.activeElement.dataset.id : null;
   const badges = { waiting: 'Needs you', running: 'Working', queued: 'Working' };
   $('threads').replaceChildren(...threads.map((thread) => {
-    const open = element('button', '', thread.id === state.threadId ? 'current' : '');
+    const open = element('button', '', thread.id === currentId ? 'current' : '');
+    open.dataset.id = thread.id;
     open.title = thread.title || 'Untitled';
     open.append(element('span', thread.title || 'Untitled', 'thread-title'));
     if (badges[thread.status]) open.append(element('span', badges[thread.status], `badge ${thread.status}`));
-    if (thread.id === state.threadId) open.setAttribute('aria-current', 'page');
-    open.addEventListener('click', () => { location.hash = `#/t/${thread.id}`; closeDrawer(); });
+    if (thread.id === currentId) open.setAttribute('aria-current', 'page');
+    open.addEventListener('click', () => {
+      if (location.hash === `#/t/${thread.id}`) report(route());  // the same chat: load it again
+      else location.hash = `#/t/${thread.id}`;
+      closeDrawer();
+    });
     const item = element('li');
     item.append(open);
     return item;
   }));
   if (!threads.length) $('threads').append(element('li', 'Your next task starts with a new chat.', 'thread-empty'));
+  const focused = focusedId && $('threads').querySelector(`[data-id="${focusedId}"]`);
+  if (focused) focused.focus();  // the redraw replaced the button the user was on
 }
 
 setInterval(() => {
   // Another chat may start needing the user at any time.
-  if (!$('main').hidden && document.visibilityState === 'visible') report(loadThreads());
+  if (!$('main').hidden && document.visibilityState === 'visible') reportUnlessOffline(loadThreads());
 }, 15000);
 
 // --- the drawer, on small screens ---
@@ -259,13 +344,17 @@ async function openChat(threadId) {
   state.draft = null;
   state.draftLost = false;
   state.browserClosed = false;
+  state.chatShown = false;
   if (threadId === null) {
     $('title').textContent = 'New chat';
     $('messages').replaceChildren(emptyChat());
     renderRun(null);
     return;
   }
+  $('title').textContent = 'Loading…';
+  $('messages').replaceChildren();  // never the last chat's messages under this chat's address
   renderRun(null);
+  $('send').disabled = true;  // until the chat has loaded and says whether it is still working
   await loadChat();
 }
 
@@ -276,13 +365,21 @@ async function loadChat() {
     thread = await api(`/api/threads/${state.threadId}`);
   } catch (error) {
     if (error.status === 404) { location.hash = '#/new'; return; }
+    if (load === state.chatLoads && error.name !== 'AbortError' && !state.chatShown) {
+      $('title').textContent = 'Could not load this chat';  // the newest load failed: say so, and let the user act
+      $('send').disabled = false;
+    }
     throw error;
   }
   if (load !== state.chatLoads) return;  // a later load is drawing this chat
+  state.chatShown = true;
   $('title').textContent = thread.title || 'Monty';
   const box = $('messages');
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
   box.replaceChildren(...thread.messages.map((m) => messageBubble(m.role, m.text)));
+  if (!thread.messages.length) {  // a scheduled task's chat, before its first run
+    box.append(element('p', 'Nothing here yet. Each time this scheduled task runs, what Monty did shows up here.', 'empty-chat'));
+  }
   renderRun(thread.run);
   renderDraft();
   if (atBottom) box.scrollTop = box.scrollHeight;
@@ -294,7 +391,11 @@ function renderRun(run) {
   const active = Boolean(run && ACTIVE.includes(run.status));
   const working = Boolean(run && WORKING.includes(run.status));
   $('send').hidden = active;
+  $('send').disabled = false;
   $('stop').hidden = !active;
+  $('stop').disabled = false;
+  $('message').placeholder = !active ? 'What would you like Monty to do?'
+    : run.status === 'waiting' ? 'Monty is waiting for you: answer above.' : 'Monty is on it. Stop it, or wait to send your next message.';
   $('status').hidden = !working;
   renderStatus();
   renderAsk(run && run.status === 'waiting' ? run.ask : null);
@@ -308,7 +409,7 @@ function renderStatus() {
   // The draft's activity while the model thinks or writes; the run's own log ("Opening example.com") while it acts.
   const logged = run.activity.length ? run.activity[run.activity.length - 1] : 'Working…';
   const now = (state.draft && state.draft.activity) || logged;
-  $('status').textContent = state.draftLost ? `${now} · Live preview unavailable; checking for updates…` : now;
+  $('status').textContent = state.draftLost ? `${now} · Reconnecting…` : now;
 }
 
 function renderDraft() {
@@ -329,7 +430,7 @@ function renderDraft() {
 
 function follow(run) {
   if (!run || !ACTIVE.includes(run.status)) { closeEvents(); return; }
-  if (events && events.runId === run.id) return;
+  if (events && events.runId === run.id && events.readyState !== EventSource.CLOSED) return;
   closeEvents();
   const source = new EventSource(`/api/runs/${run.id}/events`);
   source.runId = run.id;
@@ -362,11 +463,18 @@ function follow(run) {
   });
   source.onerror = () => {
     if (!live()) return;
-    // EventSource reconnects by itself. A reload of the chat tells us if the run ended or the user was signed out.
-    state.draftLost = true;
-    renderStatus();
-    renderDraft();
-    setTimeout(() => { if (live()) report(loadChat()); }, 2000);
+    // EventSource reconnects by itself, and the server ends each stream every few minutes on purpose. Only if it is
+    // still not back after a moment: warn, and reload the chat (which says whether the run ended or the user was
+    // signed out).
+    if (source.lostTimer) return;  // one check at a time, however often the browser retries
+    source.lostTimer = setTimeout(() => {
+      source.lostTimer = null;
+      if (!live() || source.readyState === EventSource.OPEN) return;
+      state.draftLost = true;
+      renderStatus();
+      renderDraft();
+      reportUnlessOffline(loadChat());
+    }, 2000);
   };
 }
 
@@ -408,6 +516,7 @@ function renderAsk(ask) {
   if (ask.kind === 'question') {
     const input = element('textarea');
     input.rows = 2;
+    input.maxLength = 20000;
     input.placeholder = 'Your answer';
     input.setAttribute('aria-label', 'Your answer to Monty');
     row.append(input, button('Answer', '', async () => {
@@ -422,13 +531,19 @@ function renderAsk(ask) {
   } else {
     row.append(button('Take over the browser', '', () => takeOver(ask)));
   }
-  box.replaceChildren(element('p', ask.prompt), row);
-  notify(ask);
+  box.replaceChildren(element('p', ask.prompt), row);  // the server's push tells the user if they are away
 }
 
 async function answer(ask, body) {
   const before = page;
-  await api(`/api/asks/${ask.id}`, { method: 'POST', body });
+  const buttons = [...$('ask').querySelectorAll('button')];
+  for (const each of buttons) each.disabled = true;  // Approve and Deny together: one answer only
+  try {
+    await api(`/api/asks/${ask.id}`, { method: 'POST', body });
+  } catch (error) {
+    for (const each of buttons) each.disabled = false;
+    if (error.status !== 409) throw error;  // 409: answered already, or the run moved on; the reload shows it
+  }
   if (page !== before) return;  // the user went elsewhere meanwhile
   if (state.run && state.run.ask && state.run.ask.id === ask.id) {
     $('ask').hidden = true;
@@ -438,21 +553,32 @@ async function answer(ask, body) {
 }
 
 async function takeOver(ask) {
-  const link = await api(`/api/runs/${state.run.id}/live`, { method: 'POST', body: {} });
-  if (!state.run || !state.run.ask || state.run.ask.id !== ask.id) return;  // the ask ended meanwhile
-  stopWatching();
+  const before = page;
+  let link;
+  try {
+    link = await api(`/api/runs/${state.run.id}/live`, { method: 'POST', body: {} });
+  } catch (error) {
+    if (error.status !== 404) throw error;
+    if (page === before) await loadChat();  // the hand-off ended meanwhile: show where the run is now
+    return;
+  }
+  if (page !== before || !state.run || !state.run.ask || state.run.ask.id !== ask.id) return;  // left, or it ended
   state.takeoverAskId = ask.id;
   $('live').src = link.url;
-  // A modal dialog: the page behind cannot be reached and Escape closes it.
+  // A modal dialog: the page behind cannot be reached. The live view's own "Back to chat" closes it.
   $('takeover').showModal();
-  $('close-takeover').focus();
+  $('live').focus();
 }
 
 function closeTakeover() {
   // The hand-off goes on until the user gives the browser back; "Take over" opens it again.
   if ($('takeover').open) $('takeover').close();
 }
-$('close-takeover').addEventListener('click', closeTakeover);
+window.addEventListener('message', (event) => {
+  // The live view's own "Back to chat" button.
+  if (event.source !== $('live').contentWindow || event.origin !== location.origin) return;
+  if (event.data && event.data.kind === 'close-takeover') closeTakeover();
+});
 $('takeover').addEventListener('close', () => {  // also after Escape
   state.takeoverAskId = null;
   $('live').src = 'about:blank';
@@ -464,8 +590,10 @@ $('takeover').addEventListener('close', () => {  // also after Escape
 
 function startWatching() {
   // A screenshot a second while the browser panel is open.
-  if (watching) return;
+  if (watching && watching.runId === state.run.id) return;
+  stopWatching();  // another run's screenshots
   watching = new AbortController();
+  watching.runId = state.run.id;
   const signal = watching.signal;
   const runId = state.run.id;
   if (desktop.matches && !state.browserClosed) showBrowser();
@@ -479,11 +607,12 @@ function startWatching() {
 
 async function showScreenshot(runId, signal) {
   const response = await fetch(`/api/runs/${runId}/screen`, { credentials: 'same-origin', signal });
-  if (!response.ok) return;
+  if (response.status !== 200) return;  // 204: no picture yet
   const url = URL.createObjectURL(await response.blob());
   if (signal.aborted) { URL.revokeObjectURL(url); return; }
   const old = $('screen').src;
   $('screen').src = url;
+  $('screen').hidden = false;  // hidden until the first picture, rather than a broken image
   if (old.startsWith('blob:')) URL.revokeObjectURL(old);
 }
 
@@ -493,6 +622,7 @@ function stopWatching() {
   $('browser').hidden = true;
   const old = $('screen').src || '';
   $('screen').removeAttribute('src');
+  $('screen').hidden = true;
   if (old.startsWith('blob:')) URL.revokeObjectURL(old);
   updateBrowserButton();
 }
@@ -523,21 +653,40 @@ $('close-browser').addEventListener('click', () => {
 
 $('composer').addEventListener('submit', (event) => {
   event.preventDefault();
+  if ($('send').hidden && !$('ask').hidden) {  // Monty waits for an answer: take the user there
+    $('ask').querySelector('textarea, button').focus();
+    return;
+  }
   if ($('send').disabled || $('send').hidden) return;  // Enter obeys the same guard as the button
   const text = $('message').value.trim();
   if (!text) return;
-  $('send').disabled = true;
-  report(send(text).finally(() => { $('send').disabled = false; }));
+  $('send').disabled = true;  // the chat enables it again once it has loaded the new message's run
+  report(send(text).catch((error) => { $('send').disabled = false; throw error; }));
 });
 
 async function send(text) {
+  const before = page;
   const threadId = state.threadId;
   const path = threadId === null ? '/api/threads' : `/api/threads/${threadId}/messages`;
-  const created = await api(path, { method: 'POST', body: { text, timezone: TIMEZONE } });
+  let created;
+  try {
+    created = await api(path, { method: 'POST', body: { text, timezone: TIMEZONE } });
+  } catch (error) {
+    if (page !== before) throw error;
+    if (error.status === 409) await loadChat();  // Monty started on this chat elsewhere (a schedule, another tab)
+    if (error.status !== 404 || threadId === null) throw error;
+    // The chat was deleted with its schedule; the message is still in the box. Show the notice once the new
+    // chat has opened, as opening a page clears notices.
+    location.hash = '#/new';
+    await new Promise((resolve) => window.addEventListener('hashchange', resolve, { once: true }));
+    throw new Error('That chat was deleted. Send your message again to start a new chat.');
+  }
   if ($('message').value.trim() === text) $('message').value = '';
-  if (threadId === null) {
+  if (page !== before) {
+    await loadThreads();  // the user went elsewhere: the chat is in the list
+  } else if (threadId === null) {
     location.hash = `#/t/${created.thread_id}`;  // opens the new chat
-  } else if (state.threadId === threadId) {
+  } else {
     await loadChat();
     await loadThreads();
   }
@@ -564,16 +713,26 @@ async function openFiles() {
     return;
   }
   $('files-status').textContent = data.truncated ? 'Showing a partial list (up to 1,000 entries, 16 folders deep).' :
-    (data.files.length ? '' : 'No files yet. Ask the bot to download or generate a file.');
+    (data.files.length ? '' : 'No files yet. Ask Monty to download or make a file.');
   $('file-list').replaceChildren(...data.files.map((file) => {
     const tooLarge = file.size > data.max_download_bytes;
     const download = button('Download', 'secondary', () => downloadFile(file.path));
     download.disabled = tooLarge;
-    if (tooLarge) download.title = 'Exceeds the 20 MiB download limit';
+    if (tooLarge) download.title = 'Over the 20 MB download limit';
     const item = element('li');
-    item.append(element('span', `${file.path} (${file.size.toLocaleString()} bytes)`), download);
+    item.append(element('span', `${shownPath(file.path)} (${shownSize(file.size)})`), download);
     return item;
   }));
+}
+
+function shownPath(path) {
+  return path.replace(/^\/work\//, '');  // where Monty's code sees the user's files; the user just has "their files"
+}
+
+function shownSize(bytes) {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 async function downloadFile(path) {
@@ -589,11 +748,18 @@ async function downloadFile(path) {
   }
   if (response.status === 401) { signedOut(); return; }
   if (!response.ok) {
-    $('files-status').textContent = response.status === 413 ? 'File exceeds the 20 MiB download limit.' :
+    $('files-status').textContent = response.status === 413 ? 'This file is over the 20 MB download limit.' :
       'File unavailable. Refresh and try again.';
     return;
   }
-  const url = URL.createObjectURL(await response.blob());
+  let blob;
+  try {
+    blob = await response.blob();
+  } catch (error) {
+    if (error.name !== 'AbortError') $('files-status').textContent = 'Download failed. Try again.';  // dropped mid-file
+    return;
+  }
+  const url = URL.createObjectURL(blob);
   const link = element('a');
   link.href = url;
   const disposition = response.headers.get('Content-Disposition') || '';
@@ -629,14 +795,15 @@ async function openSchedules() {
     name.append(element('strong', s.name), element('span', `${s.when}${s.paused ? ' (paused)' : ''}`, 'list-detail'));
     const actions = element('span', '', 'list-actions');
     actions.append(
-      button('Open conversation', 'secondary', () => { location.hash = `#/t/${s.thread_id}`; }),
+      button('Open chat', 'secondary', () => { location.hash = `#/t/${s.thread_id}`; }),
       button(s.paused ? 'Resume' : 'Pause', 'secondary', async () => {
         await api(`/api/schedules/${s.id}/${s.paused ? 'resume' : 'pause'}`, { method: 'POST', body: {} });
         await openSchedules();
       }),
       button('Delete', 'bad', async () => {
+        if (!confirm(`Delete "${s.name}"? Monty will stop running it.`)) return;
         await api(`/api/schedules/${s.id}`, { method: 'DELETE' });
-        await openSchedules();
+        await Promise.all([openSchedules(), loadThreads()]);  // its chat goes too if it never ran
       }),
     );
     const item = element('li');
@@ -659,19 +826,37 @@ function base64urlBytes(text) {
   return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 }
 
-async function enableNotifications() {
-  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
-    throw new Error('This browser cannot show notifications.');
+async function showNotificationButton() {
+  // Only where notifications can work: this browser can show them and this server can send them.
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  const response = await fetch('/api/push/key', { credentials: 'same-origin' });  // not tied to the page on screen
+  state.pushKey = response.ok ? (await response.json()).public_key : null;
+  $('enable-notifications').hidden = !state.pushKey;
+  $('notifications-label').textContent = 'Notify me when Monty needs me';
+  const registration = state.pushKey && await navigator.serviceWorker.getRegistration('/sw.js');
+  const subscription = registration && await registration.pushManager.getSubscription();
+  if (!subscription || Notification.permission !== 'granted') return;
+  // Say "on" only once the server has it for whoever is signed in now. A subscription another account made on
+  // this device would send that account's pushes here: drop it.
+  try {
+    await api('/api/push/subscriptions', { method: 'POST', body: subscription.toJSON() });
+    $('notifications-label').textContent = 'Notifications are on';
+  } catch (error) {
+    if (error.status !== 409) throw error;
+    await subscription.unsubscribe();
   }
-  const key = await api('/api/push/key');
-  if (!key.public_key) throw new Error('Notifications are not set up on this server.');
-  if (await Notification.requestPermission() !== 'granted') return;
+}
+
+async function enableNotifications() {
+  if (await Notification.requestPermission() !== 'granted') {
+    throw new Error('Notifications are blocked for this site. Allow them in your browser settings, then try again.');
+  }
   const registration = await navigator.serviceWorker.register('/sw.js');
   const subscription = await registration.pushManager.subscribe({
-    userVisibleOnly: true, applicationServerKey: base64urlBytes(key.public_key),
+    userVisibleOnly: true, applicationServerKey: base64urlBytes(state.pushKey),
   });
   await api('/api/push/subscriptions', { method: 'POST', body: subscription.toJSON() });
-  $('enable-notifications').textContent = 'Notifications are on';
+  $('notifications-label').textContent = 'Notifications are on';
 }
 
 async function stopNotifications() {
@@ -688,14 +873,6 @@ async function stopNotifications() {
 }
 
 $('enable-notifications').addEventListener('click', () => report(enableNotifications()));
-
-function notify(ask) {
-  // While the page is open but hidden; a closed page gets the push from the server instead.
-  if (document.visibilityState === 'visible' || !('Notification' in window)) return;
-  if (Notification.permission !== 'granted') return;
-  const what = { question: 'has a question', approval: 'needs your approval', handoff: 'needs you in its browser' };
-  new Notification('Monty', { body: `Monty ${what[ask.kind]}.`, tag: ask.id });
-}
 
 // --- routing ---
 
@@ -714,23 +891,27 @@ async function route() {
   if (found) {
     newPage();
     $('title').textContent = found[1];
-    updateBrowserButton();
     await Promise.all([found[2](), loadThreads()]);
     return;
   }
   const match = hash.match(/^#\/t\/([0-9a-f-]{36})$/);
-  await openChat(match ? match[1] : null);
-  await loadThreads();
+  try {
+    await openChat(match ? match[1] : null);
+  } finally {
+    await loadThreads();  // also when the chat failed to load: the list is where the user tries again
+  }
 }
 
 async function start() {
   try {
     await api('/api/me');
   } catch (error) {
+    if (error.status !== 401) $('signin-error').textContent = error.message;  // offline, not signed out
     show('signin');
     return;
   }
   show('main');
+  showNotificationButton().catch(console.error);  // optional: the button simply stays hidden
   await route();
 }
 

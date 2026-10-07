@@ -50,11 +50,12 @@ class MockAPI:
             self.signed_in = True
             status = 201 if path == '/api/signup' else 200
         elif path == '/api/threads' and method == 'GET':
-            result = (
-                [{'id': THREAD, 'title': 'Compare flights to Lisbon', 'status': self.thread_status}]
-                if self.messages
-                else []
+            # As the server does: the list's status is the open run's, unless a test sets it on its own.
+            running = (
+                self.run['status'] if self.run and self.run['status'] in ('queued', 'running', 'waiting') else None
             )
+            listed = {'id': THREAD, 'title': 'Compare flights to Lisbon', 'status': self.thread_status or running}
+            result = [listed] if self.messages else []
         elif path == '/api/threads' and method == 'POST':
             assert isinstance(body, dict)
             self.messages = [
@@ -94,7 +95,11 @@ class MockAPI:
         elif path.endswith('/live'):
             result = {'url': '/mock-live'}
         elif path == '/mock-live':
-            route.fulfill(body='<html><body><button>Give browser back</button></body></html>', content_type='text/html')
+            back = "parent.postMessage({kind: 'close-takeover'}, location.origin)"  # as the live view's button does
+            route.fulfill(
+                body=f'<html><body><button onclick="{back}">Back to chat</button></body></html>',
+                content_type='text/html',
+            )
             return
         elif path.endswith('/screen'):
             route.fulfill(
@@ -127,17 +132,21 @@ def frontend() -> Iterator[tuple[Page, MockAPI]]:
         page.add_init_script("""
             window.eventSources = [];
             window.EventSource = class {
+                static CONNECTING = 0;
+                static OPEN = 1;
+                static CLOSED = 2;
                 constructor(url) {
                     this.url = url;
                     this.closed = false;
+                    this.readyState = 1;
                     this.listeners = {};
                     window.eventSources.push(this);
                 }
                 addEventListener(type, callback) { this.listeners[type] = callback; }
-                close() { this.closed = true; }
+                close() { this.closed = true; this.readyState = 2; }
                 emit(type, data) {
-                    if (type === 'error') this.onerror?.();
-                    else if (type === 'open') this.onopen?.();
+                    if (type === 'error') { this.readyState = 0; this.onerror?.(); }  // reconnecting
+                    else if (type === 'open') { this.readyState = 1; this.onopen?.(); }
                     else this.listeners[type]?.({data: JSON.stringify(data)});
                 }
             };
@@ -168,6 +177,7 @@ def test_auth_and_signup(frontend: tuple[Page, MockAPI]) -> None:
     page.click('#signin-button')
     expect(page.locator('#composer')).to_be_visible()
     assert ('POST', '/api/signup', {'email': 'pat@example.test', 'password': 'correct horse'}) in mock.calls
+    expect(page.locator('#enable-notifications')).to_be_hidden()  # this server sends no notifications
     page.click('#signout')
     expect(page.locator('#signin-form')).to_be_visible()
 
@@ -234,6 +244,7 @@ def test_saved_signins_and_schedules(frontend: tuple[Page, MockAPI]) -> None:
     expect(page.locator('#schedule-list')).to_contain_text('(paused)')
     page.get_by_role('button', name='Resume', exact=True).click()
     expect(page.get_by_role('button', name='Pause', exact=True)).to_be_visible()
+    page.once('dialog', lambda dialog: dialog.accept())  # "Delete ...? Monty will stop running it."
     page.get_by_role('button', name='Delete', exact=True).click()
     expect(page.locator('#schedule-list')).to_contain_text('No scheduled tasks yet')
     assert ('DELETE', '/api/sign-ins/shop.example.test', None) in mock.calls
@@ -265,16 +276,12 @@ def test_asks(frontend: tuple[Page, MockAPI], kind: str) -> None:
     else:
         page.get_by_role('button', name='Take over the browser', exact=True).click()
         expect(page.locator('#live')).to_be_visible()
-        expect(page.locator('#takeover')).to_contain_text('You are driving')
         assert ('POST', '/api/runs/run/live', {}) in mock.calls
         expect(page.get_by_role('dialog')).to_be_visible()  # modal: the page behind cannot be reached
         assert page.locator('#takeover').evaluate("(element) => element.matches(':modal')")
-        page.keyboard.press('Escape')
+        page.frame_locator('#live').get_by_role('button', name='Back to chat').click()
         expect(page.locator('#takeover')).not_to_be_visible()
         expect(page.get_by_role('button', name='Take over the browser')).to_be_focused()
-        page.get_by_role('button', name='Take over the browser', exact=True).click()
-        page.get_by_role('button', name='Back to chat').click()
-        expect(page.locator('#takeover')).not_to_be_visible()
         expect(page.locator('#ask')).to_be_visible()  # the hand-off waits until the browser is given back
 
 
@@ -346,7 +353,6 @@ def test_notification_opt_in_and_signout(frontend: tuple[Page, MockAPI]) -> None
             getRegistration: async () => registration,
         }});
     """)
-    workspace(page, mock)
     page.route(
         '**/api/push/key',
         lambda route: route.fulfill(
@@ -354,8 +360,9 @@ def test_notification_opt_in_and_signout(frontend: tuple[Page, MockAPI]) -> None
             body='{"public_key":"AQID"}',
         ),
     )
+    workspace(page, mock)
     page.click('#enable-notifications')
-    expect(page.locator('#enable-notifications')).to_have_text('Notifications are on')
+    expect(page.locator('#enable-notifications')).to_contain_text('Notifications are on')
     assert page.evaluate('window.registeredWorker') == '/sw.js'
     assert (
         'POST',
@@ -393,7 +400,7 @@ def test_files_navigation_and_download(frontend: tuple[Page, MockAPI], width: in
     page, mock = frontend
     page.set_viewport_size({'width': width, 'height': 844})
     mock.files = [
-        {'path': 'downloads/report <ready>.txt', 'size': 12},
+        {'path': '/work/downloads/report <ready>.txt', 'size': 12},
         {'path': 'large.zip', 'size': 20 * 1024 * 1024 + 1},
     ]
     workspace(page, mock)
@@ -404,14 +411,15 @@ def test_files_navigation_and_download(frontend: tuple[Page, MockAPI], width: in
     expect(page.locator('#layout')).not_to_be_visible()
     expect(page.locator('#open-files')).to_have_attribute('aria-current', 'page')
     expect(page.locator('#file-list li')).to_have_count(2)
-    expect(page.locator('#file-list li').first).to_contain_text('downloads/report <ready>.txt')
+    expect(page.locator('#file-list li').first).to_have_text('downloads/report <ready>.txt (12 bytes)Download')
+    expect(page.locator('#file-list li').last).to_contain_text('large.zip (20.0 MB)')
     expect(page.locator('#file-list ready')).to_have_count(0)
     buttons = page.locator('#file-list').get_by_role('button', name='Download', exact=True)
     expect(buttons.nth(1)).to_be_disabled()
     with page.expect_download() as downloaded:
         buttons.first.click()
     assert downloaded.value.suggested_filename == 'report ready.txt'
-    assert ('POST', '/api/files/download', {'path': 'downloads/report <ready>.txt'}) in mock.calls
+    assert ('POST', '/api/files/download', {'path': '/work/downloads/report <ready>.txt'}) in mock.calls
     expect(buttons.first).to_be_enabled()
     no_overflow(page)
     mock.files = []
@@ -429,7 +437,7 @@ def test_files_navigation_and_download(frontend: tuple[Page, MockAPI], width: in
 
 @pytest.mark.parametrize(
     ('status', 'message'),
-    [(404, 'File unavailable'), (413, '20 MiB download limit')],
+    [(404, 'File unavailable'), (413, '20 MB download limit')],
 )
 def test_download_errors_are_recoverable(frontend: tuple[Page, MockAPI], status: int, message: str) -> None:
     page, mock = frontend
@@ -456,7 +464,7 @@ def test_schedule_opens_its_conversation(frontend: tuple[Page, MockAPI], width: 
     if width < 900:
         page.click('#menu-button')
     page.click('#open-schedules')
-    page.get_by_role('button', name='Open conversation', exact=True).click()
+    page.get_by_role('button', name='Open chat', exact=True).click()
     expect(page).to_have_url(f'http://monty.test/#/t/{THREAD}')
     expect(page.locator('#schedules')).not_to_be_visible()
     expect(page.locator('#composer')).to_be_visible()
@@ -494,7 +502,7 @@ def test_sse_snapshots_error_recovery_and_committed_reply(frontend: tuple[Page, 
     emit(page, 'preview', {'revision': 'invalid', 'text': 'Bad draft', 'activity': 'Bad activity'})
     expect(page.locator('#messages')).not_to_contain_text('Bad draft')
     emit(page, 'error')
-    expect(page.locator('#status')).to_contain_text('Live preview unavailable')
+    expect(page.locator('#status')).to_contain_text('Reconnecting')
     expect(page.locator('.msg.assistant')).to_contain_text('Connection lost; this may be incomplete')
     emit(page, 'open')
     expect(page.locator('#status')).to_have_text('Comparing fares')
@@ -651,3 +659,179 @@ def test_messages_carry_the_time_zone_and_failures_show_in_the_page(frontend: tu
     expect(page.locator('#message')).to_have_value('And hotels')  # nothing typed is lost
     page.get_by_role('button', name='Dismiss').click()
     expect(page.locator('#notice')).not_to_be_visible()
+
+
+def test_a_scheduled_tasks_chat_before_its_first_run_says_so(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    expect(page.locator('#messages')).to_contain_text('Nothing here yet')
+    expect(page.locator('#send')).to_be_enabled()
+
+
+def test_skip_link_and_a_working_chat_say_where_you_are(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    streaming_chat(page, mock)
+    expect(page.locator('#message')).to_have_attribute('placeholder', re.compile('Monty is on it'))
+    page.keyboard.press('Tab')  # the skip link is the first thing on the page
+    page.keyboard.press('Enter')
+    expect(page.locator('#message')).to_be_focused()
+    expect(page).to_have_url(f'http://monty.test/#/t/{THREAD}')  # still in the chat
+
+
+def test_enter_while_monty_waits_goes_to_the_question(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    mock.messages = [{'role': 'user', 'text': 'Order eggs'}]
+    mock.run = {
+        'id': 'run',
+        'status': 'waiting',
+        'activity': [],
+        'ask': {'id': 'ask', 'kind': 'question', 'prompt': 'Brown or white?'},
+    }
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    expect(page.locator('#message')).to_have_attribute('placeholder', re.compile('waiting for you'))
+    page.fill('#message', 'brown')
+    page.press('#message', 'Enter')
+    expect(page.get_by_label('Your answer to Monty')).to_be_focused()
+    assert not any(method == 'POST' for method, _, _ in mock.calls)
+
+
+def test_the_chat_list_keeps_focus_and_marks_no_chat_on_other_pages(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.messages = [{'role': 'user', 'text': 'Order eggs'}]
+    workspace(page, mock)
+    page.locator('#threads button').first.click()
+    expect(page.locator('#threads button.current')).to_have_count(1)
+    page.locator('#threads button').first.focus()
+    mock.thread_status = 'waiting'
+    page.evaluate('loadThreads()')  # as the 15-second refresh does, with a new badge
+    expect(page.locator('#threads .badge')).to_have_text('Needs you')
+    expect(page.locator('#threads button').first).to_be_focused()
+    page.click('#open-files')
+    expect(page.locator('#threads button.current')).to_have_count(0)
+
+
+def test_inline_triple_backticks_do_not_swallow_the_reply(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    mock.messages = [
+        {'role': 'user', 'text': 'How do I install it?'},
+        {'role': 'assistant', 'text': 'Run ```npm install``` first.\n\nThen **start** it.'},
+    ]
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    expect(page.locator('.msg.assistant pre')).to_have_count(0)
+    expect(page.locator('.msg.assistant strong')).to_have_text('start')
+
+
+def test_a_run_started_elsewhere_shows_in_the_open_chat(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    mock.messages = [{'role': 'user', 'text': 'Weekly order check'}]
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    expect(page.locator('#send')).to_be_visible()
+    mock.thread_status = 'running'  # a schedule started it
+    mock.run = {'id': 'run', 'thread_id': THREAD, 'status': 'running', 'activity': ['Opening shop.test'], 'ask': None}
+    page.evaluate('loadThreads()')  # as the 15-second refresh does
+    expect(page.locator('#stop')).to_be_visible()
+    expect(page.locator('#status')).to_have_text('Opening shop.test')
+
+
+def test_sending_to_a_deleted_chat_starts_over_and_says_why(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    mock.messages = [{'role': 'user', 'text': 'Weekly order check'}]
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    page.route(
+        '**/api/threads/*/messages',
+        lambda route: route.fulfill(status=404, content_type='application/json', body='{"detail":"not found"}'),
+    )
+    page.fill('#message', 'Run it now')
+    page.click('#send')
+    expect(page).to_have_url('http://monty.test/#/new')
+    expect(page.locator('#notice')).to_contain_text('That chat was deleted')
+    expect(page.locator('#message')).to_have_value('Run it now')
+
+
+def test_a_chat_that_fails_to_load_says_so_and_lets_you_act(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    mock.messages = [{'role': 'user', 'text': 'Order eggs'}]
+    page.route(
+        f'**/api/threads/{THREAD}', lambda route: route.fulfill(status=500, body='{}', content_type='application/json')
+    )
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    expect(page.locator('#title')).to_have_text('Could not load this chat')
+    expect(page.locator('#notice')).to_contain_text('Something went wrong (500)')
+    expect(page.locator('#send')).to_be_enabled()
+    expect(page.locator('#threads button')).to_have_count(1)  # the list loads anyway, to try again from
+
+
+def test_no_connection_says_so_in_plain_words(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    workspace(page, mock)
+    page.route('**/api/threads', lambda route: route.abort())
+    page.fill('#message', 'Compare flights')
+    page.click('#send')
+    expect(page.locator('#notice-text')).to_have_text('Could not reach Monty. Check your connection, and try again.')
+
+
+def test_a_chat_whose_stream_closed_for_good_catches_up_from_the_list(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    streaming_chat(page, mock)
+    page.evaluate('window.eventSources[0].close()')  # as an HTTP error (a 502 in a restart) closes it for good
+    mock.messages.append({'role': 'assistant', 'text': 'All done.'})
+    mock.run = {'id': 'run', 'thread_id': THREAD, 'status': 'done', 'activity': [], 'ask': None}
+    page.evaluate('loadThreads()')  # as the 15-second refresh does
+    expect(page.locator('.msg.assistant')).to_have_text('All done.')
+    expect(page.locator('#send')).to_be_visible()
+
+
+def test_offline_at_start_says_so_instead_of_looking_signed_out(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    page.route('**/api/me', lambda route: route.abort())
+    page.goto('http://monty.test/')
+    expect(page.locator('#signin-error')).to_have_text('Could not reach Monty. Check your connection, and try again.')
+
+
+def test_background_refreshes_report_bugs_even_though_offline_is_quiet(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    workspace(page, mock)
+    page.evaluate("reportUnlessOffline(Promise.reject(new TypeError('a bug, not the network')))")
+    expect(page.locator('#notice-text')).to_have_text('a bug, not the network')  # only offline is quiet
+
+
+def test_a_sign_in_the_browser_does_not_keep_is_explained(frontend: tuple[Page, MockAPI]) -> None:
+    page, _ = frontend
+    page.goto('http://monty.test/')
+    # Signed in, but the session cookie is not kept, so /api/me still answers 401.
+    page.route('**/api/signin', lambda route: route.fulfill(status=200, content_type='application/json', body='{}'))
+    page.route('**/api/signup', lambda route: route.fulfill(status=201, content_type='application/json', body='{}'))
+    page.click('#signup-button')  # creating an account
+    page.fill('#email', 'pat@example.test')
+    page.fill('#password', 'correct horse')
+    page.click('#signin-button')
+    expect(page.locator('#signin-error')).to_contain_text('Allow cookies for this site, then sign in.')
+    expect(page.locator('#signin-button')).to_have_text('Sign in')  # the account exists now: back to signing in
+
+
+def test_a_failed_sign_out_does_not_look_like_one(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    workspace(page, mock)
+    page.route('**/api/signout', lambda route: route.abort())
+    page.click('#signout')
+    expect(page.locator('#notice-text')).to_have_text('Could not reach Monty. Check your connection, and try again.')
+    expect(page.locator('#composer')).to_be_visible()  # still signed in, and it shows
+
+
+def test_being_offline_is_said_once_until_the_server_answers_again(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    workspace(page, mock)
+    page.route('**/api/threads', lambda route: route.abort())
+    page.evaluate('reportUnlessOffline(loadThreads())')
+    expect(page.locator('#notice-text')).to_have_text('Could not reach Monty. Check your connection, and try again.')
+    page.get_by_role('button', name='Dismiss').click()
+    page.evaluate('reportUnlessOffline(loadThreads())')  # the next retry, still offline
+    page.wait_for_timeout(300)
+    expect(page.locator('#notice')).to_be_hidden()

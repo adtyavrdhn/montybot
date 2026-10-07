@@ -96,7 +96,13 @@ STATIC = Path(__file__).parent / 'static'
 
 async def index(request: Request) -> Response:
     """The web app: one page, mobile first (`montybot/static`)."""
-    return FileResponse(STATIC / 'index.html', headers={'Cache-Control': 'no-store'})
+    # Only this app may frame it, so another site cannot trick a click on Approve or Delete.
+    headers = {
+        'Cache-Control': 'no-store',
+        'Content-Security-Policy': "frame-ancestors 'self'",
+        'X-Frame-Options': 'SAMEORIGIN',
+    }
+    return FileResponse(STATIC / 'index.html', headers=headers)
 
 
 async def service_worker(request: Request) -> Response:

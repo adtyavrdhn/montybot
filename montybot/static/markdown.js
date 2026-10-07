@@ -6,10 +6,10 @@
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/;
 const NUMBERED_ITEM = /^\s*\d+[.)]\s/;
 const HEADING = /^(#{1,6})\s+(.*)$/;
-const TABLE_DIVIDER = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+const FENCE = /^\s*(`{3,})[^`]*$/;  // ``` or ```python; a line with more backticks after it is inline code
 // An address may hold one level of parentheses, as Wikipedia's do: /wiki/Python_(programming_language).
 const ADDRESS = String.raw`https?:\/\/(?:[^\s()<>]|\([^\s()<>]*\))+`;
-const INLINE = new RegExp(String.raw`\*\*([^*]+)\*\*|\x60([^\x60]+)\x60|\[([^\]]+)\]\((${ADDRESS})\)|(${ADDRESS})|\*([^*\s][^*]*)\*`);
+const INLINE = new RegExp(String.raw`\*\*([^*]+)\*\*|\x60([^\x60]+)\x60|\[([^\][]+)\]\((${ADDRESS})\)|(${ADDRESS})|\*([^*\s][^*]*)\*`);
 
 function renderMarkdown(text) {
   const blocks = document.createDocumentFragment();
@@ -19,8 +19,8 @@ function renderMarkdown(text) {
     const line = lines[i];
     if (!line.trim()) {
       i++;
-    } else if (line.trimStart().startsWith('```')) {
-      const fence = line.trim().match(/^`+/)[0];
+    } else if (FENCE.test(line)) {
+      const fence = line.match(FENCE)[1];
       const closes = (next) => /^`+$/.test(next.trim()) && next.trim().length >= fence.length;
       const code = [];
       for (i++; i < lines.length && !closes(lines[i]); i++) code.push(lines[i]);
@@ -30,7 +30,7 @@ function renderMarkdown(text) {
       const [, hashes, title] = line.match(HEADING);
       blocks.append(node(`h${Math.min(hashes.length + 2, 6)}`, inline(title)));
       i++;
-    } else if (line.includes('|') && TABLE_DIVIDER.test(lines[i + 1] || '')) {
+    } else if (line.includes('|') && isDivider(lines[i + 1], line)) {
       const rows = [cells(line)];
       for (i += 2; i < lines.length && lines[i].includes('|'); i++) rows.push(cells(lines[i]));
       blocks.append(table(rows));
@@ -53,8 +53,16 @@ function renderMarkdown(text) {
 
 function startsBlock(lines, i) {
   const line = lines[i];
-  return line.trimStart().startsWith('```') || HEADING.test(line) || LIST_ITEM.test(line) ||
-    (line.includes('|') && TABLE_DIVIDER.test(lines[i + 1] || ''));
+  return FENCE.test(line) || HEADING.test(line) || LIST_ITEM.test(line) ||
+    (line.includes('|') && isDivider(lines[i + 1], line));
+}
+
+function isDivider(line, header) {
+  // The line under a table's header, one cell per header cell: | --- | :-: |. Cell by cell, as one regex would
+  // backtrack badly on long lines.
+  if (line === undefined || !line.includes('-')) return false;
+  const dividers = cells(line);
+  return dividers.length === cells(header).length && dividers.every((cell) => /^:?-+:?$/.test(cell));
 }
 
 function cells(line) {

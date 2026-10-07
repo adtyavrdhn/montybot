@@ -12,7 +12,12 @@
          background: #f3f4f6; color: #111827; }
   header { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 14px;
            background: #111827; color: #f9fafb; }
-  header p { margin: 0; }
+  /* One row on any screen: the reason takes what is left, two lines at most. */
+  header p { flex: 1; min-width: 0; margin: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical;
+             -webkit-line-clamp: 2; line-clamp: 2; }
+  header button { flex-shrink: 0; }
+  #back { background: #374151; color: #f9fafb; }
+  @media (max-width: 600px) { .wide { display: none; } header { padding: 8px 10px; gap: 8px; } }
   nav { display: flex; gap: 8px; align-items: center; padding: 6px 14px; background: #e5e7eb; }
   nav #url { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #374151; }
   button { padding: 6px 12px; border: 0; border-radius: 6px; font: inherit; cursor: pointer; }
@@ -30,8 +35,9 @@
 </head>
 <body>
 <header>
-  <p id="reason">Connecting...</p>
-  <button id="give-back" disabled>Give back to the bot</button>
+  <button id="back" aria-label="Back to chat" hidden><span aria-hidden="true">←</span><span class="wide"> Back to chat</span></button>
+  <p id="reason">Connecting…</p>
+  <button id="give-back" disabled>Give back to Monty</button>
 </header>
 <nav>
   <select id="tabs" aria-label="Tabs" hidden></select>
@@ -40,7 +46,7 @@
   <button id="use-here" hidden>Use here</button>
 </nav>
 <main>
-  <canvas id="view" width="1280" height="720" aria-label="The bot's browser"></canvas>
+  <canvas id="view" width="1280" height="720" aria-label="Monty's browser"></canvas>
   <textarea id="keys" aria-label="Keyboard input" autocapitalize="off" autocomplete="off" autocorrect="off"
             spellcheck="false"></textarea>
 </main>

@@ -28,17 +28,17 @@ from montybot.resources import Resources
 from montybot.settings import Settings
 
 WHAT = {
-    'question': 'monty-bot has a question for you.',
-    'approval': 'monty-bot needs your approval before it goes on.',
-    'handoff': 'monty-bot needs you to take over its browser for a moment.',
-    'finished': 'monty-bot finished a scheduled task.',
-    'failed': 'monty-bot could not finish a scheduled task.',
-    'found': 'monty-bot found what you asked it to watch for.',
+    'question': 'Monty has a question for you.',
+    'approval': 'Monty needs your approval before it goes on.',
+    'handoff': 'Monty needs you to take over its browser for a moment.',
+    'finished': 'Monty finished a scheduled task.',
+    'failed': 'Monty could not finish a scheduled task.',
+    'found': 'Monty found what you asked it to watch for.',
 }
 SUBJECT = {
-    'finished': 'monty-bot finished a task',
-    'failed': 'monty-bot could not finish a task',
-    'found': 'monty-bot found something',
+    'finished': 'Monty finished a task',
+    'failed': 'Monty could not finish a task',
+    'found': 'Monty found something',
 }
 
 
@@ -111,14 +111,14 @@ async def _notify(resources: Resources, *, user_id: str, thread_id: str, kind: N
     body = WHAT[kind]
     gone: list[str] = []
     if settings.vapid_private_key is not None and subscriptions:
-        payload = json.dumps({'title': 'monty-bot', 'body': body, 'url': url, 'tag': tag})
+        payload = json.dumps({'title': 'Monty', 'body': body, 'url': url, 'tag': tag})
         delivered = await asyncio.gather(*(asyncio.to_thread(_push, settings, s, payload) for s in subscriptions))
         gone = [s['endpoint'] for s, ok in zip(subscriptions, delivered, strict=True) if not ok]
     if gone:
         async with resources.pool.connection() as connection:
             await connection.execute('DELETE FROM montybot.push_subscriptions WHERE endpoint = ANY(%s)', (gone,))
     if settings.smtp_url and row is not None:
-        await asyncio.to_thread(_email, settings, row['email'], SUBJECT.get(kind, 'monty-bot needs you'), body, url)
+        await asyncio.to_thread(_email, settings, row['email'], SUBJECT.get(kind, 'Monty needs you'), body, url)
 
 
 def _push(settings: Settings, subscription: dict[str, Any], payload: str) -> bool:
