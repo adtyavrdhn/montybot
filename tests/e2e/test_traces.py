@@ -139,7 +139,7 @@ def test_traces(traced: tuple[InProcessApp, InMemorySpanExporter, bool], databas
         'monty.dump',
         'chat scripted',
         'execute_tool run_code',
-        'invoke_agent montybot_stream',
+        'invoke_agent montybot',
     }
     assert required <= names, sorted(names)
     assert all(

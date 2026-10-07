@@ -71,7 +71,7 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
     """Tools run one at a time: they number their DBOS steps as they go, and an ask must be the run's only one."""
     return Agent[RunDeps, str](
         model,
-        name='montybot_stream',  # DBOS records model steps under this name; keep it so paused runs resume
+        name='montybot',  # what Logfire shows (`invoke_agent montybot`); DBOS step names are DBOSDurability's `name`
         deps_type=RunDeps,
         instructions=[
             INSTRUCTIONS,
@@ -93,6 +93,9 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
         capabilities=[
             HandleDeferredToolCalls(handler=approvals.handle_approvals),
             DBOSDurability(
+                # The name runs' model steps were recorded under, from when there was a streaming and a
+                # non-streaming agent; keep it so paused runs resume.
+                name='montybot_stream',
                 parallel_execution_mode='sequential',
                 # Scripted models without a stream function cannot stream.
                 event_stream_handler=(
