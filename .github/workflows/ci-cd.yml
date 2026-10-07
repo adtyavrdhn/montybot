@@ -158,7 +158,8 @@ jobs:
           echo "$CHROME_SHA256  $RUNNER_TEMP/chrome.zip" | sha256sum -c -
           unzip -q "$RUNNER_TEMP/chrome.zip" -d "$RUNNER_TEMP"
           echo "MONTYBOT_CHROME_BINARY=$RUNNER_TEMP/chrome-linux64/chrome" >> "$GITHUB_ENV"
-          uv run playwright install-deps chromium
+      # Not the engine: the end-to-end tests drive the web app as its user would, in Playwright's headless shell.
+      - run: uv run playwright install --with-deps --only-shell chromium
       - run: uv run pytest -q -p no:cacheprovider -rs tests/browser/test_cdp.py tests/browser/test_egress.py
       - run: uv run pytest -q -p no:cacheprovider -rs tests/liveview/test_liveview_engines.py -k cdp
       - run: uv run pytest -q -p no:cacheprovider -n 4 --durations=10 tests/e2e --browser=cdp
