@@ -36,7 +36,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
+from typing import TypeVar, cast
 
 from montybot.browser.cdp_client import CDPClosed, CDPConnection, CDPError, CDPParams
 from montybot.browser.chromium_linux import Display, VirtualScreen, bwrap_command, start_virtual_screen
@@ -724,6 +724,7 @@ class ChromiumCDPBackend:
                 workdir=workdir, process=process, connection=connection, tab=tab, screen=screen, proxy=proxy
             )
             self._listen(chrome)
+            _refuse_passkeys_in_popups(connection)
             await connection.send(
                 'Browser.setDownloadBehavior',
                 {'behavior': 'allowAndName', 'downloadPath': str(chrome.download_dir), 'eventsEnabled': True},
@@ -767,6 +768,7 @@ class ChromiumCDPBackend:
             # A window on a screen with no window manager (Xvfb) may not get the focus. The page gets it, as the
             # front window of a desktop would, as Playwright does for its pages.
             connection.send('Emulation.setFocusEmulationEnabled', {'enabled': True}, session=tab.session),
+            _refuse_passkeys(connection, tab.session),
         )
         return tab
 
@@ -987,7 +989,46 @@ class ChromiumCDPBackend:
                 connection.drop_session(session)
 
 
-def _ignore_result(future: asyncio.Future[CDPParams]) -> None:
+_T = TypeVar('_T')
+
+_NO_PASSKEYS: CDPParams = {
+    'protocol': 'ctap2',
+    'transport': 'usb',  # a security key, not a built-in one: a page still sees no platform authenticator
+    'hasResidentKey': True,
+    'hasUserVerification': True,
+    'isUserVerified': False,
+}
+
+
+async def _refuse_passkeys(connection: CDPConnection, session: str) -> None:
+    """Answer the page's passkey (WebAuthn) requests with an empty security key instead of Chrome's own dialog. The
+    dialog is Chrome's window, not the page, so the live view cannot show it, and it blocks clicks on the page. With
+    no passkey to give, the request fails at once (`NotAllowedError`), as on a computer without one, and the site
+    offers its other ways to sign in. A user's passkeys are on their own devices, so none could be used here anyway."""
+    await connection.send('WebAuthn.enable', {'enableUI': False}, session=session)
+    await connection.send('WebAuthn.addVirtualAuthenticator', {'options': _NO_PASSKEYS}, session=session)
+
+
+def _refuse_passkeys_in_popups(connection: CDPConnection) -> None:
+    """Do the same in every popup or tab a page opens, as Chrome reports it (`Target.setDiscoverTargets` is on). A
+    sign-in popup loads its page from the site first, so this is in place before the page can ask. The session stays
+    attached, since the empty key lives with it."""
+
+    def created(params: CDPParams) -> None:
+        info = cast(CDPParams, params['targetInfo'])
+        if info.get('type') != 'page' or not info.get('openerId'):
+            return
+
+        async def set_up() -> None:
+            attached = await connection.send('Target.attachToTarget', {'targetId': info['targetId'], 'flatten': True})
+            await _refuse_passkeys(connection, str(attached['sessionId']))
+
+        asyncio.ensure_future(set_up()).add_done_callback(_ignore_result)
+
+    connection.on('Target.targetCreated', created)
+
+
+def _ignore_result(future: asyncio.Future[_T]) -> None:
     """For commands sent from an event handler: the page may be gone by the time Chrome answers."""
     if not future.cancelled():
         future.exception()
