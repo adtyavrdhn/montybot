@@ -59,11 +59,13 @@ async def run_thread_stream(run_id: str) -> str:
 
 
 async def _run_thread(run_id: str, *, stream: bool) -> str:
-    with timing('run.lifecycle'):
+    # Baggage puts run_id on every span of the run, model and browser calls included.
+    with timing('run.lifecycle') as lifecycle, logfire.set_baggage(run_id=run_id):
         resources = current()
         if stream:
             streaming.reset(run_id)
         run, history_json, schedule = await DBOS.run_step_async({'name': 'run.start'}, start_run, resources, run_id)
+        lifecycle.set_attributes({'thread_id': run.thread_id, 'user_id': run.user_id, 'trigger': run.trigger})
         history = recent(ModelMessagesTypeAdapter.validate_json(history_json), resources.settings.history_limit)
         deps = RunDeps(resources=resources, run=run, schedule=schedule)
         try:
@@ -74,7 +76,7 @@ async def _run_thread(run_id: str, *, stream: bool) -> str:
                 with timing('run.agent'):
                     result = await agent.run(run.prompt, deps=deps, message_history=history)
             except Exception as error:
-                logfire.error('Run {run_id} failed', run_id=run_id)
+                logfire.error('Run {run_id} failed: {error_type}', run_id=run_id, error_type=type(error).__qualname__)
                 await DBOS.run_step_async(
                     {**RETRIED, 'name': 'run.failed'}, fail_run, resources, run, type(error).__name__
                 )

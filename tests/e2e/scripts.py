@@ -2,7 +2,7 @@
 
 The model reads the user's message and picks a script for it, as a real model picks a plan. A script looks only at
 what its tools returned in this run, so it behaves the same whether a step ran or was replayed after a restart. The
-same messages run against a real model in the nightly tests.
+same messages run against a real model with MONTYBOT_TEST_MODEL.
 """
 
 from __future__ import annotations

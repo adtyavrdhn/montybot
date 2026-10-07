@@ -45,7 +45,7 @@ endpoints, permission formats or discovery documents now. The browser remains th
 
 TYPESAFE_API_KEY and LOGFIRE_TOKEN can be added as repo Actions secrets. Trusted main deployment sends only
 nonempty allowlisted keys to the VM through SSH stdin, updates its owner-only env file atomically, and leaves
-existing settings intact. Jev requires explicit JEV_ENABLED=true; no key means no added tools.
+existing settings intact. Jev is on whenever the key is set; no key means no added tools.
 
 Tests use finite scripted choices, the real TypeSafe response adapter, and Postgres-backed DBOS workflow results.
 They cover abstention, missing keys/metadata, duplicate labels, bounded candidates, no click execution, and secret

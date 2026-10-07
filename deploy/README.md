@@ -230,8 +230,12 @@ receives them. `deploy/update-secrets.py` sends nonempty values over SSH stdin a
 owner-only `.env`; unset repo secrets do not erase existing VM values. Tokens must use letters, digits or
 `_.:/+=-`; malformed updates fail rather than interpolating shell syntax. No secrets enter image layers.
 
-On the VM, set `JEV_ENABLED=true` to expose optional intent and navigation-advice tools, then deploy/restart.
-The default is off. `JEV_MODEL=jev-latest` is an evaluation alias; pin a version after testing.
+Each deploy bakes its commit into the image; Logfire shows it as `service.version`, so traces can be compared across
+deploys. `ENVIRONMENT` (default `production`) and `LOGFIRE_INCLUDE_CONTENT` (default `true`: messages, the agent's
+code and page snapshots are exported; see the README's Observability section) can be set in the VM's `.env`.
+
+With `TYPESAFE_API_KEY` set, the agent gets the optional intent and navigation-advice tools; without it, it has
+none. `JEV_MODEL=jev-latest` is an evaluation alias; pin a version after testing.
 `JEV_THRESHOLD` applies to the probability of the chosen field value, not provider sureness. A missing key,
 metadata, timeout or uncertain decision falls back to the normal agent. Jev never clicks or grants approval.
 It receives up to three user requests for intent and up to 20 unique link labels for navigation, not form values

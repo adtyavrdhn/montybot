@@ -25,4 +25,8 @@ RUN uv sync --frozen --no-dev
 RUN mkdir -p /data/claude-code /data/workspaces && chown pwuser:pwuser /data/claude-code /data/workspaces
 USER pwuser
 
+# Last, so a new commit rebuilds nothing else. Logfire reports it as service.version.
+ARG COMMIT
+ENV COMMIT=${COMMIT}
+
 CMD ["sh", "-c", "montybot migrate && exec montybot serve"]

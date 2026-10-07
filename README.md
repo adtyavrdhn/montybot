@@ -26,17 +26,23 @@ Python (pandas, PDFs) runs through `run_python` in real CPython, in a bubblewrap
 
 ## Observability
 
-`LOGFIRE_TOKEN` is optional: without it, no telemetry is sent to Logfire. With it, the app exports fixed-label
-HTTP, database pool/query, run, browser and Monty durations, HTTP response status, and numeric model token usage
-(including prompt-cache reads/writes). Cache usage is part of the model request span: providers do not expose a
-separate cache duration. Trace/span IDs correlate operations; user content is not needed for tracing.
+`LOGFIRE_TOKEN` is optional: without it, no telemetry is sent to Logfire. What is exported is decided per field in
+[`montybot/observability.py`](montybot/observability.py):
 
-Pydantic AI keeps `include_content=False` and passes through an allowlist adapter before export. Messages, tool
-arguments/results, code, page contents, typed input, cookies/storage state, credentials, hand-off IDs/links, full
-URLs and exception text are excluded. Exported resources carry only the fixed `service.name=montybot` label;
-environment/detector resource metadata is discarded. HTTP/SQL auto-instrumentation and model metrics are deliberately
-disabled because they can expose URL, query or provider metadata. Keep operation names literal and do not add argument
-capture when extending instrumentation. `tests/e2e/test_traces.py` checks the exported privacy boundary.
+- **Always:** Pydantic AI's agent, model and tool spans with model, provider and tool names, token and cache usage
+  (so Logfire shows cost) and the conversation's shape; HTTP method, route template and status; database, run,
+  browser and Monty timings; the site a browser step opens (host only); `run_id` on every span of a run and
+  `thread_id`/`user_id` on `run.lifecycle`; exception types; the commit (`service.version`) and `ENVIRONMENT`;
+  token and system (CPU, memory) metrics.
+- **With `LOGFIRE_INCLUDE_CONTENT` (default on, for the demo):** messages, replies, instructions (with the user's
+  memories), the agent's code, page snapshots, and exception messages and tracebacks. Turn it off before real users'
+  data flows through.
+- **Never:** cookies and browser state, saved sign-ins, passwords typed in live view, session cookies, app secrets,
+  hand-off ids and links, push subscription URLs. None reach the agent, and HTTP spans never carry the raw path,
+  query or headers. Logfire's default scrubbing stays on as a backstop: it replaces values that mention a password,
+  cookie, session and so on, including a sign-in page's snapshot.
+
+`tests/e2e/test_traces.py` holds these lines through a whole sign-in hand-off and order, with content on and off.
 
 ## Tests
 
@@ -44,7 +50,7 @@ capture when extending instrumentation. `tests/e2e/test_traces.py` checks the ex
 uv run pytest                                   # unit tests, and end-to-end tests with the fake browser
 uv run pytest tests/e2e --browser=chromium      # the same end-to-end tests in real (headless) Chrome
 uv run pytest -m u2                             # one user path (u1 ... u6)
-MONTYBOT_TEST_MODEL=anthropic:claude-sonnet-4-5 uv run pytest tests/e2e --browser=chromium --live   # nightly
+MONTYBOT_TEST_MODEL=anthropic:claude-sonnet-4-5 uv run pytest tests/e2e --browser=chromium --live   # real sites, by hand
 tests/linux/run.sh tests/test_cpython.py tests/e2e/test_files.py   # the tests that need Linux and bwrap, in Docker
 ```
 
@@ -67,12 +73,3 @@ Dated files in [`notes/`](notes/), newest last. Later notes win over earlier one
 - [2026-10-06 monty-bot plan and browser design](<notes/2026-10-06 monty-bot plan and browser design.md>): the goals
   agreed so far (a hosted consumer bot built on Viktor), how the browser and user takeover work on one server, bot
   checks, speed, and milestones. Draft for discussion with Mike.
-
-### Nightly checks with a real model
-
-`.github/workflows/nightly.yml` runs the U1-U6 fixture paths and the small live-site list on Chromium with a real
-model. It is disabled by default to avoid surprise cost. Set the repository variable `ENABLE_NIGHTLY_MODEL_TESTS=true`
-and the Actions secret `ANTHROPIC_API_KEY` to opt in; then use Actions > Nightly user paths > Run workflow, or the nightly
-schedule. Calls are sequential and bounded. A live-site challenge is a signal to inspect, not proof of a completed
-sign-in or checkout. No live page or session artifacts are uploaded. Servo comparison and real bot-check evaluations
-remain the browser-engine issues, not a conclusion drawn from these Chromium checks.

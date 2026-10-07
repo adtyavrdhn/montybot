@@ -52,7 +52,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         choices=sorted(BACKENDS),
         help='the browser engine the app drives in end-to-end tests',
     )
-    parser.addoption('--live', action='store_true', help='also run the nightly tests against real sites')
+    parser.addoption('--live', action='store_true', help='also run the tests against real sites')
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

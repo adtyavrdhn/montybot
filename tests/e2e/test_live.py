@@ -1,4 +1,4 @@
-"""Nightly: the user paths against real sites, with a real model and a real browser.
+"""By hand: the user paths against real sites, with a real model and a real browser.
 
     MONTYBOT_TEST_MODEL=anthropic:claude-sonnet-4-5 uv run pytest tests/e2e/test_live.py --live --browser=chromium
 

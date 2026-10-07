@@ -44,6 +44,8 @@ services:
   app:
     build:
       context: ..
+      args:
+        COMMIT: ${COMMIT:-}
     image: montybot-app
     restart: unless-stopped
     depends_on:
@@ -64,10 +66,11 @@ services:
       CLAUDE_CODE_AUTH_FILE: /data/claude-code/auth.json
       WORKSPACES_DIR: /data/workspaces
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
-      JEV_ENABLED: ${JEV_ENABLED:-false}
       JEV_MODEL: ${JEV_MODEL:-jev-latest}
       JEV_THRESHOLD: ${JEV_THRESHOLD:-0.8}
       LOGFIRE_TOKEN: ${LOGFIRE_TOKEN:-}
+      LOGFIRE_INCLUDE_CONTENT: ${LOGFIRE_INCLUDE_CONTENT:-true}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
       MONTY_URL: ${MONTY_URL:-}
     volumes:
       - claude-code:/data/claude-code
