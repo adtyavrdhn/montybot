@@ -46,6 +46,8 @@ BACKENDS = {
     'servo': 'montybot.browser.servo:ServoBackend',
     # Unjailed Lightpanda at MONTYBOT_LIGHTPANDA_BINARY, for the same evaluation.
     'lightpanda': 'montybot.browser.lightpanda:LightpandaBackend',
+    # Unjailed headless Camoufox at MONTYBOT_CAMOUFOX_BINARY, for the engine evaluation (#18).
+    'camoufox': 'montybot.engines:camoufox_headless',
 }
 
 

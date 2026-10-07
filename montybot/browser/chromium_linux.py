@@ -22,7 +22,7 @@ import os
 import secrets
 import shlex
 import struct
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -176,6 +176,7 @@ def bwrap_command(
     proxy_directory: Path | None = None,
     expose: tuple[int, Path] | None = None,
     env: Mapping[str, str] | None = None,
+    read_only: Sequence[Path] = (),
     bwrap: str = 'bwrap',
 ) -> list[str]:
     """The bwrap command line that runs `chrome` (or another browser, such as servoshell) with `profile` as its only
@@ -190,6 +191,8 @@ def bwrap_command(
     `expose=(port, socket)`, with `proxy`, makes a TCP port inside the jail reachable from the host only as the Unix
     socket `socket`, which must be in `profile`: how Servo's WebDriver server, which listens on every interface, is
     driven from outside without a TCP port on the host.
+
+    `read_only` mounts more host folders read-only at the same path, such as Camoufox's font cache.
     """
     command = [
         bwrap,
@@ -212,6 +215,8 @@ def bwrap_command(
             command += ['--ro-bind-try', path, path]
     chrome_dir = str(chrome.parent)
     command += ['--ro-bind', chrome_dir, chrome_dir]
+    for path in read_only:
+        command += ['--ro-bind', str(path), str(path)]
     command += ['--proc', '/proc', '--dev', '/dev', '--tmpfs', '/dev/shm', '--tmpfs', '/tmp']
     command += ['--bind', str(profile), str(profile), '--chdir', str(profile)]
     variables = {'HOME': str(profile), 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', **(env or {})}
