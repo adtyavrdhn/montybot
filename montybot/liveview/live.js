@@ -69,8 +69,8 @@ function onMessage(message) {
   } else if (message.kind === 'error') {
     status.textContent = message.message;
   } else if (message.kind === 'ended') {
-    finish(message.given_back ? 'Thanks. Monty has the browser again; you can close this page.'
-                              : 'This hand-off is over.');
+    finish(message.given_back ? 'Thanks. Monty has its browser back.'
+                              : 'Monty has its browser back. Nothing more to do here.');
   }
 }
 
@@ -92,11 +92,11 @@ async function onFrame(buffer) {
 function onClose(code) {
   socket = null;
   if (finished) return;
-  if (code === 4410) return finish('This hand-off is over.');
-  if (code === 4404) return finish('There is no such hand-off for you.');
+  if (code === 4410) return finish('Monty has its browser back. Nothing more to do here.');
+  if (code === 4404) return finish('This link is not for you, or it has expired.');
   if (code === 4401) return finish('Sign in, then open this link again.');
   if (code === 4409) {
-    status.textContent = 'You opened this hand-off somewhere else.';
+    status.textContent = 'You are driving Monty\'s browser in another window or device.';
     useHere.hidden = false;
     return;
   }

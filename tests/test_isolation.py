@@ -325,6 +325,8 @@ async def test_an_answered_run_shows_as_working_until_it_carries_on(pool: Pool) 
         await store.set_run_status(connection, run_id, 'waiting')
         waiting = await api.run_view(connection, user, await store.load_run(connection, run_id))
         assert waiting['status'] == 'waiting' and waiting['ask']['id'] == ask_id
+        assert await store.active_runs(connection, user.id) == {thread.id: 'waiting'}
         await store.answer_ask(connection, user.id, ask_id, {'text': 'that one'})
         answered = await api.run_view(connection, user, await store.load_run(connection, run_id))
         assert answered['status'] == 'running' and answered['ask'] is None
+        assert await store.active_runs(connection, user.id) == {thread.id: 'running'}  # the chat list agrees

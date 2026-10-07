@@ -117,10 +117,14 @@ async def list_threads(connection: Connection, user_id: str) -> list[Thread]:
 
 
 async def active_runs(connection: Connection, user_id: str) -> dict[str, RunStatus]:
-    """The status of each of the user's unfinished runs, by thread id."""
+    """The status of each of the user's unfinished runs, by thread id. A run waiting with every ask answered is
+    about to carry on, so it counts as running (as in `api.run_view`)."""
     cursor = await connection.execute(
+        "SELECT r.thread_id, CASE WHEN r.status = 'waiting' AND NOT EXISTS "
+        '(SELECT 1 FROM montybot.asks a WHERE a.run_id = r.id AND a.answer IS NULL) '
+        "THEN 'running' ELSE r.status END AS status "
         # The same condition as the index runs_active_by_user.
-        "SELECT thread_id, status FROM montybot.runs WHERE user_id = %s AND status IN ('queued', 'running', 'waiting')",
+        "FROM montybot.runs r WHERE r.user_id = %s AND r.status IN ('queued', 'running', 'waiting')",
         (user_id,),
     )
     return {str(row['thread_id']): row['status'] for row in await cursor.fetchall()}
@@ -438,6 +442,8 @@ async def delete_schedule(connection: Connection, user_id: str, schedule_id: str
     row = await cursor.fetchone()
     if row is None:
         return False
+    # Lock the thread first: a run starting in it right now must either be seen below or wait for this to commit.
+    await connection.execute('SELECT 1 FROM montybot.threads WHERE id = %s FOR UPDATE', (row['thread_id'],))
     await connection.execute(
         'DELETE FROM montybot.threads t WHERE t.id = %s '
         'AND NOT EXISTS (SELECT 1 FROM montybot.runs r WHERE r.thread_id = t.id)',

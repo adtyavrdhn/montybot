@@ -6,10 +6,9 @@
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/;
 const NUMBERED_ITEM = /^\s*\d+[.)]\s/;
 const HEADING = /^(#{1,6})\s+(.*)$/;
-const TABLE_DIVIDER = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
 // An address may hold one level of parentheses, as Wikipedia's do: /wiki/Python_(programming_language).
 const ADDRESS = String.raw`https?:\/\/(?:[^\s()<>]|\([^\s()<>]*\))+`;
-const INLINE = new RegExp(String.raw`\*\*([^*]+)\*\*|\x60([^\x60]+)\x60|\[([^\]]+)\]\((${ADDRESS})\)|(${ADDRESS})|\*([^*\s][^*]*)\*`);
+const INLINE = new RegExp(String.raw`\*\*([^*]+)\*\*|\x60([^\x60]+)\x60|\[([^\][]+)\]\((${ADDRESS})\)|(${ADDRESS})|\*([^*\s][^*]*)\*`);
 
 function renderMarkdown(text) {
   const blocks = document.createDocumentFragment();
@@ -30,7 +29,7 @@ function renderMarkdown(text) {
       const [, hashes, title] = line.match(HEADING);
       blocks.append(node(`h${Math.min(hashes.length + 2, 6)}`, inline(title)));
       i++;
-    } else if (line.includes('|') && TABLE_DIVIDER.test(lines[i + 1] || '')) {
+    } else if (line.includes('|') && isDivider(lines[i + 1])) {
       const rows = [cells(line)];
       for (i += 2; i < lines.length && lines[i].includes('|'); i++) rows.push(cells(lines[i]));
       blocks.append(table(rows));
@@ -54,7 +53,12 @@ function renderMarkdown(text) {
 function startsBlock(lines, i) {
   const line = lines[i];
   return line.trimStart().startsWith('```') || HEADING.test(line) || LIST_ITEM.test(line) ||
-    (line.includes('|') && TABLE_DIVIDER.test(lines[i + 1] || ''));
+    (line.includes('|') && isDivider(lines[i + 1]));
+}
+
+function isDivider(line) {
+  // The line under a table's header: | --- | :---: |. Checked cell by cell, as one regex would backtrack badly.
+  return line !== undefined && line.includes('-') && cells(line).every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
 function cells(line) {

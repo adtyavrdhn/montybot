@@ -23,6 +23,12 @@ def shop() -> Iterator[Shop]:
     site.stop()
 
 
+def test_only_the_app_itself_may_frame_the_app(client: Client) -> None:
+    page = client.http.get('/')
+    assert page.headers['content-security-policy'] == "frame-ancestors 'self'"
+    assert page.headers['x-frame-options'] == 'SAMEORIGIN'
+
+
 def test_a_message_gets_a_reply(client: Client) -> None:
     client.sign_up()
     thread = client.ask('Say hello.')

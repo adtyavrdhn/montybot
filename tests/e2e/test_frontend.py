@@ -239,6 +239,7 @@ def test_saved_signins_and_schedules(frontend: tuple[Page, MockAPI]) -> None:
     expect(page.locator('#schedule-list')).to_contain_text('(paused)')
     page.get_by_role('button', name='Resume', exact=True).click()
     expect(page.get_by_role('button', name='Pause', exact=True)).to_be_visible()
+    page.once('dialog', lambda dialog: dialog.accept())  # "Delete ...? Monty will stop running it."
     page.get_by_role('button', name='Delete', exact=True).click()
     expect(page.locator('#schedule-list')).to_contain_text('No scheduled tasks yet')
     assert ('DELETE', '/api/sign-ins/shop.example.test', None) in mock.calls
@@ -356,7 +357,7 @@ def test_notification_opt_in_and_signout(frontend: tuple[Page, MockAPI]) -> None
     )
     workspace(page, mock)
     page.click('#enable-notifications')
-    expect(page.locator('#enable-notifications')).to_have_text('Notifications are on')
+    expect(page.locator('#enable-notifications')).to_contain_text('Notifications are on')
     assert page.evaluate('window.registeredWorker') == '/sw.js'
     assert (
         'POST',
@@ -431,7 +432,7 @@ def test_files_navigation_and_download(frontend: tuple[Page, MockAPI], width: in
 
 @pytest.mark.parametrize(
     ('status', 'message'),
-    [(404, 'File unavailable'), (413, '20 MiB download limit')],
+    [(404, 'File unavailable'), (413, '20 MB download limit')],
 )
 def test_download_errors_are_recoverable(frontend: tuple[Page, MockAPI], status: int, message: str) -> None:
     page, mock = frontend
@@ -661,3 +662,13 @@ def test_a_scheduled_tasks_chat_before_its_first_run_says_so(frontend: tuple[Pag
     page.goto(f'http://monty.test/#/t/{THREAD}')
     expect(page.locator('#messages')).to_contain_text('Nothing here yet')
     expect(page.locator('#send')).to_be_enabled()
+
+
+def test_skip_link_and_a_working_chat_say_where_you_are(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    streaming_chat(page, mock)
+    expect(page.locator('#message')).to_have_attribute('placeholder', re.compile('Monty is on it'))
+    page.keyboard.press('Tab')  # the skip link is the first thing on the page
+    page.keyboard.press('Enter')
+    expect(page.locator('#message')).to_be_focused()
+    expect(page).to_have_url(f'http://monty.test/#/t/{THREAD}')  # still in the chat

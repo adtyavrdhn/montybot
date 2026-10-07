@@ -18,6 +18,7 @@ const state = {
   draft: null,  // the running run's live draft: { text, activity }
   draftLost: false,  // the live connection dropped, so the draft may be behind
   chatLoads: 0,  // numbers each chat load, so only the latest one is drawn
+  threadLoads: 0,  // the same for the chat list
   takeoverAskId: null,  // the hand-off whose live view is open
   browserClosed: false,  // the user closed the browser panel in this chat, so it does not open by itself again
   threadsShown: '',  // the chat list as last drawn, so an unchanged list is not redrawn under the user's focus
@@ -70,6 +71,10 @@ function showNotice(text) {
 }
 function hideNotice() { $('notice').hidden = true; }
 $('close-notice').addEventListener('click', hideNotice);
+document.querySelector('.skip-link').addEventListener('click', (event) => {
+  event.preventDefault();  // a #message hash would be routed as a page
+  $('message').focus();
+});
 
 function element(tag, text = '', className = '') {
   const made = document.createElement(tag);
@@ -150,10 +155,13 @@ async function signOut() {
 // --- the chat list ---
 
 async function loadThreads() {
+  const load = ++state.threadLoads;
   const threads = await api('/api/threads');
+  if (load !== state.threadLoads) return;  // a later load is drawing the list
   const shown = JSON.stringify([state.threadId, threads]);
   if (shown === state.threadsShown) return;
   state.threadsShown = shown;
+  const focusInList = $('threads').contains(document.activeElement);
   const badges = { waiting: 'Needs you', running: 'Working', queued: 'Working' };
   $('threads').replaceChildren(...threads.map((thread) => {
     const open = element('button', '', thread.id === state.threadId ? 'current' : '');
@@ -167,6 +175,8 @@ async function loadThreads() {
     return item;
   }));
   if (!threads.length) $('threads').append(element('li', 'Your next task starts with a new chat.', 'thread-empty'));
+  const current = $('threads').querySelector('.current');
+  if (focusInList && current) current.focus();  // the redraw replaced the button the user was on
 }
 
 setInterval(() => {
@@ -266,6 +276,8 @@ async function openChat(threadId) {
     renderRun(null);
     return;
   }
+  $('title').textContent = 'Loading…';
+  $('messages').replaceChildren();  // never the last chat's messages under this chat's address
   renderRun(null);
   $('send').disabled = true;  // until the chat has loaded and says whether it is still working
   const mine = page;
@@ -307,6 +319,8 @@ function renderRun(run) {
   $('send').hidden = active;
   $('send').disabled = false;
   $('stop').hidden = !active;
+  $('stop').disabled = false;
+  $('message').placeholder = active ? 'Monty is on it. Stop it, or wait to send your next message.' : 'What would you like Monty to do?';
   $('status').hidden = !working;
   renderStatus();
   renderAsk(run && run.status === 'waiting' ? run.ask : null);
@@ -341,7 +355,7 @@ function renderDraft() {
 
 function follow(run) {
   if (!run || !ACTIVE.includes(run.status)) { closeEvents(); return; }
-  if (events && events.runId === run.id) return;
+  if (events && events.runId === run.id && events.readyState !== EventSource.CLOSED) return;
   closeEvents();
   const source = new EventSource(`/api/runs/${run.id}/events`);
   source.runId = run.id;
@@ -434,13 +448,19 @@ function renderAsk(ask) {
   } else {
     row.append(button('Take over the browser', '', () => takeOver(ask)));
   }
-  box.replaceChildren(element('p', ask.prompt), row);
-  notify(ask);
+  box.replaceChildren(element('p', ask.prompt), row);  // the server's push tells the user if they are away
 }
 
 async function answer(ask, body) {
   const before = page;
-  await api(`/api/asks/${ask.id}`, { method: 'POST', body });
+  const buttons = [...$('ask').querySelectorAll('button')];
+  for (const each of buttons) each.disabled = true;  // Approve and Deny together: one answer only
+  try {
+    await api(`/api/asks/${ask.id}`, { method: 'POST', body });
+  } catch (error) {
+    for (const each of buttons) each.disabled = false;
+    if (error.status !== 409) throw error;  // 409: answered already, or the run moved on; the reload shows it
+  }
   if (page !== before) return;  // the user went elsewhere meanwhile
   if (state.run && state.run.ask && state.run.ask.id === ask.id) {
     $('ask').hidden = true;
@@ -450,8 +470,16 @@ async function answer(ask, body) {
 }
 
 async function takeOver(ask) {
-  const link = await api(`/api/runs/${state.run.id}/live`, { method: 'POST', body: {} });
-  if (!state.run || !state.run.ask || state.run.ask.id !== ask.id) return;  // the ask ended meanwhile
+  const before = page;
+  let link;
+  try {
+    link = await api(`/api/runs/${state.run.id}/live`, { method: 'POST', body: {} });
+  } catch (error) {
+    if (error.status !== 404) throw error;
+    await loadChat();  // the hand-off ended meanwhile: show where the run is now
+    return;
+  }
+  if (page !== before || !state.run || !state.run.ask || state.run.ask.id !== ask.id) return;  // left, or it ended
   stopWatching();
   state.takeoverAskId = ask.id;
   $('live').src = link.url;
@@ -466,7 +494,8 @@ function closeTakeover() {
 }
 window.addEventListener('message', (event) => {
   // The live view's own "Back to chat" button.
-  if (event.origin === location.origin && event.data && event.data.kind === 'close-takeover') closeTakeover();
+  if (event.source !== $('live').contentWindow || event.origin !== location.origin) return;
+  if (event.data && event.data.kind === 'close-takeover') closeTakeover();
 });
 $('takeover').addEventListener('close', () => {  // also after Escape
   state.takeoverAskId = null;
@@ -499,6 +528,7 @@ async function showScreenshot(runId, signal) {
   if (signal.aborted) { URL.revokeObjectURL(url); return; }
   const old = $('screen').src;
   $('screen').src = url;
+  $('screen').hidden = false;  // hidden until the first picture, rather than a broken image
   if (old.startsWith('blob:')) URL.revokeObjectURL(old);
 }
 
@@ -508,6 +538,7 @@ function stopWatching() {
   $('browser').hidden = true;
   const old = $('screen').src || '';
   $('screen').removeAttribute('src');
+  $('screen').hidden = true;
   if (old.startsWith('blob:')) URL.revokeObjectURL(old);
   updateBrowserButton();
 }
@@ -546,13 +577,16 @@ $('composer').addEventListener('submit', (event) => {
 });
 
 async function send(text) {
+  const before = page;
   const threadId = state.threadId;
   const path = threadId === null ? '/api/threads' : `/api/threads/${threadId}/messages`;
   const created = await api(path, { method: 'POST', body: { text, timezone: TIMEZONE } });
   if ($('message').value.trim() === text) $('message').value = '';
-  if (threadId === null) {
+  if (page !== before) {
+    await loadThreads();  // the user went elsewhere: the chat is in the list
+  } else if (threadId === null) {
     location.hash = `#/t/${created.thread_id}`;  // opens the new chat
-  } else if (state.threadId === threadId) {
+  } else {
     await loadChat();
     await loadThreads();
   }
@@ -584,7 +618,7 @@ async function openFiles() {
     const tooLarge = file.size > data.max_download_bytes;
     const download = button('Download', 'secondary', () => downloadFile(file.path));
     download.disabled = tooLarge;
-    if (tooLarge) download.title = 'Exceeds the 20 MiB download limit';
+    if (tooLarge) download.title = 'Over the 20 MB download limit';
     const item = element('li');
     item.append(element('span', `${shownPath(file.path)} (${shownSize(file.size)})`), download);
     return item;
@@ -614,7 +648,7 @@ async function downloadFile(path) {
   }
   if (response.status === 401) { signedOut(); return; }
   if (!response.ok) {
-    $('files-status').textContent = response.status === 413 ? 'File exceeds the 20 MiB download limit.' :
+    $('files-status').textContent = response.status === 413 ? 'This file is over the 20 MB download limit.' :
       'File unavailable. Refresh and try again.';
     return;
   }
@@ -660,8 +694,9 @@ async function openSchedules() {
         await openSchedules();
       }),
       button('Delete', 'bad', async () => {
+        if (!confirm(`Delete "${s.name}"? Monty will stop running it.`)) return;
         await api(`/api/schedules/${s.id}`, { method: 'DELETE' });
-        await openSchedules();
+        await Promise.all([openSchedules(), loadThreads()]);  // its chat goes too if it never ran
       }),
     );
     const item = element('li');
@@ -692,7 +727,7 @@ async function showNotificationButton() {
   $('enable-notifications').hidden = !state.pushKey;
   const registration = state.pushKey && await navigator.serviceWorker.getRegistration('/sw.js');
   const subscription = registration && await registration.pushManager.getSubscription();
-  if (subscription && Notification.permission === 'granted') $('enable-notifications').textContent = 'Notifications are on';
+  if (subscription && Notification.permission === 'granted') $('notifications-label').textContent = 'Notifications are on';
 }
 
 async function enableNotifications() {
@@ -704,7 +739,7 @@ async function enableNotifications() {
     userVisibleOnly: true, applicationServerKey: base64urlBytes(state.pushKey),
   });
   await api('/api/push/subscriptions', { method: 'POST', body: subscription.toJSON() });
-  $('enable-notifications').textContent = 'Notifications are on';
+  $('notifications-label').textContent = 'Notifications are on';
 }
 
 async function stopNotifications() {
@@ -721,14 +756,6 @@ async function stopNotifications() {
 }
 
 $('enable-notifications').addEventListener('click', () => report(enableNotifications()));
-
-function notify(ask) {
-  // While the page is open but hidden; a closed page gets the push from the server instead.
-  if (document.visibilityState === 'visible' || !('Notification' in window)) return;
-  if (Notification.permission !== 'granted') return;
-  const what = { question: 'has a question', approval: 'needs your approval', handoff: 'needs you in its browser' };
-  new Notification('Monty', { body: `Monty ${what[ask.kind]}.`, tag: ask.id });
-}
 
 // --- routing ---
 

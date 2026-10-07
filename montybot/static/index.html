@@ -51,7 +51,7 @@
       <header class="bar">
         <button id="menu-button" class="icon" aria-label="Chats" aria-controls="drawer" aria-expanded="false">☰</button>
         <div class="header-title"><span class="workspace-label">Your workspace</span><h1 id="title">Monty</h1></div>
-        <button id="browser-button" class="secondary" aria-label="Browser" hidden><span aria-hidden="true">▣</span> Watch browser</button>
+        <button id="browser-button" class="secondary" hidden><span aria-hidden="true">▣</span> Watch browser</button>
       </header>
       <div id="notice" role="alert" hidden><span id="notice-text"></span><button id="close-notice" class="icon" aria-label="Dismiss">✕</button></div>
       <button id="drawer-backdrop" aria-label="Close navigation" hidden></button>
@@ -64,16 +64,16 @@
           <button id="open-files" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6Zm8 0v5h4"/></svg> Files</button>
           <button id="open-signins" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="4"/><path d="m11 12 8 8 3-3-3-3-2 2"/></svg> Saved browser data</button>
           <button id="open-schedules" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16m-12 4h3"/></svg> Schedules</button>
-          <button id="enable-notifications" class="link" hidden><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9Zm4 12h4"/></svg> Notify me when Monty needs me</button>
+          <button id="enable-notifications" class="link" hidden><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9Zm4 12h4"/></svg> <span id="notifications-label">Notify me when Monty needs me</span></button>
           <button id="signout" class="link">Sign out</button>
         </div>
         <p class="sidebar-note">A browser of its own.<br>You in control.</p>
       </nav>
       <div id="layout">
         <main id="chat" aria-label="Chat">
-          <div id="messages" aria-live="polite" aria-label="Conversation"></div>
+          <div id="messages" aria-label="Conversation"></div>
           <div id="status" class="status" role="status" hidden></div>
-          <div id="ask" class="ask" aria-label="Monty needs your input" hidden></div>
+          <div id="ask" class="ask" role="region" aria-label="Monty needs your input" hidden></div>
           <div class="composer-wrap">
             <form id="composer">
               <label for="message" class="sr-only">Message Monty</label>
@@ -87,9 +87,9 @@
         <aside id="browser" aria-label="Monty's browser" hidden>
           <div class="panel-bar">
             <span>Monty's browser, as it works</span>
-            <button id="close-browser" class="icon" aria-label="Close">✕</button>
+            <button id="close-browser" class="icon" aria-label="Close browser">✕</button>
           </div>
-          <img id="screen" alt="Monty's browser">
+          <img id="screen" alt="Monty's browser" hidden>
         </aside>
       </div>
       <dialog id="takeover" aria-label="Monty's browser, yours to drive">
@@ -99,7 +99,7 @@
         <div class="page-content">
           <button class="secondary back">Back to chat</button>
           <div class="page-heading"><span class="page-symbol" aria-hidden="true">↧</span><h2 id="files-title" tabindex="-1">Files</h2></div>
-          <p class="muted">Downloads from Monty's browser and files Monty made for you. Download up to 20 MiB per file.</p>
+          <p class="muted">Downloads from Monty's browser and files Monty made for you. Download up to 20 MB per file.</p>
           <p id="files-status" role="status"></p>
           <ul id="file-list" aria-label="Workspace files"></ul>
           <button id="refresh-files" class="secondary">Refresh</button>
