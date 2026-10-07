@@ -125,12 +125,18 @@ class BrowserHost:
         lease: JarLease,
         idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
         reap_every: float | None = None,
+        max_open_browsers: int | None = None,
     ) -> None:
         self._new_backend = new_backend
         self._jar = jar
         self._lease = lease
         self.idle_timeout = idle_timeout
         self._reap_every = reap_every if reap_every is not None else min(idle_timeout / 4, 60.0)
+        if max_open_browsers is not None and max_open_browsers < 1:
+            raise ValueError('max_open_browsers must be positive')
+        self._max_open_browsers = max_open_browsers
+        self._admission = asyncio.Lock()
+        self._launching = 0
         self._runs: dict[RunId, _Run] = {}
         self._closed: set[RunId] = set()
         self._reaper: asyncio.Task[None] | None = None
@@ -395,24 +401,51 @@ class BrowserHost:
     async def _open(self, run: _Run) -> BrowserBackend:
         if run.backend is not None:
             return run.backend
-        with timing('browser.state.load'):
-            state = await self._jar.load(user_id=run.user_id)
-        backend = self._new_backend()
+        if self._max_open_browsers is not None:
+            async with self._admission:
+                open_runs = [other for other in self._runs.values() if other.backend is not None and other is not run]
+                if len(open_runs) + self._launching >= self._max_open_browsers:
+                    # Reuse the idle reaper's save-and-drop path; never evict a hand-off or an active call.
+                    candidates = sorted(
+                        (other for other in open_runs if not other.handoff and not other.lock.locked()),
+                        key=lambda other: other.last_used,
+                    )
+                    for other in candidates:
+                        try:
+                            await asyncio.wait_for(other.lock.acquire(), 0.1)
+                        except TimeoutError:
+                            continue
+                        try:
+                            if other.backend is not None and other.handoff is None:
+                                await self._save_and_drop(other, 'the browser made room for another run')
+                                break
+                        finally:
+                            other.lock.release()
+                    else:
+                        raise ActionFailed('all browsers are in use; try again when another run finishes')
+                self._launching += 1  # Reserve without serialising slow page loads across runs.
         try:
-            with timing('browser.launch_restore'):
-                await backend.open(state)
-        except ActionFailed:
-            pass  # the saved page did not load; the browser is open anyway, and the next snapshot shows the error
-        except BaseException:
-            await _close_quietly(backend)
-            raise
-        run.backend = backend
-        run.url = state.url if state is not None else BLANK_URL
-        run.saved = True
-        if run.restart_reason is not None:
-            run.restarted = Restarted(reason=run.restart_reason, url=run.url)
-            run.restart_reason = None
-        return backend
+            with timing('browser.state.load'):
+                state = await self._jar.load(user_id=run.user_id)
+            backend = self._new_backend()
+            try:
+                with timing('browser.launch_restore'):
+                    await backend.open(state)
+            except ActionFailed:
+                pass  # the saved page did not load; the browser is open anyway, and the next snapshot shows the error
+            except BaseException:
+                await _close_quietly(backend)
+                raise
+            run.backend = backend
+            run.url = state.url if state is not None else BLANK_URL
+            run.saved = True
+            if run.restart_reason is not None:
+                run.restarted = Restarted(reason=run.restart_reason, url=run.url)
+                run.restart_reason = None
+            return backend
+        finally:
+            if self._max_open_browsers is not None:
+                self._launching -= 1
 
     @timed('browser.backend.call')
     async def _call(self, run: _Run, backend: BrowserBackend, use: Callable[[BrowserBackend], Awaitable[T]]) -> T:

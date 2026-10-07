@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     browser_backend: str = 'montybot.browser.fake:FakeBrowser'
     """`module:attribute` of a callable that makes a closed `BrowserBackend` for one run."""
     browser_idle_timeout_seconds: float = 10 * 60
+    browser_max_open: int | None = Field(default=None, gt=0)
+    """Limit simultaneously running browsers; idle browsers are saved and closed first. Unset on a desktop."""
     monty_url: str | None = None
     """Full Monty: monty-server's WebSocket URL, such as `ws://monty-server:8000`. Unset: Monty in local
     subprocesses."""

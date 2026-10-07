@@ -62,6 +62,7 @@ services:
       EXECUTOR_ID: vm-1
       MODEL: ${MODEL:-claude-code:claude-opus-5-5}
       BROWSER_BACKEND: ${BROWSER_BACKEND:-montybot.engines:chromium_server}
+      BROWSER_MAX_OPEN: ${BROWSER_MAX_OPEN:-2}
       CLAUDE_CODE_CREDENTIALS: file
       CLAUDE_CODE_AUTH_FILE: /data/claude-code/auth.json
       WORKSPACES_DIR: /data/workspaces
