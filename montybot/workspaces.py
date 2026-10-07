@@ -17,6 +17,10 @@ the user's directory through a symlink, raises `PermissionError`, and errors nam
 
 The `Workspace` API has no append and no modification time, so appends and `stat` use the checked path on our server
 directly; everything else goes through the workspace.
+
+The CPython tier (#6) runs code that can make symlinks and FIFOs in the user's directory. Calls here take the user's
+lock, which `run_python` holds while its jail runs, so nothing changes a path between the check and its use; links
+that lead out are refused, and only regular files are read or written.
 """
 
 from __future__ import annotations
@@ -41,11 +45,28 @@ DOWNLOADS = f'{VIRTUAL_ROOT}/downloads'
 """Where browser downloads are saved."""
 
 
+MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
+MAX_LIST_ENTRIES = 1000
+MAX_LIST_DEPTH = 16
+
+
+class FileTooLarge(ValueError):
+    """The consumer download exceeds the bounded in-memory response size."""
+
+
 class Workspaces:
     """One `Workspace` per user, each a directory under `root`, made on first use."""
 
     def __init__(self, root: Path) -> None:
         self.root = root.expanduser().absolute()
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def lock(self, user_id: str) -> asyncio.Lock:
+        """Held by each file call and by `run_python` for its whole run, so they never overlap for one user."""
+        return self._locks.setdefault(str(uuid.UUID(user_id)), asyncio.Lock())
+
+    def files(self, user_id: str) -> WorkspaceFiles:
+        return WorkspaceFiles(self.of(user_id), self.lock(user_id))
 
     def directory(self, user_id: str) -> Path:
         return self.root / str(uuid.UUID(user_id))  # a user id is a UUID, so it cannot name another directory
@@ -85,8 +106,9 @@ class WorkspaceFiles:
     Calls that are not about files (the clock, the environment) are left to Monty, as without a handler.
     """
 
-    def __init__(self, workspace: Workspace) -> None:
+    def __init__(self, workspace: Workspace, lock: asyncio.Lock | None = None) -> None:
         self.workspace = workspace
+        self.lock = lock or asyncio.Lock()
         self._calls: dict[str, Callable[..., Awaitable[Any]]] = {
             'Path.exists': self.exists,
             'Path.is_file': self.is_file,
@@ -121,7 +143,8 @@ class WorkspaceFiles:
         """Run one call, with errors that name the `/work` path and never the directory on our server."""
         shown = str(path_from_arg(args[0])) if args else VIRTUAL_ROOT
         try:
-            return await call(*args, **kwargs)
+            async with self.lock:
+                return await call(*args, **kwargs)
         except OSError as error:
             if error.filename == shown and error.errno is not None:
                 raise  # one of ours, already about the /work path
@@ -154,6 +177,108 @@ class WorkspaceFiles:
         if host == await self.workspace.working_dir():
             raise _error(errno.EACCES, f'Permission denied: {VIRTUAL_ROOT} itself cannot be changed', str(path))
         return host
+
+    # --- read-only consumer exports ---
+
+    @staticmethod
+    def _directory_fd(path: str, *, parent: int | None = None) -> int:
+        return os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+
+    async def list_results(self) -> tuple[list[dict[str, Any]], bool]:
+        """Bound traversal and output; never follow links, even inside /work."""
+        async with self.lock:
+            root = await self._host(VIRTUAL_ROOT)
+
+            def listing() -> tuple[list[dict[str, Any]], bool]:
+                found: list[dict[str, Any]] = []
+                visited = 0
+                truncated = False
+
+                def walk(fd: int, relative: str, depth: int) -> None:
+                    nonlocal visited, truncated
+                    with os.scandir(fd) as entries:
+                        for entry in entries:
+                            if visited >= MAX_LIST_ENTRIES:
+                                truncated = True
+                                return
+                            visited += 1
+                            path = relative + '/' + entry.name
+                            try:
+                                path.encode('utf-8')
+                            except UnicodeEncodeError:
+                                continue  # not representable as a JSON/attachment filename
+                            if len(path) > 1024:
+                                truncated = True
+                                continue
+                            try:
+                                info = entry.stat(follow_symlinks=False)
+                                if stat_module.S_ISREG(info.st_mode):
+                                    found.append({'path': path, 'size': info.st_size})
+                                elif stat_module.S_ISDIR(info.st_mode):
+                                    if depth >= MAX_LIST_DEPTH:
+                                        truncated = True
+                                        continue
+                                    child = self._directory_fd(entry.name, parent=fd)
+                                    try:
+                                        walk(child, path, depth + 1)
+                                    finally:
+                                        os.close(child)
+                            except OSError:
+                                continue  # removed, replaced, or inaccessible while listing
+
+                fd = self._directory_fd(root)
+                try:
+                    walk(fd, VIRTUAL_ROOT, 0)
+                finally:
+                    os.close(fd)
+                return sorted(found, key=lambda item: item['path']), truncated
+
+            return await asyncio.to_thread(listing)
+
+    async def read_result(self, path: str) -> bytes:
+        """Read bounded bytes from pinned descriptors, not a checked path reopened later.
+
+        The shared lock excludes CPython. O_NOFOLLOW on every component and fstat on the
+        final O_NONBLOCK descriptor also protect against replacement outside that lock.
+        """
+        try:
+            path.encode('utf-8')
+        except UnicodeEncodeError:
+            raise PermissionError('invalid workspace path') from None
+        parts = path.split('/')
+        if len(path) > 1024 or parts[:2] != ['', 'work'] or len(parts) < 3:
+            raise PermissionError('invalid workspace path')
+        if any(part in ('', '.', '..') or '\\' in part or '\x00' in part for part in parts[2:]):
+            raise PermissionError('invalid workspace path')
+        async with self.lock:
+            await self._host(path)  # existing boundary checks; never open the resolved path
+            root = await self._host(VIRTUAL_ROOT)
+
+            def read() -> bytes:
+                fd = self._directory_fd(root)
+                try:
+                    for part in parts[2:-1]:
+                        child = self._directory_fd(part, parent=fd)
+                        os.close(fd)
+                        fd = child
+                    file_fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                    try:
+                        info = os.fstat(file_fd)
+                        if not stat_module.S_ISREG(info.st_mode):
+                            raise PermissionError('not a regular file')
+                        if info.st_size > MAX_DOWNLOAD_BYTES:
+                            raise FileTooLarge
+                        with os.fdopen(file_fd, 'rb', closefd=False) as stream:
+                            data = stream.read(MAX_DOWNLOAD_BYTES + 1)
+                        if len(data) > MAX_DOWNLOAD_BYTES:
+                            raise FileTooLarge
+                        return data
+                    finally:
+                        os.close(file_fd)
+                finally:
+                    os.close(fd)
+
+            return await asyncio.to_thread(read)
 
     # --- the calls ---
 
@@ -191,12 +316,23 @@ class WorkspaceFiles:
     async def read_text(self, path: PurePosixPath | MontyFileHandle) -> str:
         return (await self.read_bytes(path)).decode()
 
-    async def _write(self, path: PurePosixPath | MontyFileHandle, data: bytes) -> None:
+    async def _writable(self, path: PurePosixPath | MontyFileHandle) -> str:
+        """The checked path of a file to write: its folder exists, and it is a regular file or nothing yet."""
         host = await self._not_root(path_from_arg(path))
-        parent = posixpath.dirname(host)
-        if not await self.workspace.exists(parent):  # pathlib does not make missing folders; the workspace would
+        if not await self.workspace.exists(posixpath.dirname(host)):  # pathlib does not make missing folders
             raise _error(errno.ENOENT, 'No such file or directory', self._virtual(path))
-        await self.workspace.write_bytes(host, data)
+        try:
+            mode = (await asyncio.to_thread(os.lstat, host)).st_mode
+        except FileNotFoundError:
+            return host
+        if stat_module.S_ISDIR(mode):
+            raise _error(errno.EISDIR, 'Is a directory', self._virtual(path))
+        if not stat_module.S_ISREG(mode):  # such as a FIFO, which would block the write
+            raise _error(errno.EINVAL, 'not a regular file', self._virtual(path))
+        return host
+
+    async def _write(self, path: PurePosixPath | MontyFileHandle, data: bytes) -> None:
+        await self.workspace.write_bytes(await self._writable(path), data)
 
     async def write_bytes(self, path: PurePosixPath | MontyFileHandle, data: bytes) -> int:
         await self._write(path, data)
@@ -208,13 +344,11 @@ class WorkspaceFiles:
 
     async def _append(self, path: PurePosixPath | MontyFileHandle, data: bytes) -> None:
         """Monty sends every `write` after the first as an append, so this adds to the file rather than rewriting it."""
-        host = await self._not_root(path_from_arg(path))
-        if not await self.workspace.exists(posixpath.dirname(host)):
-            raise _error(errno.ENOENT, 'No such file or directory', self._virtual(path))
+        host = await self._writable(path)
 
         def append() -> None:
-            # `host` has its links resolved; O_NOFOLLOW refuses one planted since.
-            fd = os.open(host, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+            fd = os.open(host, flags, 0o600)
             try:
                 os.write(fd, data)
             finally:
@@ -291,12 +425,15 @@ def download_name(name: str) -> str:
     return name or 'download'
 
 
-async def save_download(workspace: Workspace, name: str, data: bytes) -> str:
+async def save_download(files: WorkspaceFiles, name: str, data: bytes) -> str:
     """Save a browser download in the user's files; returns the path code sees it at. A file of the same name and
     content is kept, so a download repeated after a restart leaves one copy; another with the same name gets ` (2)`,
     ` (3)`... as in a browser."""
-    files = WorkspaceFiles(workspace)
-    name = download_name(name)
+    async with files.lock:
+        return await _save_download(files, download_name(name), data)
+
+
+async def _save_download(files: WorkspaceFiles, name: str, data: bytes) -> str:
     await files.mkdir(PurePosixPath(DOWNLOADS), parents=True, exist_ok=True)
     stem, dot, extension = name.rpartition('.') if '.' in name else (name, '', '')
     for number in range(1, 1000):

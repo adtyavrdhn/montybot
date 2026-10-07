@@ -6,12 +6,52 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+env:
+  UV_PYTHON: '3.14'
+
 jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff check montybot tests
+      - run: uv run ruff format --check montybot tests
+      - run: uv run pyright
+
   test:
+    name: test (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Keep the Chromium modules together on one worker: headed conformance and server launch tests
+          # start authenticated Xvfb sessions. Overlapping sessions failed X authentication under -n 4 (#41).
+          - name: unit
+            workers: 4
+            args: --ignore=tests/e2e --ignore=tests/browser/test_chromium.py --ignore=tests/browser/test_chromium_linux.py
+          - name: browser-serial
+            workers: 0
+            args: tests/browser/test_chromium.py tests/browser/test_chromium_linux.py
+          - name: e2e-fake
+            workers: 4
+            args: tests/e2e
+          - name: e2e-chromium
+            workers: 4
+            args: tests/e2e --browser=chromium
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
@@ -27,26 +67,25 @@ jobs:
       MONTYBOT_TEST_POSTGRES: postgresql://postgres:postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v6
         with:
-          python-version: '3.12'
           enable-cache: true
       # Ubuntu 24.04 only lets AppArmor-profiled programs make user namespaces, which Chromium's sandbox and bwrap
-      # need; the VM turns this off the same way (deploy/bootstrap.sh). Xvfb is for the virtual-screen tests.
-      - name: Allow user namespaces, install Xvfb and bubblewrap
+      # need; on this throwaway runner the restriction is simply off (the server allows only bwrap, see
+      # deploy/README.md). Xvfb, bwrap and socat are for the real server launch tests in test_chromium_linux.py.
+      - name: Allow user namespaces, install browser and CPython dependencies
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           sudo apt-get update -q
-          sudo apt-get install -y -q xvfb bubblewrap
-      - run: uv sync --frozen
+          sudo apt-get install -y -q xvfb bubblewrap socat python3-pandas python3-pypdf
+      - run: uv sync --locked
       - run: uv run playwright install --with-deps chromium
-      - run: uv run ruff check montybot tests
-      - run: uv run ruff format --check montybot tests
-      - run: uv run pyright
-      - run: uv run pytest -q
+      - run: uv run pytest -q -p no:cacheprovider -n ${{ matrix.workers }} --durations=10 ${{ matrix.args }}
 
   deploy:
-    needs: test
+    needs: [lint, test]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -55,6 +94,8 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: SSH key and host
         env:
           VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
@@ -65,4 +106,7 @@ jobs:
           chmod 600 ~/.ssh/vm
           printf '%s\n' "$VM_KNOWN_HOSTS" > ~/.ssh/known_hosts
       - name: Deploy
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          LOGFIRE_TOKEN: ${{ secrets.LOGFIRE_TOKEN }}
         run: SSH_KEY="$HOME/.ssh/vm" sh deploy/deploy.sh "${{ vars.VM_USER }}@${{ vars.VM_HOST }}"

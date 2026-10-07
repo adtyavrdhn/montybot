@@ -16,7 +16,7 @@ it hands the browser to the user, who finishes that one step. Then the run conti
 
 Grok Bot, dots and Muse give every user (or every bot) a cloud computer that runs all the time. monty-bot gives
 nobody a computer. Between runs, a user costs a few rows in Postgres. During a run, a user costs one Monty session
-and one headless Chromium, and both exist only while the run needs them.
+and one headed Chromium on a private Xvfb display, and both exist only while the run needs them.
 
 ## How this relates to the 2026-10-06 note
 
@@ -220,7 +220,7 @@ Considered:
 
 ## Open questions
 
-- **Bot detection.** Retail sites challenge headless Chromium from datacenter addresses. Test walmart.com in the
+- **Bot detection.** Retail sites challenge headed Chromium on a private Xvfb display from datacenter addresses. Test walmart.com in the
   first spike. If it fails, consider a managed browser service (Browserbase, Steel) or a different egress path.
 - **Saving state back.** Can harness `PlaywrightBrowser` hand us the context's `storageState` at the end of a run?
   Not checked yet.

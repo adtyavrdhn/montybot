@@ -8,6 +8,7 @@ from collections.abc import Iterator
 import psycopg
 import pytest
 from conftest import App, Client, Human
+from helpers import eventually
 from sites.shop import Shop
 
 
@@ -39,6 +40,12 @@ def test_a_sign_in_is_saved_and_reused(app: App, client: Client, shop: Shop, dat
     assert shop.sign_ins == 1
     assert [o.user for o in shop.orders] == ['alice', 'alice']
 
+    # A visible reply means the browser's lease is already free, not pending workflow cleanup.
+    run_id = client.thread(second)['run']['id']
+    with psycopg.connect(database_url) as connection:
+        lease = connection.execute('SELECT run_id FROM montybot.jar_leases WHERE run_id = %s', (run_id,)).fetchone()
+    assert lease is None
+
     # Saved encrypted: the session cookie's value is nowhere in the row.
     (sid,) = shop.sessions
     with psycopg.connect(database_url) as connection:
@@ -46,7 +53,17 @@ def test_a_sign_in_is_saved_and_reused(app: App, client: Client, shop: Shop, dat
     assert row is not None and sid.encode() not in bytes(row[0]) and b'127.0.0.1' not in bytes(row[0])
 
     assert client.http.get('/api/sign-ins').json() == [{'site': '127.0.0.1'}]
-    assert client.http.delete('/api/sign-ins/127.0.0.1').status_code == 200
+
+    # run.finish publishes the reply before run.close saves the browser and releases its lease.
+    # A 409 during that cleanup is expected; wait for forgetting to succeed, not an arbitrary delay.
+    def forgotten() -> bool | None:
+        response = client.http.delete('/api/sign-ins/127.0.0.1')
+        if response.status_code == 409:
+            return None
+        assert response.status_code == 200, response.text
+        return True
+
+    eventually(forgotten, what='the completed run to release its sign-in lease')
     assert client.http.get('/api/sign-ins').json() == []
 
     # Forgotten: the next order needs the user to sign in again.

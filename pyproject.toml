@@ -12,7 +12,8 @@ dependencies = [
     "playwright>=1.63",
     "psycopg[binary,pool]>=3.3",
     "pydantic>=2.11",
-    "pydantic-ai-slim[anthropic,dbos,openai]>=2.54.0",
+    "pydantic-ai-harness>=0.54.0",
+    "pydantic-ai-slim[anthropic,dbos,openai,typesafe]>=2.54.0",
     "pydantic-monty>=1.1.0",
     "pydantic-settings>=2.15",
     "pywebpush>=2.0",
@@ -32,6 +33,7 @@ dev = [
     "playwright>=1.63",
     "pyright>=1.1.400",
     "pytest>=8.3",
+    "pytest-xdist>=3.6",
     "ruff>=0.12",
 ]
 
@@ -54,6 +56,7 @@ markers = [
     "u6: user path U6, a bot check the user solves",
     "live: real sites and a real model, nightly only (--live)",
     "scripted: only meaningful with the scripted model (skipped when MONTYBOT_TEST_MODEL is set)",
+    "deploy: the deployed stack in Docker (deploy/compose.yaml), only with MONTYBOT_TEST_DEPLOY=1",
 ]
 
 [tool.ruff]

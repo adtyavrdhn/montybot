@@ -148,3 +148,96 @@ async def test_output_is_capped(resources: Any) -> None:
 )
 def test_irreversible_clicks_are_spotted(target: str, page: str, refused: bool) -> None:
     assert (looks_irreversible(target, page) is not None) == refused
+
+
+async def test_one_snippet_uses_returned_pages_without_extra_reads(
+    resources: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A known read/search/compute sequence needs one snippet, not a tool roundtrip per action.
+
+    Fake only the browser session: execute real Monty and the real host-function guards.
+    """
+    from montybot import code as code_module
+    from montybot.browser.contract import Navigate, Press, Ref, Type
+
+    calls: list[str] = []
+
+    class SearchSession:
+        def __init__(self, *args: Any) -> None:
+            self.resources = resources
+            self.url = 'https://93.184.215.14/'
+            self.searched = False
+
+        async def activity(self, text: str) -> None:
+            pass
+
+        async def act(self, action: Any) -> None:
+            if isinstance(action, Navigate):
+                calls.append('goto')
+            elif isinstance(action, Type):
+                assert isinstance(action.target, Ref)
+                assert action.target.ref == '1' and action.text == 'milk'
+                calls.append('type')
+            elif isinstance(action, Press):
+                assert action.key == 'Enter'
+                calls.append('enter')
+                self.searched = True
+            else:
+                pytest.fail('irreversible action reached the browser')
+
+        async def read(self) -> str:
+            calls.append('snapshot')
+            return '[2] button "Buy now"\nMilk: $3' if self.searched else '[1] searchbox "Search"'
+
+    monkeypatch.setattr(code_module, 'Session', SearchSession)
+    out, state = await run(
+        resources,
+        None,
+        """page = await goto("https://93.184.215.14/")
+if '[1] searchbox "Search"' in page:
+    result = await type_text("1", "milk", press_enter=True)
+    price = int(result.split("$")[1])
+    print("https://93.184.215.14/", price * 2)
+""",
+    )
+    assert out == 'https://93.184.215.14/ 6'
+    assert state is not None
+    assert calls == ['goto', 'snapshot', 'type', 'enter', 'snapshot']
+
+    # Approval guard still runs inside a batched snippet, before any click reaches the browser.
+    calls.clear()
+    out, _ = await run(resources, state, 'await type_text("1", "milk", press_enter=True)\nawait click("2")')
+    assert 'Use the `commit` tool' in out
+    assert calls == ['snapshot', 'type', 'enter', 'snapshot']
+
+
+@pytest.mark.parametrize(
+    'snippet',
+    [
+        'await click("#primary")',
+        'await click("3")',
+        'await press_key("Enter")',
+        'await press_key("Control+Enter")',
+        'await press_key("Space")',
+        'await type_text("1", "value", press_enter=True)',
+    ],
+)
+async def test_ordinary_input_cannot_submit_checkout(
+    resources: Any, snippet: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from montybot import code as code_module
+
+    class Checkout:
+        def __init__(self, *args: Any) -> None:
+            self.resources = resources
+            self.url = 'https://93.184.215.14/'
+
+        async def read(self) -> str:
+            return '[1] textbox "Quantity"\n[3] button "Place order"'
+
+        async def act(self, action: Any) -> None:
+            pytest.fail('Unapproved input reached the checkout')
+
+    monkeypatch.setattr(code_module, 'Session', Checkout)
+    out, _ = await run(resources, None, snippet)
+    assert 'commit' in out

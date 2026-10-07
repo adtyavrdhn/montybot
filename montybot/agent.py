@@ -8,12 +8,17 @@ from pydantic_ai import Agent, FunctionToolset, RunContext
 from pydantic_ai.capabilities import HandleDeferredToolCalls
 from pydantic_ai.durable_exec.dbos import DBOSDurability
 from pydantic_ai.models import Model
+from pydantic_ai.models.anthropic import AnthropicModelSettings
+from pydantic_ai.models.function import FunctionModel
 
-from montybot import approvals
+from montybot import approvals, streaming
 from montybot.browsing import browser_tools
 from montybot.code import INSTRUCTIONS as CODE_INSTRUCTIONS
 from montybot.code import code_tools
+from montybot.cpython import INSTRUCTIONS as CPYTHON_INSTRUCTIONS
+from montybot.cpython import cpython_tools
 from montybot.deps import RunDeps
+from montybot.jev import jev_tools
 from montybot.memory import memory_tools, recall
 from montybot.schedule_tools import INSTRUCTIONS as SCHEDULE_INSTRUCTIONS
 from montybot.schedule_tools import schedule_tools, scheduled_run
@@ -42,16 +47,57 @@ async def ask_user(ctx: RunContext[RunDeps], question: str) -> str:
     return str(reply.get('text', ''))
 
 
-def build_agent(model: Model | str) -> Agent[RunDeps, str]:
+CACHE = AnthropicModelSettings(
+    anthropic_cache=True,
+    anthropic_cache_instructions=True,
+    anthropic_cache_tool_definitions=True,
+    anthropic_cache_messages=True,
+)
+"""Anthropic prompt caching on everything that repeats between a run's model calls: the instructions, the tool
+definitions and the conversation so far (page snapshots included). Other providers ignore these keys."""
+
+
+def build_agent(model: Model | str, *, stream: bool = False, jev: bool = False) -> Agent[RunDeps, str]:
     """Tools run one at a time: they number their DBOS steps as they go, and an ask must be the run's only one."""
     return Agent[RunDeps, str](
         model,
-        name='montybot',
+        name='montybot_stream' if stream else 'montybot',
         deps_type=RunDeps,
-        instructions=[INSTRUCTIONS, CODE_INSTRUCTIONS, SCHEDULE_INSTRUCTIONS, recall, scheduled_run],
-        toolsets=[code_tools, browser_tools, user_tools, memory_tools, schedule_tools],
+        instructions=[
+            INSTRUCTIONS,
+            (
+                'Optional Jev tools advise on user direction and ambiguous navigation. Use classify_intent when direction '
+                'is unclear, suggest_navigation when choosing a link is unclear. They do not click or grant approval.'
+                if jev
+                else ''
+            ),
+            CODE_INSTRUCTIONS,
+            CPYTHON_INSTRUCTIONS,
+            SCHEDULE_INSTRUCTIONS,
+            recall,
+            scheduled_run,
+        ],
+        toolsets=[
+            code_tools,
+            cpython_tools,
+            browser_tools,
+            user_tools,
+            memory_tools,
+            schedule_tools,
+            *([jev_tools] if jev else []),
+        ],
         capabilities=[
             HandleDeferredToolCalls(handler=approvals.handle_approvals),
-            DBOSDurability(parallel_execution_mode='sequential'),
+            DBOSDurability(
+                parallel_execution_mode='sequential',
+                # Function-only scripted models deliberately retain agent.run's
+                # nonstream request path; they have no request_stream implementation.
+                event_stream_handler=(
+                    streaming.handler
+                    if stream and not (isinstance(model, FunctionModel) and model.stream_function is None)
+                    else None
+                ),
+            ),
         ],
+        model_settings=CACHE,
     )

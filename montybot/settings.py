@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     secure_cookies: bool = False
     """Mark the session cookie `Secure`; on behind TLS."""
 
+    typesafe_api_key: SecretStr | None = None
+    jev_enabled: bool = False
+    jev_model: str = 'jev-latest'
+    """Use a versioned Jev model after calibrating the threshold; the alias is for initial evaluation only."""
+    jev_threshold: float = Field(default=0.8, ge=0, le=1)
+    jev_timeout_seconds: float = Field(default=3, gt=0, le=30)
+
     model: str = 'claude-code:claude-opus-5-5'
     """A Pydantic AI model name; `claude-code:NAME` for a Claude Code subscription model (sign in with
     `montybot claude-code-login`); or `script:module:attribute` for a `Model` object, which is how tests script the
@@ -45,6 +52,13 @@ class Settings(BaseSettings):
     """The longest one `run_code` call may compute, not counting time waiting on the browser."""
     workspaces_dir: Path = Path('data/workspaces')
     """Each user's files, one directory per user, which code sees at `/work` and browser downloads go to."""
+    cpython: str = '/usr/bin/python3'
+    """The CPython `run_python` runs in its jail (#6), with pandas and pypdf installed. Outside `/usr`, `/bin` and
+    `/lib` the jail cannot see it."""
+    cpython_timeout_seconds: float = 120
+    cpython_cpu_seconds: int = 60
+    cpython_memory_mb: int = 2048
+    """Address space for one `run_python` call. numpy and pandas reserve far more than they use, so not too low."""
     allow_private_networks: bool = False
     """Let the agent open loopback and private addresses. Only for local fixture sites in tests."""
 

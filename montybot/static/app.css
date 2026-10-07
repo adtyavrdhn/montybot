@@ -96,6 +96,7 @@ h1, h2 { letter-spacing: -.045em; font-weight: 600; line-height: 1.15; }
 .msg { max-width: 88%; padding: 14px 18px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .96rem; line-height: 1.65; flex-shrink: 0; }
 .msg.user { align-self: flex-end; background: #efe3f3; border-bottom-right-radius: 4px; }
 .msg.assistant { align-self: flex-start; padding-left: 0; max-width: 100%; }
+.msg.assistant > small { display: block; color: var(--muted); font-size: .75rem; margin-bottom: 8px; }
 .msg.assistant::before { content: 'Monty'; display: block; font-size: .75rem; color: var(--accent); font-weight: 700; margin-bottom: 8px; }
 .empty { margin: auto; width: 100%; max-width: 640px; padding: 24px 0; flex-shrink: 0; }
 .empty .monty-mark { font-size: 60px; margin-bottom: 24px; }
@@ -137,7 +138,7 @@ h1, h2 { letter-spacing: -.045em; font-weight: 600; line-height: 1.15; }
 .page ul { list-style: none; padding: 0; margin: 32px 0; border-top: 1px solid var(--line); }
 .page li { display: flex; justify-content: space-between; align-items: center; padding: 22px 0; border-bottom: 1px solid var(--line); gap: 16px; overflow-wrap: anywhere; }
 .page li > span:first-child { min-width: 0; }
-.page li .list-actions { display: flex; flex-shrink: 0; gap: 8px; }
+.page li .list-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .page li button { font-size: .85rem; }
 .list-detail { display: block; margin-top: 4px; color: var(--muted); font-size: .85rem; }
 .page-note { padding: 20px 24px; background: var(--lavender); border-radius: 8px; font-size: .9rem; color: var(--muted); }
@@ -191,9 +192,13 @@ h1, h2 { letter-spacing: -.045em; font-weight: 600; line-height: 1.15; }
   .ask { margin: 10px 14px; padding: 16px; }
   .page h2 { font-size: 2rem; }
   .page li { flex-wrap: wrap; }
-  .page li .list-actions { width: 100%; }
+  .page li .list-actions { width: 100%; justify-content: flex-start; }
   #browser-button { font-size: .75rem; padding-inline: 10px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Workspace paths may be long, especially on a phone. */
+#file-list span { min-width: 0; overflow-wrap: anywhere; }
+#file-list button { flex-shrink: 0; }

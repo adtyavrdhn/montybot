@@ -52,7 +52,23 @@ def call(tool: str, **args: object) -> ModelResponse:
     return ModelResponse(parts=[ToolCallPart(tool_name=tool, args=args)])
 
 
+FIXTURE_CLICK = """
+async def fixture_click(selector):
+    page = await read_page()
+    label = selector.replace('#add-', 'Add ') if selector.startswith('#add-') else {
+        '#search': 'Search', '#next': 'Next page', '#place-order': 'Place order'
+    }[selector]
+    for line in page.splitlines():
+        if ('button ' in line or 'link ' in line) and label in line:
+            ref = line.split(']')[0].split('[')[1]
+            return await click(ref)
+    raise RuntimeError('Fixture control is not in the page')
+"""
+
+
 def run(code: str) -> ModelResponse:
+    if 'fixture_click(' in code:
+        code = FIXTURE_CLICK + code
     return call('run_code', code=code)
 
 
@@ -85,13 +101,13 @@ def order_eggs(turn: Turn) -> ModelResponse:
         return say(f'My code failed: {turn.last}')
     if not turn.returns:
         # `shop` is used again after the hand-off: Monty keeps the session's variables across the pause.
-        return run(f"shop = {turn.url!r}\nawait goto(shop + '/')\nprint(await click('#add-eggs'))")
+        return run(f"shop = {turn.url!r}\nawait goto(shop + '/')\nprint(await fixture_click('#add-eggs'))")
     if 'Title: Sign in' in turn.last:
         if turn.called('hand_off'):
             return say('You are still not signed in, so I stopped.')
         return call('hand_off', reason='Please sign in to the shop, then hand the browser back.')
     if 'In cart: eggs' not in turn.last and not turn.called('commit'):
-        return run("await goto(shop + '/')\nprint(await click('#add-eggs'))")
+        return run("await goto(shop + '/')\nprint(await fixture_click('#add-eggs'))")
     if not turn.called('commit'):
         return call('commit', target='#place-order', description='Place the order for eggs ($3.20)')
     result = turn.result_of('commit')
@@ -105,13 +121,13 @@ def order_eggs(turn: Turn) -> ModelResponse:
 CHEAPEST_FLIGHTS = """
 import re
 page = await goto(site + '/')
-page = await click('#search')
+page = await fixture_click('#search')
 rows = []
 while True:
     rows += re.findall(r'([A-Z0-9]{2} \\d{3,4})\\W+(\\d\\d:\\d\\d)\\W+€\\s?(\\d+)', page)
     if 'Next page' not in page:
         break
-    page = await click('#next')
+    page = await fixture_click('#next')
 best = sorted(rows, key=lambda row: int(row[2]))[:3]
 for flight, departs, price in best:
     print(f'| {flight} | {departs} | €{price} |')
@@ -164,6 +180,33 @@ def total_invoices(turn: Turn) -> ModelResponse:
     return say(f'Your last {found.group(1)} invoices come to €{found.group(2)}.')
 
 
+# U5 with the CPython tier (#6): Monty downloads and totals, pandas totals the same files in CPython and reads what
+# Monty wrote, and Monty reads what pandas wrote.
+PANDAS_TOTAL = """
+import pandas as pd
+from pathlib import Path
+frames = [pd.read_csv(name) for name in NAMES]
+total = sum((frame.quantity * frame.unit_price).sum() for frame in frames)
+Path('pandas-total.txt').write_text(f'{total:.2f}')
+print(f'pandas: {total:.2f}, Monty: {Path("monty-total.txt").read_text()}')
+"""
+
+
+def total_invoices_with_pandas(turn: Turn) -> ModelResponse:
+    if not turn.returns:
+        save = "\nPath('/work/monty-total.txt').write_text(f'{total:.2f}')\nprint(saved)"
+        return run(f'site = {turn.url!r}' + DOWNLOAD_INVOICES + save)
+    if not turn.called('run_python'):
+        names = [name.removeprefix('/work/') for name in re.findall(r"'(/work/[^']+)'", turn.last)]
+        return call('run_python', code=f'NAMES = {names!r}' + PANDAS_TOTAL)
+    if turn.called('run_code') < 2:
+        return run("from pathlib import Path\nprint('read back:', Path('/work/pandas-total.txt').read_text())")
+    found = re.search(r'pandas: (\d+\.\d\d), Monty: (\d+\.\d\d)', turn.result_of('run_python'))
+    if found is None:
+        return say(f'I could not total them. {turn.result_of("run_python")}')
+    return say(f'Your last three invoices come to €{found.group(1)} (Monty got €{found.group(2)}; {turn.last}).')
+
+
 def show_file(turn: Turn) -> ModelResponse:
     """Lists the user's files, then reads the path at the end of the message, wherever it points."""
     if not turn.returns:
@@ -182,11 +225,13 @@ def fail(turn: Turn) -> ModelResponse:
 def order_from_code(turn: Turn) -> ModelResponse:
     """Tries to place the order from code, which skips the approval; the browser functions refuse."""
     if not turn.returns:
-        return run(f"shop = {turn.url!r}\nawait goto(shop + '/')\nprint(await click('#add-eggs'))")
+        return run(f"shop = {turn.url!r}\nawait goto(shop + '/')\nprint(await fixture_click('#add-eggs'))")
     if 'Title: Sign in' in turn.last and not turn.called('hand_off'):
         return call('hand_off', reason='Please sign in to the shop, then hand the browser back.')
     if turn.called('run_code') < 2:
-        return run("await goto(shop + '/')\nawait click('#add-eggs')\nprint(await click('#place-order'))")
+        return run(
+            "await goto(shop + '/')\nawait fixture_click('#add-eggs')\nprint(await fixture_click('#place-order'))"
+        )
     return say(turn.last)
 
 
@@ -208,14 +253,14 @@ def schedule(**args: object) -> Script:
 def fill_cart(turn: Turn) -> ModelResponse:
     """A scheduled run: put eggs and milk in the cart, signing in through a hand-off only if the shop asks."""
     if not turn.returns:
-        return run(f"shop = {turn.url!r}\nawait goto(shop + '/')\nprint(await click('#add-eggs'))")
+        return run(f"shop = {turn.url!r}\nawait goto(shop + '/')\nprint(await fixture_click('#add-eggs'))")
     if 'Title: Sign in' in turn.last:
         if turn.called('hand_off'):
             return say('You are still not signed in, so I stopped.')
         return call('hand_off', reason='Please sign in to the shop, then hand the browser back.')
     if 'In cart: eggs, milk' not in turn.last and turn.called('run_code') < 3:
         return run(
-            "for item in ('eggs', 'milk'):\n    await goto(shop + '/')\n    page = await click('#add-' + item)\nprint(page)"
+            "for item in ('eggs', 'milk'):\n    await goto(shop + '/')\n    page = await fixture_click('#add-' + item)\nprint(page)"
         )
     return say(line_with(turn.last, 'In cart:') or f'I could not fill the cart. {turn.last}')
 
@@ -291,6 +336,7 @@ SCRIPTS: dict[str, Script] = {
     'Find the three cheapest flights to Lisbon next Friday': cheapest_flights,
     'What is on offer today at': todays_offer,
     'Download my last three invoices from': total_invoices,
+    'Total my last three invoices with pandas from': total_invoices_with_pandas,
     'Show me my files and the file': show_file,
 }
 

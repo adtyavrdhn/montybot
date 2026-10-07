@@ -22,6 +22,9 @@ class MockAPI:
     run: dict[str, object] | None = None
     sites: list[dict[str, str]] = field(default_factory=list)
     schedules: list[dict[str, object]] = field(default_factory=list)
+    files: list[dict[str, object]] = field(default_factory=list)
+    files_truncated: bool = False
+    download_status: int = 200
     calls: list[tuple[str, str, object]] = field(default_factory=list)
 
     def handle(self, route: Route) -> None:
@@ -57,6 +60,16 @@ class MockAPI:
             status = 201
         elif path == f'/api/threads/{THREAD}':
             result = {'title': 'Compare flights to Lisbon', 'messages': self.messages, 'run': self.run}
+        elif path == '/api/files':
+            result = {'files': self.files, 'truncated': self.files_truncated, 'max_download_bytes': 20 * 1024 * 1024}
+        elif path == '/api/files/download':
+            route.fulfill(
+                status=self.download_status,
+                body='local report',
+                content_type='text/plain',
+                headers={'Content-Disposition': "attachment; filename*=UTF-8''report%20ready.txt"},
+            )
+            return
         elif path == '/api/sign-ins':
             result = self.sites
         elif path.startswith('/api/sign-ins/') and method == 'DELETE':
@@ -98,7 +111,29 @@ def frontend() -> Iterator[tuple[Page, MockAPI]]:
         browser = playwright.chromium.launch()
         page = browser.new_page(viewport={'width': 1440, 'height': 1000}, reduced_motion='reduce')
         mock = MockAPI()
+        # Every request stays local, including accidental external assets.
+        page.route('**/*', lambda route: route.abort())
         page.route('http://monty.test/**', mock.handle)
+        # A controllable SSE transport. Delivering callbacks after close deliberately
+        # models an already queued event, so tests exercise the view/run guards.
+        page.add_init_script("""
+            window.eventSources = [];
+            window.EventSource = class {
+                constructor(url) {
+                    this.url = url;
+                    this.closed = false;
+                    this.listeners = {};
+                    window.eventSources.push(this);
+                }
+                addEventListener(type, callback) { this.listeners[type] = callback; }
+                close() { this.closed = true; }
+                emit(type, data) {
+                    if (type === 'error') this.onerror?.();
+                    else if (type === 'open') this.onopen?.();
+                    else this.listeners[type]?.({data: JSON.stringify(data)});
+                }
+            };
+        """)
         yield page, mock
         browser.close()
 
@@ -172,12 +207,20 @@ def test_responsive_navigation_and_prompts(frontend: tuple[Page, MockAPI], width
 def test_saved_signins_and_schedules(frontend: tuple[Page, MockAPI]) -> None:
     page, mock = frontend
     mock.sites = [{'site': 'shop.example.test'}]
-    mock.schedules = [{'id': 'task', 'name': 'Check shopping prices', 'when': 'Every Tuesday at 9', 'paused': False}]
+    mock.schedules = [
+        {
+            'id': 'task',
+            'thread_id': THREAD,
+            'name': 'Check shopping prices',
+            'when': 'Every Tuesday at 9',
+            'paused': False,
+        }
+    ]
     workspace(page, mock)
     page.click('#open-signins')
     expect(page.locator('#signin-list')).to_contain_text('shop.example.test')
     page.get_by_role('button', name='Forget').click()
-    expect(page.locator('#signin-list')).to_contain_text('No saved sign-ins yet')
+    expect(page.locator('#signin-list')).to_contain_text('No saved browser data yet')
     page.click('#open-schedules')
     page.get_by_role('button', name='Pause', exact=True).click()
     expect(page.locator('#schedule-list')).to_contain_text('(paused)')
@@ -310,3 +353,209 @@ def test_notification_opt_in_and_signout(frontend: tuple[Page, MockAPI]) -> None
     page.click('#signout')
     expect(page.locator('#signin-form')).to_be_visible()
     assert ('DELETE', '/api/push/subscriptions', {'endpoint': 'https://push.example.test/local'}) in mock.calls
+
+
+def emit(page: Page, kind: str, data: dict[str, object] | None = None, *, source: int = 0) -> None:
+    page.evaluate(
+        '([source, kind, data]) => window.eventSources[source].emit(kind, data)',
+        [source, kind, data],
+    )
+
+
+def streaming_chat(page: Page, mock: MockAPI) -> None:
+    mock.signed_in = True
+    mock.messages = [{'role': 'user', 'text': 'Compare flights'}]
+    mock.run = {'id': 'run', 'status': 'running', 'activity': [], 'ask': None}
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    expect(page.locator('#send')).to_be_disabled()
+    page.wait_for_function('window.eventSources.length === 1')
+    assert page.evaluate('window.eventSources[0].url') == '/api/runs/run/events'
+
+
+@pytest.mark.parametrize('width', [1440, 390, 320])
+def test_files_navigation_and_download(frontend: tuple[Page, MockAPI], width: int) -> None:
+    page, mock = frontend
+    page.set_viewport_size({'width': width, 'height': 844})
+    mock.files = [
+        {'path': 'downloads/report <ready>.txt', 'size': 12},
+        {'path': 'large.zip', 'size': 20 * 1024 * 1024 + 1},
+    ]
+    workspace(page, mock)
+    if width < 900:
+        page.click('#menu-button')
+    page.click('#open-files')
+    expect(page.locator('#files')).to_be_visible()
+    expect(page.locator('#layout')).not_to_be_visible()
+    expect(page.locator('#open-files')).to_have_attribute('aria-current', 'page')
+    expect(page.locator('#file-list li')).to_have_count(2)
+    expect(page.locator('#file-list li').first).to_contain_text('downloads/report <ready>.txt')
+    expect(page.locator('#file-list ready')).to_have_count(0)
+    buttons = page.locator('#file-list').get_by_role('button', name='Download', exact=True)
+    expect(buttons.nth(1)).to_be_disabled()
+    with page.expect_download() as downloaded:
+        buttons.first.click()
+    assert downloaded.value.suggested_filename == 'report ready.txt'
+    assert ('POST', '/api/files/download', {'path': 'downloads/report <ready>.txt'}) in mock.calls
+    expect(buttons.first).to_be_enabled()
+    no_overflow(page)
+    mock.files = []
+    page.click('#refresh-files')
+    expect(page.locator('#files-status')).to_contain_text('No files yet')
+    expect(page.locator('#file-list li')).to_have_count(0)
+    mock.files_truncated = True
+    page.click('#refresh-files')
+    expect(page.locator('#files-status')).to_contain_text('partial list')
+    page.locator('#files .back').click()
+    expect(page.locator('#composer')).to_be_visible()
+    expect(page.locator('#files')).not_to_be_visible()
+    expect(page.locator('#send')).to_be_enabled()
+
+
+@pytest.mark.parametrize(
+    ('status', 'message'),
+    [(404, 'File unavailable'), (413, '20 MiB download limit')],
+)
+def test_download_errors_are_recoverable(frontend: tuple[Page, MockAPI], status: int, message: str) -> None:
+    page, mock = frontend
+    mock.files = [{'path': 'report.txt', 'size': 12}]
+    mock.download_status = status
+    workspace(page, mock)
+    page.click('#open-files')
+    download = page.locator('#file-list').get_by_role('button', name='Download')
+    download.click()
+    expect(page.locator('#files-status')).to_contain_text(message)
+    expect(download).to_be_enabled()
+    expect(page.locator('#files')).to_be_visible()
+
+
+@pytest.mark.parametrize('width', [1440, 390])
+def test_schedule_opens_its_conversation(frontend: tuple[Page, MockAPI], width: int) -> None:
+    page, mock = frontend
+    page.set_viewport_size({'width': width, 'height': 844})
+    mock.messages = [{'role': 'user', 'text': 'Track my flights'}]
+    mock.schedules = [
+        {'id': 'task', 'thread_id': THREAD, 'name': 'Flight watch', 'when': 'Every Tuesday', 'paused': False}
+    ]
+    workspace(page, mock)
+    if width < 900:
+        page.click('#menu-button')
+    page.click('#open-schedules')
+    page.get_by_role('button', name='Open conversation', exact=True).click()
+    expect(page).to_have_url(f'http://monty.test/#/t/{THREAD}')
+    expect(page.locator('#schedules')).not_to_be_visible()
+    expect(page.locator('#composer')).to_be_visible()
+    expect(page.locator('.msg.user')).to_have_text('Track my flights')
+    expect(page.locator('#threads button.current')).to_have_attribute('aria-current', 'page')
+    assert not any(method in ('POST', 'DELETE') for method, _, _ in mock.calls)
+    no_overflow(page)
+
+
+def test_saved_browser_data_does_not_claim_verified_signin(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.sites = [{'site': 'shop.example.test'}]
+    workspace(page, mock)
+    expect(page.locator('#open-signins')).to_have_text('Saved browser data')
+    page.click('#open-signins')
+    expect(page.locator('#signins-title')).to_have_text('Saved browser data')
+    expect(page.locator('#signins')).to_contain_text('cookies or storage')
+    expect(page.locator('#signins')).to_contain_text('not verified sign-ins')
+    expect(page.locator('#signins')).to_contain_text('host and its subdomains')
+    expect(page.locator('#signins')).not_to_contain_text('Forget a site to sign out')
+
+
+def test_sse_snapshots_error_recovery_and_committed_reply(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    streaming_chat(page, mock)
+    emit(page, 'preview', {'revision': 1, 'text': 'First draft', 'activity': 'Finding flights'})
+    expect(page.locator('.msg.assistant')).to_contain_text('Live draft · not saved yet')
+    expect(page.locator('#status')).to_have_text('Finding flights')
+    emit(page, 'preview', {'revision': 2, 'text': '<b>Replacement draft</b>', 'activity': 'Comparing fares'})
+    expect(page.locator('.msg.assistant')).to_have_count(1)
+    expect(page.locator('.msg.assistant')).to_contain_text('<b>Replacement draft</b>')
+    expect(page.locator('.msg.assistant b')).to_have_count(0)
+    expect(page.locator('#messages')).not_to_contain_text('First draft')
+    expect(page.locator('#status')).to_have_text('Comparing fares')
+    emit(page, 'preview', {'revision': 'invalid', 'text': 'Bad draft', 'activity': 'Bad activity'})
+    expect(page.locator('#messages')).not_to_contain_text('Bad draft')
+    emit(page, 'error')
+    expect(page.locator('#status')).to_contain_text('Live preview unavailable')
+    expect(page.locator('.msg.assistant')).to_contain_text('connection lost; may be incomplete')
+    emit(page, 'open')
+    expect(page.locator('#status')).to_have_text('Comparing fares')
+    expect(page.locator('.msg.assistant')).to_contain_text('not saved yet')
+    mock.messages.append({'role': 'assistant', 'text': 'Committed flight options'})
+    mock.run = {'id': 'run', 'thread_id': THREAD, 'status': 'done', 'activity': [], 'ask': None}
+    emit(page, 'status', mock.run)
+    expect(page.locator('.msg.assistant')).to_have_text('Committed flight options')
+    expect(page.locator('#status')).not_to_be_visible()
+    expect(page.locator('#send')).to_be_enabled()
+    assert page.evaluate('window.eventSources[0].closed')
+    emit(page, 'preview', {'revision': 3, 'text': 'Late draft', 'activity': 'Late activity'})
+    emit(page, 'error')
+    expect(page.locator('.msg.assistant')).to_have_text('Committed flight options')
+    assert not any(method == 'POST' for method, _, _ in mock.calls)
+
+
+@pytest.mark.parametrize('destination', ['#/new', '#/files', '#/schedules', '#/sign-ins'])
+def test_navigation_discards_sse_draft_and_late_events(frontend: tuple[Page, MockAPI], destination: str) -> None:
+    page, mock = frontend
+    streaming_chat(page, mock)
+    emit(page, 'preview', {'revision': 1, 'text': 'Old draft', 'activity': 'Old activity'})
+    page.evaluate('(hash) => { location.hash = hash; }', destination)
+    page.wait_for_function('window.eventSources[0].closed')
+    emit(page, 'preview', {'revision': 2, 'text': 'Stale draft', 'activity': 'Stale activity'})
+    emit(
+        page,
+        'status',
+        {
+            'id': 'run',
+            'thread_id': THREAD,
+            'status': 'waiting',
+            'activity': [],
+            'ask': {'id': 'stale-ask', 'kind': 'approval', 'prompt': 'Stale approval'},
+        },
+    )
+    emit(page, 'error')
+    expect(page.locator('#messages')).not_to_contain_text('Old draft')
+    expect(page.locator('#messages')).not_to_contain_text('Stale draft')
+    expect(page.locator('#ask')).not_to_be_visible()
+    expect(page.locator('#browser')).not_to_be_visible()
+    expect(page.locator('#status')).not_to_be_visible()
+    expect(page).to_have_url(f'http://monty.test/{destination}')
+    if destination != '#/new':
+        page.locator('.page:visible .back').click()
+        page.wait_for_function('window.eventSources.length === 2')
+        assert page.evaluate('!window.eventSources[1].closed')
+        emit(page, 'preview', {'revision': 1, 'text': 'Fresh draft', 'activity': 'Fresh activity'}, source=1)
+        expect(page.locator('.msg.assistant')).to_contain_text('Fresh draft')
+
+
+def test_sse_waiting_preserves_answer_and_rejects_wrong_run(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    streaming_chat(page, mock)
+    wrong = {
+        'id': 'other-run',
+        'thread_id': THREAD,
+        'status': 'done',
+        'activity': [],
+        'ask': None,
+    }
+    emit(page, 'status', wrong)
+    emit(page, 'status', {**wrong, 'id': 'run', 'thread_id': 'other-thread'})
+    expect(page.locator('#send')).to_be_disabled()
+    assert not page.evaluate('window.eventSources[0].closed')
+    waiting = {
+        'id': 'run',
+        'thread_id': THREAD,
+        'status': 'waiting',
+        'activity': [],
+        'ask': {'id': 'ask', 'kind': 'question', 'prompt': 'Which airport?'},
+    }
+    emit(page, 'status', waiting)
+    answer = page.get_by_label('Your answer to Monty')
+    answer.fill('Lisbon')
+    emit(page, 'status', waiting)
+    expect(answer).to_have_value('Lisbon')
+    expect(page.locator('#status')).not_to_be_visible()
+    expect(page.locator('#send')).to_be_disabled()
+    assert not page.evaluate('window.eventSources[0].closed')

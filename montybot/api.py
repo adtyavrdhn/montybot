@@ -5,30 +5,33 @@ another user's thread, run or ask answers 404, the same as one that does not exi
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import contextlib
+import json
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Annotated, Any, TypeVar
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from pydantic import AfterValidator, BaseModel, Field, StringConstraints
 from pydantic_ai.messages import ModelMessage, ModelRequest, TextPart, UserPromptPart
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from montybot import approvals, auth, schedules, store, workflows
+from montybot import approvals, auth, schedules, store, streaming, workflows
 from montybot.browser.contract import (
     BrowserError,
 )
-from montybot.browser.state import BLANK_URL
+from montybot.browser.state import BLANK_URL, BrowserState
 from montybot.memory import delete_memory, list_memories
 from montybot.models import ACTIVE, Ask, Run, Schedule, User
 from montybot.notifications import TakenEndpoint, add_subscription, remove_subscription
 from montybot.resources import Resources
 from montybot.signins import PostgresLease
+from montybot.workspaces import MAX_DOWNLOAD_BYTES, FileTooLarge, download_name
 
 T = TypeVar('T')
 NOT_FOUND = JSONResponse({'detail': 'not found'}, status_code=404)
@@ -146,6 +149,8 @@ async def list_threads(request: Request, user: User) -> Response:
 @auth.signed_in
 async def read_thread(request: Request, user: User) -> Response:
     async with resources_of(request).pool.connection() as connection:
+        # History and status must describe the same instant, even if a workflow finishes between the reads.
+        await connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
         thread = await store.get_thread(connection, user.id, request.path_params['thread_id'])
         if thread is None:
             return NOT_FOUND
@@ -165,6 +170,56 @@ async def read_run(request: Request, user: User) -> Response:
         if run is None:
             return NOT_FOUND
         return JSONResponse(await run_view(connection, user, run))
+
+
+@auth.signed_in
+async def run_events(request: Request, user: User) -> Response:
+    """Full replacement previews are provisional; only the stored run decides completion.
+
+    Signed cookies are stateless: a connection cannot observe logout/cookie replacement in another request.
+    Recheck the account and run each poll; reconnect every five minutes to revalidate cookie signature/age.
+    The UI closes its own connection on logout. Immediate server-side session revocation is not available.
+    """
+    resources = resources_of(request)
+    run_id = str(request.path_params['run_id'])
+    async with resources.pool.connection() as connection:
+        if await store.get_run(connection, user.id, run_id) is None:
+            return NOT_FOUND  # before sending streaming headers, including for another user's run
+
+    async def events() -> AsyncIterator[str]:
+        previous_view: dict[str, Any] | None = None
+        previous_preview: dict[str, Any] | None = None
+        # Periodically reconnect so SessionMiddleware validates the cookie signature/age again.
+        deadline = asyncio.get_running_loop().time() + 300
+        while asyncio.get_running_loop().time() < deadline and not await request.is_disconnected():
+            # SessionMiddleware cookies are stateless: another request's logout cannot revoke this cookie.
+            # Recheck the account and ownership nonetheless; no connection is held while sending or sleeping.
+            current_user = await auth.signed_in_user(request)
+            if current_user is None or current_user.id != user.id:
+                return
+            async with resources.pool.connection() as connection:
+                run = await store.get_run(connection, user.id, run_id)
+                if run is None:
+                    return
+                view = await run_view(connection, current_user, run)
+            if view != previous_view:
+                yield f'event: status\ndata: {json.dumps(view)}\n\n'
+                previous_view = view
+            if run.status not in ACTIVE:
+                return  # never send a stale preview after authoritative completion
+            preview = streaming.snapshot(run_id)
+            if preview != previous_preview:
+                yield f'event: preview\ndata: {json.dumps(preview)}\n\n'
+                previous_preview = dict(preview)
+            else:
+                yield ': keep-alive\n\n'
+            await asyncio.sleep(0.75)
+
+    return StreamingResponse(
+        events(),
+        media_type='text/event-stream',
+        headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'},
+    )
 
 
 async def run_view(connection: Any, user: User, run: Run) -> dict[str, Any]:
@@ -355,14 +410,22 @@ async def remove_push_subscription(request: Request, user: User) -> Response:
 
 
 def site_of(domain: str) -> str:
-    return domain.lstrip('.')
+    return domain.lstrip('.').rstrip('.').lower()
+
+
+def saved_sites(state: BrowserState) -> set[str]:
+    sites = {site_of(cookie.domain) for cookie in state.cookies}
+    sites.update(
+        host for origin in (*state.local_storage, *state.session_storage) if (host := urlsplit(origin).hostname)
+    )
+    return sites
 
 
 @auth.signed_in
 async def read_sign_ins(request: Request, user: User) -> Response:
     """The sites the user's saved browser holds cookies for. Names only, never values."""
     state = await resources_of(request).jar.load(user_id=user.id)
-    sites = sorted({site_of(c.domain) for c in state.cookies}) if state is not None else []
+    sites = sorted(saved_sites(state)) if state is not None else []
     return JSONResponse([{'site': site} for site in sites])
 
 
@@ -370,21 +433,23 @@ async def read_sign_ins(request: Request, user: User) -> Response:
 async def forget_sign_in(request: Request, user: User) -> Response:
     """Drop the cookies and storage of one site. Refused while a task of the user's is using the browser."""
     resources = resources_of(request)
-    site = str(request.path_params['site'])
+    site = site_of(str(request.path_params['site']))
     holder = f'forget:{uuid.uuid4()}'
     lease = PostgresLease(resources.pool, seconds=60)  # short: a crash here must not lock the user out for long
     if not await lease.acquire(user_id=user.id, run_id=holder):
         return JSONResponse({'detail': 'a task is using your browser; try again when it has finished'}, 409)
     try:
         state = await resources.jar.load(user_id=user.id)
-        if state is None or not any(site_of(c.domain) == site for c in state.cookies):
+        if state is None or site not in saved_sites(state):
             return NOT_FOUND
 
         def of_site(origin: str) -> bool:
             host = urlsplit(origin).hostname or ''
             return host == site or host.endswith('.' + site)
 
-        state.cookies = [c for c in state.cookies if site_of(c.domain) != site]
+        state.cookies = [
+            c for c in state.cookies if site_of(c.domain) != site and not site_of(c.domain).endswith('.' + site)
+        ]
         state.local_storage = {o: items for o, items in state.local_storage.items() if not of_site(o)}
         state.session_storage = {o: items for o, items in state.session_storage.items() if not of_site(o)}
         if of_site(state.url):
@@ -478,3 +543,40 @@ def chat_messages(history: list[ModelMessage]) -> list[dict[str, str]]:
             if text and not message.tool_calls:
                 shown.append({'role': 'assistant', 'text': text})
     return shown
+
+
+# --- workspace results (no filenames in request URLs or telemetry) ---
+
+
+class FileDownload(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
+
+
+@auth.signed_in
+async def list_files(request: Request, user: User) -> Response:
+    files, truncated = await resources_of(request).workspaces.files(user.id).list_results()
+    return JSONResponse(
+        {'files': files, 'truncated': truncated, 'max_download_bytes': MAX_DOWNLOAD_BYTES},
+        headers={'Cache-Control': 'no-store'},
+    )
+
+
+@auth.signed_in
+async def download_file(request: Request, user: User) -> Response:
+    headers = {'Cache-Control': 'no-store'}
+    # Bound JSON too; never echo invalid paths through validation responses.
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > 8192:
+            return JSONResponse({'detail': 'request too large'}, status_code=413, headers=headers)
+        body.extend(chunk)
+    try:
+        path = FileDownload.model_validate_json(body).path
+        data = await resources_of(request).workspaces.files(user.id).read_result(path)
+    except FileTooLarge:
+        return JSONResponse({'detail': 'file exceeds the 20 MiB download limit'}, status_code=413, headers=headers)
+    except (OSError, ValueError):
+        return JSONResponse({'detail': 'file unavailable'}, status_code=404, headers=headers)
+    headers['Content-Disposition'] = "attachment; filename*=UTF-8''" + quote(download_name(path), safe='')
+    headers['X-Content-Type-Options'] = 'nosniff'
+    return Response(data, media_type='application/octet-stream', headers=headers)

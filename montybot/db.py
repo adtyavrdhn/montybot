@@ -4,13 +4,42 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Self, cast
 
-from psycopg import AsyncConnection
+from psycopg import AsyncConnection, AsyncCursor
+from psycopg.abc import Params, Query, QueryNoTemplate
 from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from montybot.observability import timed
+
+
+class TimedCursor(AsyncCursor[DictRow]):
+    """Time queries without exporting SQL, parameters, results or exception text."""
+
+    @timed('db.query')
+    async def execute(
+        self,
+        query: Query,
+        params: Params | None = None,
+        *,
+        prepare: bool | None = None,
+        binary: bool | None = None,
+    ) -> Self:
+        if params is None:
+            return await super().execute(query, prepare=prepare, binary=binary)
+        # Psycopg rejects templates with parameters at runtime, as on the uninstrumented cursor.
+        return await super().execute(cast(QueryNoTemplate, query), params, prepare=prepare, binary=binary)
+
+
 Connection = AsyncConnection[DictRow]
-Pool = AsyncConnectionPool[Connection]
+
+
+class Pool(AsyncConnectionPool[Connection]):
+    @timed('db.pool.acquire')
+    async def getconn(self, timeout: float | None = None) -> Connection:
+        return await super().getconn(timeout=timeout)
+
 
 MIGRATIONS_DIR = Path(__file__).parent / 'migrations'
 MIGRATION_LOCK = 0x6D6F6E74
@@ -18,16 +47,17 @@ MIGRATION_FILE = re.compile(r'^(\d{4})_[a-z0-9_]+\.sql$')
 
 
 def create_pool(database_url: str) -> Pool:
-    return AsyncConnectionPool(
+    return Pool(
         database_url,
         open=False,
         min_size=1,
         max_size=10,
         connection_class=Connection,
-        kwargs={'row_factory': dict_row},
+        kwargs={'row_factory': dict_row, 'cursor_factory': TimedCursor},
     )
 
 
+@timed('db.migrate')
 async def migrate(database_url: str, migrations_dir: Path = MIGRATIONS_DIR) -> list[int]:
     """Apply pending SQL migrations under an advisory lock."""
     applied: list[int] = []

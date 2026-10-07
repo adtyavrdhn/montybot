@@ -35,11 +35,12 @@ from montybot.browser.contract import (
 )
 from montybot.browser.host import BrowserHost
 from montybot.browser.service import HandoffNotActive, Restarted, UnknownRun, UserBusy
+from montybot.browser.snapshot import DEFAULT_BUDGET
 from montybot.deps import RunDeps
 from montybot.resources import Resources, current
 from montybot.workspaces import download_name, save_download
 
-SNAPSHOT_LIMIT = 12_000
+SNAPSHOT_LIMIT = DEFAULT_BUDGET
 
 browser_tools: FunctionToolset[RunDeps] = FunctionToolset(id='browser')
 
@@ -95,14 +96,14 @@ class Session:
         downloads = await self.browser.take_downloads(run_id=self.run_id, user_id=self.user_id)
         if not downloads:
             return
-        workspace = self.resources.workspaces.of(self.user_id)
+        files = self.resources.workspaces.files(self.user_id)
         for download in downloads:
             name = download_name(download.name)
             if download.too_large or len(download.data) > MAX_DOWNLOAD_BYTES:
                 self.downloaded.append(f'Download not saved: {name} is over {MAX_DOWNLOAD_BYTES >> 20} MB.')
                 continue
             try:
-                path = await save_download(workspace, download.name, download.data)
+                path = await save_download(files, download.name, download.data)
             except (OSError, WorkspaceError) as error:  # such as a file the code made where the folder goes
                 reason = error.strerror if isinstance(error, OSError) and error.strerror else 'it could not be written'
                 self.downloaded.append(f'Download not saved: {name}: {reason}.')
@@ -136,8 +137,8 @@ def host_of(url: str) -> str:
 
 async def refused_url(url: str, *, allow_private: bool) -> str | None:
     """Why the agent may not open `url`, or None. Only http(s), and only public addresses, so a page cannot steer the
-    agent into our own network. The browser's own network namespace (#7) blocks the same ranges for redirects and
-    subresources; this check gives the model a clear answer first."""
+    agent into our own network. On the server the browser's egress proxy (`browser/egress.py`) blocks the same ranges
+    for redirects and subresources; this check gives the model a clear answer first."""
     parts = urlsplit(url)
     if parts.scheme not in ('http', 'https') or not parts.hostname:
         return 'Error: only http and https addresses can be opened.'

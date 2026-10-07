@@ -43,9 +43,10 @@ from montybot.browser.service import UserBusy
 from montybot.browser.state import BLANK_URL
 from montybot.browsing import Session, host_of, refused_url, target_of
 from montybot.deps import RunDeps
+from montybot.observability import timed, timing
 from montybot.resources import Resources, current
 from montybot.settings import Settings
-from montybot.workspaces import DOWNLOADS, VIRTUAL_ROOT, WorkspaceFiles
+from montybot.workspaces import DOWNLOADS, VIRTUAL_ROOT
 
 OUTPUT_LIMIT = 20_000
 
@@ -56,13 +57,19 @@ session that keeps its variables for this whole task. Your browser is a set of a
 
 - `await goto(url) -> str`: open a page; returns what it shows, with numbered refs like [12] for things to click.
 - `await read_page() -> str`: the current page again.
-- `await click(target) -> str`: `target` is a ref from the latest page (`"12"`) or a CSS selector (`"#add-eggs"`).
+- `await click(target) -> str`: `target` must be a numbered ref from the latest page (`"12"`), not a CSS selector.
 - `await type_text(target, text, press_enter=False) -> str`: replace a text box's value.
-- `await press_key(key) -> str`: one key, such as `"Enter"` or `"Escape"`.
+- `await press_key(key) -> str`: one key. Enter is only allowed for a just-typed searchbox;
+  other submissions use approval or hand-off. Space activation is not available from code.
 
-Each returns the page afterwards. Use code to read several pages, pull out what matters and compute the answer, and
-`print` only what you need to see. A browser error raises `RuntimeError` with a message you can act on. Clicks that cannot be undone (placing an order,
-paying, sending) are refused from code: use the `commit` tool for those.
+Each returns the page afterwards: use that returned snapshot instead of immediately calling `read_page()` again.
+When the next steps are known, do them sequentially in one `run_code` call: open, inspect the returned page, search,
+inspect the result, extract and compute. Do not guess refs or act on refs from a page you have left. Stop and return
+what you found when the next action needs a decision, user input or approval. Do not batch non-repeatable actions:
+an interrupted snippet may run again from the beginning.
+Use code to read several pages, pull out what matters and compute the answer, and `print` only the relevant evidence
+(including its source URL), not every full page. A browser error raises `RuntimeError` with a message you can act on.
+Clicks that cannot be undone (placing an order, paying, sending) are refused from code: use the `commit` tool for those.
 
 The user's files are in `{VIRTUAL_ROOT}`, kept from one task to the next: use `pathlib.Path` or `open` there. What the
 browser downloads is saved in `{DOWNLOADS}`, and the page you get back after the click says where."""
@@ -123,6 +130,7 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
     lock = asyncio.Lock()
     allow_private = session.resources.settings.allow_private_networks
     last_page = ['']
+    search_ready = [False]
 
     async def guarded(use: Callable[[], Awaitable[str]]) -> str:
         async with lock:
@@ -141,8 +149,10 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
             last_page[0] = page
             return page
 
+    @timed('code.browser.goto')
     async def goto(url: str) -> str:
         async def use() -> str:
+            search_ready[0] = False
             refused = await refused_url(str(url), allow_private=allow_private)
             if refused is not None:
                 raise RuntimeError(refused.removeprefix('Error: '))
@@ -152,37 +162,70 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
 
         return await guarded(use)
 
+    @timed('code.browser.read')
     async def read_page() -> str:
         return await guarded(session.read)
 
-    async def click(target: str) -> str:
-        if str(target).strip().strip('[]').isdigit() and not last_page[0]:
-            await read_page()  # a ref from an earlier call: read what it names before deciding
-        what = looks_irreversible(str(target), last_page[0])
-        if what is not None:
-            raise RuntimeError(
-                f'{what} looks like it cannot be undone, so it is not clicked from code. '
-                'Use the `commit` tool for it: it asks the user first.'
-            )
+    async def current_page() -> str:
+        if not last_page[0]:
+            last_page[0] = await session.read()
+        return last_page[0]
 
+    def line_for_ref(target: str, page: str) -> str:
+        ref = target.strip().strip('[]')
+        return next((line for line in page.splitlines() if line.lstrip(' -').startswith(f'[{ref}]')), '')
+
+    def refuse_submission() -> None:
+        raise RuntimeError('This input can submit an action. Use the `commit` tool for approval or hand_off.')
+
+    @timed('code.browser.click')
+    async def click(target: str) -> str:
         async def use() -> str:
-            await session.act(Click(target=target_of(str(target))))
+            search_ready[0] = False
+            ref = str(target).strip().strip('[]')
+            if not ref.isdigit():
+                raise RuntimeError(
+                    'Clicks from code require a numbered ref from read_page, not a CSS selector. '
+                    'Use the `commit` tool for an action requiring approval.'
+                )
+            page = await current_page()
+            if not line_for_ref(ref, page):
+                raise RuntimeError('That ref is not in the current page. Read the page before choosing again.')
+            what = looks_irreversible(ref, page)
+            if what is not None:
+                raise RuntimeError('That control looks like it cannot be undone. Use the `commit` tool for approval.')
+            await session.act(Click(target=target_of(ref)))
             return await session.read()
 
         return await guarded(use)
 
+    @timed('code.browser.type')
     async def type_text(target: str, text: str, press_enter: bool = False) -> str:
         async def use() -> str:
+            page = await current_page()
+            line = line_for_ref(str(target), page)
+            search_ready[0] = ' searchbox ' in line and not IRREVERSIBLE.search(page)
+            if press_enter and not search_ready[0]:
+                refuse_submission()  # do not type first and then refuse: typing itself may trigger site handlers
             await session.act(Type(text=str(text), target=target_of(str(target))))
-            if press_enter is True:
+            if press_enter:
+                search_ready[0] = False
                 await session.act(Press(key='Enter'))
             return await session.read()
 
         return await guarded(use)
 
+    @timed('code.browser.press')
     async def press_key(key: str) -> str:
         async def use() -> str:
-            await session.act(Press(key=str(key)))
+            key_text = str(key)
+            activates = key_text == ' ' or any(
+                part.strip().lower() in ('enter', 'return', 'numpadenter', 'space') for part in key_text.split('+')
+            )
+            if activates and not (key_text == 'Enter' and search_ready[0]):
+                refuse_submission()
+            search_ready[0] = False
+            await session.act(Press(key=key_text))
             return await session.read()
 
         return await guarded(use)
@@ -230,43 +273,56 @@ async def run_snippet(
     set before the failing line. If the sandbox timed out, crashed or lost its connection, the session is dropped and
     the previous state stays, so the next call starts from before this one.
     """
-    session = Session(resources, run_id, user_id)
-    printed = Printed()
-    notes: list[str] = []
-    async with resources.monty.session() as monty:
-        if state is not None:
-            try:
-                await monty.load_session(state)
-            except MontyError:
-                notes.append(SESSION_LOST)
-                state = None
-        try:
-            async with asyncio.timeout(resources.settings.code_timeout_seconds):
-                result = await monty.feed_run(
-                    code,
-                    external_lookup=browser_functions(session),
-                    print_callback=printed,
-                    os=WorkspaceFiles(resources.workspaces.of(user_id)),
-                    cwd=VIRTUAL_ROOT,
-                )
-        except MontySyntaxError as error:
-            return shown(printed, None, error.display('type-msg'), notes), state
-        except MontyTypingError as error:
-            return shown(printed, None, error.display(), notes), state
-        except MontyRuntimeError as error:
-            if isinstance(error.exception(), TimeoutError):
-                return shown(printed, None, f'{error.display("type-msg")} (the code ran too long)', notes), state
-            return shown(printed, None, error.display('type-msg'), notes), await monty.dump()
-        except (MontyError, TimeoutError) as error:  # crashed, disconnected, or over `code_timeout_seconds`
-            message = 'the code took too long' if isinstance(error, TimeoutError) else 'the code session stopped'
-            return shown(printed, None, f'{message}. {SESSION_LOST}', notes), state
-        return shown(printed, result, None, notes), await monty.dump()
+    with timing('monty.snippet'):
+        session = Session(resources, run_id, user_id)
+        printed = Printed()
+        notes: list[str] = []
+        with timing('monty.session'):
+            async with resources.monty.session() as monty:
+                if state is not None:
+                    try:
+                        with timing('monty.load'):
+                            await monty.load_session(state)
+                    except MontyError:
+                        notes.append(SESSION_LOST)
+                        state = None
+                try:
+                    with timing('monty.run'):
+                        async with asyncio.timeout(resources.settings.code_timeout_seconds):
+                            result = await monty.feed_run(
+                                code,
+                                external_lookup=browser_functions(session),
+                                print_callback=printed,
+                                os=resources.workspaces.files(user_id),
+                                cwd=VIRTUAL_ROOT,
+                            )
+                except MontySyntaxError as error:
+                    return shown(printed, None, error.display('type-msg'), notes), state
+                except MontyTypingError as error:
+                    return shown(printed, None, error.display(), notes), state
+                except MontyRuntimeError as error:
+                    if isinstance(error.exception(), TimeoutError):
+                        return shown(
+                            printed, None, f'{error.display("type-msg")} (the code ran too long)', notes
+                        ), state
+                    with timing('monty.dump'):
+                        new_state = await monty.dump()
+                    return shown(printed, None, error.display('type-msg'), notes), new_state
+                except (MontyError, TimeoutError) as error:  # crashed, disconnected, or over `code_timeout_seconds`
+                    message = (
+                        'the code took too long' if isinstance(error, TimeoutError) else 'the code session stopped'
+                    )
+                    return shown(printed, None, f'{message}. {SESSION_LOST}', notes), state
+                with timing('monty.dump'):
+                    new_state = await monty.dump()
+                return shown(printed, result, None, notes), new_state
 
 
 code_tools: FunctionToolset[RunDeps] = FunctionToolset(id='code')
 
 
 @code_tools.tool
+@timed('code.run')
 async def run_code(ctx: RunContext[RunDeps], code: str) -> str:
     """Run Python in your session, with your browser as async functions inside it (see the instructions). Returns
     what the code printed and the value of its last expression, or the error."""

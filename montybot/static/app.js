@@ -2,9 +2,10 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const state = { thread: null, run: null, poll: null, screenTimer: null, liveAsk: null, signingUp: false, routing: false };
+const state = { thread: null, run: null, poll: null, screenTimer: null, liveAsk: null, signingUp: false, routing: false,
+  events: null, streamRun: null, preview: null, previewBubble: null, streamError: false, view: 0, refresh: 0 };
 
-async function api(path, options = {}) {
+async function api(path, options = {}, current = () => true) {
   const init = { credentials: 'same-origin', ...options, headers: { ...(options.headers || {}) } };
   if (init.body !== undefined) {
     init.headers['Content-Type'] = 'application/json';
@@ -13,7 +14,7 @@ async function api(path, options = {}) {
   const response = await fetch(path, init);
   const type = response.headers.get('Content-Type') || '';
   const data = type.includes('application/json') ? await response.json() : null;
-  if (response.status === 401 && path !== '/api/signin') signedOut();
+  if (response.status === 401 && path !== '/api/signin' && current()) signedOut();
   if (!response.ok) {
     const detail = data && typeof data.detail === 'string' ? data.detail : `Request failed (${response.status})`;
     const error = new Error(detail);
@@ -30,6 +31,10 @@ function show(id) {
 function signedOut() {
   // The session ended (signed out elsewhere, or expired): stop asking the server and offer to sign in again.
   stopPolling();
+  stopStream();
+  state.view++;
+  state.thread = null;
+  state.run = null;
   state.liveAsk = null;
   stopWatching();
   show('signin');
@@ -50,15 +55,20 @@ $('signup-button').addEventListener('click', () => {
 
 $('signin-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const view = ++state.view;
+  const thread = state.thread;
+  const current = () => state.view === view && state.thread === thread;
   $('signin-error').textContent = '';
   $('signin-button').disabled = true;
   $('signup-button').disabled = true;
   try {
     await api(state.signingUp ? '/api/signup' : '/api/signin', {
       method: 'POST', body: { email: $('email').value, password: $('password').value },
-    });
-    await start();
+    }, current);
+    if (!current()) return;
+    await start(current);
   } catch (error) {
+    if (!current()) return;
     $('signin-error').textContent = error.message;
   } finally {
     $('signin-button').disabled = false;
@@ -67,12 +77,23 @@ $('signin-form').addEventListener('submit', async (event) => {
 });
 
 $('signout').addEventListener('click', async () => {
+  signedOut();
+  const view = state.view;
+  const thread = state.thread;
+  const current = () => state.view === view && state.thread === thread;
   try {
-    await stopNotifications();
+    await stopNotifications(current);
   } catch (error) {
     console.error(error);
   }
-  await api('/api/signout', { method: 'POST', body: {} });
+  if (!current()) return;
+  try {
+    await api('/api/signout', { method: 'POST', body: {} }, current);
+  } catch (error) {
+    if (!current()) return;
+    throw error;
+  }
+  if (!current()) return;
   location.hash = '';
   location.reload();
 });
@@ -80,7 +101,17 @@ $('signout').addEventListener('click', async () => {
 // --- chats ---
 
 async function loadThreads() {
-  const threads = await api('/api/threads');
+  const view = state.view;
+  const thread = state.thread;
+  const current = () => state.view === view && state.thread === thread;
+  let threads;
+  try {
+    threads = await api('/api/threads', {}, current);
+  } catch (error) {
+    if (!current()) return;
+    throw error;
+  }
+  if (!current()) return;
   const list = $('threads');
   list.replaceChildren(...threads.map((thread) => {
     const item = document.createElement('li');
@@ -107,7 +138,7 @@ function syncDrawer() {
   $('drawer').inert = !desktop.matches && !open;
   $('drawer-backdrop').hidden = !open;
   $('menu-button').setAttribute('aria-expanded', String(open));
-  for (const id of ['layout', 'signins', 'schedules', 'browser-button']) $(id).inert = open;
+  for (const id of ['layout', 'files', 'signins', 'schedules', 'browser-button']) $(id).inert = open;
 }
 function closeDrawer(restoreFocus = false) {
   const focusInside = $('drawer').contains(document.activeElement);
@@ -189,6 +220,8 @@ function emptyChat() {
 
 async function openThread(id) {
   stopPolling();
+  stopStream();
+  state.view++;
   state.thread = id;
   state.run = null;
   state.liveAsk = null;
@@ -208,29 +241,33 @@ async function openThread(id) {
 
 async function refresh() {
   const id = state.thread;
+  const view = state.view;
+  const refreshId = ++state.refresh;
+  const current = () => state.thread === id && state.view === view && state.refresh === refreshId;
   if (id === null) return;
   let thread;
   try {
-    thread = await api(`/api/threads/${id}`);
+    thread = await api(`/api/threads/${id}`, {}, current);
   } catch (error) {
-    if (state.thread !== id) return;
+    if (!current()) return;
     if (error.status === 404) { location.hash = '#/new'; return; }
     throw error;
   }
-  if (state.thread !== id) return;  // the user opened another chat meanwhile
+  if (!current()) return;  // another chat, sign-out, or a newer refresh meanwhile
   if (!$('layout').hidden) $('title').textContent = thread.title || 'Monty';
   const box = $('messages');
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
   box.replaceChildren(...thread.messages.map((m) => message(m.role, m.text)));
-  if (atBottom) box.scrollTop = box.scrollHeight;
   renderRun(thread.run);
+  renderPreview();
+  if (atBottom) box.scrollTop = box.scrollHeight;
   const active = thread.run && ['queued', 'running', 'waiting'].includes(thread.run.status);
   if (active) schedulePoll(); else stopPolling();
 }
 
 function schedulePoll() {
   // One refresh at a time: the next is scheduled when this one has finished.
-  if (state.poll !== null) return;
+  if (state.poll !== null || state.thread === null) return;
   state.poll = setTimeout(() => {
     state.poll = null;
     refresh().catch((error) => {
@@ -249,22 +286,109 @@ function renderRun(run) {
   state.run = run;
   const working = run && (run.status === 'queued' || run.status === 'running');
   $('status').hidden = !working;
-  if (working) $('status').textContent = run.activity.length ? run.activity[run.activity.length - 1] : 'Working…';
+  if (working) renderActivity();
   $('send').disabled = Boolean(run && ['queued', 'running', 'waiting'].includes(run.status));
   renderAsk(run && run.status === 'waiting' ? run.ask : null);
   if (working && run.activity.length) watchBrowser(); else stopWatching();
   updateBrowserButton();
+  followRun(run);
 }
 
 function updateBrowserButton() {
   // Opens the bot's browser while it works and the panel is closed.
   const run = state.run;
   const working = run && (run.status === 'queued' || run.status === 'running') && run.activity.length;
-  $('browser-button').hidden = !(working && $('browser').hidden);
+  $('browser-button').hidden = !(working && $('browser').hidden && !$('layout').hidden);
   const mobileBrowser = !desktop.matches && !$('browser').hidden && !$('layout').hidden;
   $('chat').inert = mobileBrowser;
   document.querySelector('.bar').inert = mobileBrowser;
   if (mobileBrowser) $('drawer').inert = true; else syncDrawer();
+}
+
+// --- provisional assistant text: full replacement snapshots, never durable history ---
+
+function stopStream() {
+  if (state.events !== null) state.events.close();
+  state.events = null;
+  state.streamRun = null;
+  state.streamError = false;
+  state.preview = null;
+  if (state.previewBubble !== null) state.previewBubble.remove();
+  state.previewBubble = null;
+}
+
+function renderActivity() {
+  const run = state.run;
+  if (!run || !['queued', 'running'].includes(run.status)) return;
+  const activity = state.preview && state.preview.activity;
+  const saved = run.activity.length ? run.activity[run.activity.length - 1] : 'Working…';
+  $('status').textContent = state.streamError ? `${saved} · Live preview unavailable; checking for updates…` : activity || saved;
+}
+
+function renderPreview() {
+  if (state.previewBubble !== null) state.previewBubble.remove();
+  state.previewBubble = null;
+  if (!state.preview || !state.preview.text) return;
+  const box = $('messages');
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  const bubble = document.createElement('div');
+  bubble.className = 'msg assistant';
+  const label = document.createElement('small');
+  label.textContent = state.streamError ? 'Live draft · connection lost; may be incomplete' : 'Live draft · not saved yet';
+  const text = document.createElement('div');
+  text.textContent = state.preview.text;  // assistant text only, never HTML or tool payloads
+  bubble.append(label, text);
+  box.append(bubble);
+  state.previewBubble = bubble;
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+function followRun(run) {
+  if (!run || !['queued', 'running', 'waiting'].includes(run.status)) { stopStream(); return; }
+  if (state.streamRun === run.id) return;
+  stopStream();
+  if (typeof EventSource === 'undefined') return;  // polling still follows asks and completion
+  const view = state.view;
+  const thread = state.thread;
+  const source = new EventSource(`/api/runs/${run.id}/events`);
+  state.events = source;
+  state.streamRun = run.id;
+  const current = () => state.events === source && state.view === view && state.thread === thread;
+  source.onopen = () => {
+    if (!current()) return;
+    state.streamError = false;
+    renderActivity();
+    renderPreview();
+  };
+  source.addEventListener('preview', (event) => {
+    if (!current()) return;
+    let preview;
+    try { preview = JSON.parse(event.data); } catch { return; }
+    if (!Number.isInteger(preview.revision) || typeof preview.text !== 'string' || typeof preview.activity !== 'string') return;
+    state.preview = { revision: preview.revision, text: preview.text, activity: preview.activity };
+    renderPreview();
+    renderActivity();
+  });
+  source.addEventListener('status', (event) => {
+    if (!current()) return;
+    let status;
+    try { status = JSON.parse(event.data); } catch { return; }
+    if (status.id !== run.id || status.thread_id !== thread) return;
+    state.refresh++;  // discard any poll response captured before this authoritative SSE update
+    renderRun(status);
+    if (!['queued', 'running', 'waiting'].includes(status.status)) {
+      // renderRun closes the source and removes the draft BEFORE loading committed history.
+      refresh().catch(() => { if (state.view === view && state.thread === thread) schedulePoll(); });
+    }
+  });
+  source.onerror = () => {
+    if (!current()) return;
+    // EventSource retries automatically. Do not present the draft as complete or log event data.
+    state.streamError = true;
+    renderActivity();
+    renderPreview();
+    schedulePoll();  // also detects expired auth/ownership, which EventSource cannot expose
+  };
 }
 
 // --- what the bot asks ---
@@ -326,7 +450,18 @@ function button(text, kind, onClick) {
 }
 
 async function answer(ask, body) {
-  await api(`/api/asks/${ask.id}`, { method: 'POST', body });
+  const view = state.view;
+  const thread = state.thread;
+  const runId = state.run && state.run.id;
+  const current = () => state.view === view && state.thread === thread && state.run &&
+    state.run.id === runId && state.run.ask && state.run.ask.id === ask.id;
+  try {
+    await api(`/api/asks/${ask.id}`, { method: 'POST', body }, current);
+  } catch (error) {
+    if (!current()) return;
+    throw error;
+  }
+  if (!current()) return;
   $('ask').hidden = true;
   $('ask').dataset.id = '';
   schedulePoll();
@@ -334,7 +469,20 @@ async function answer(ask, body) {
 }
 
 async function takeOver(ask) {
-  const link = await api(`/api/runs/${state.run.id}/live`, { method: 'POST', body: {} });
+  const view = state.view;
+  const thread = state.thread;
+  const runId = state.run && state.run.id;
+  const current = () => state.view === view && state.thread === thread && state.run &&
+    state.run.id === runId && state.run.status === 'waiting' && state.run.ask && state.run.ask.id === ask.id;
+  if (!current()) return;
+  let link;
+  try {
+    link = await api(`/api/runs/${runId}/live`, { method: 'POST', body: {} }, current);
+  } catch (error) {
+    if (!current()) return;  // an old request must not alert or sign out a newer view
+    throw error;
+  }
+  if (!current()) return;
   state.liveAsk = ask.id;
   stopWatching();
   $('browser-label').textContent = 'You have the browser. Give it back when you are done.';
@@ -350,11 +498,23 @@ async function takeOver(ask) {
 
 function watchBrowser() {
   if (state.screenTimer !== null || state.liveAsk !== null) return;
+  const view = state.view;
+  const thread = state.thread;
+  const runId = state.run && state.run.id;
+  const askId = state.run && state.run.ask ? state.run.ask.id : null;
   const tick = async () => {
-    if (state.run === null || $('browser').hidden) return;
-    const response = await fetch(`/api/runs/${state.run.id}/screen`, { credentials: 'same-origin' });
-    if (!response.ok) return;
-    const url = URL.createObjectURL(await response.blob());
+    const timer = state.screenTimer;
+    const current = () => state.view === view && state.thread === thread && state.run &&
+      state.run.id === runId && ['queued', 'running'].includes(state.run.status) &&
+      (state.run.ask ? state.run.ask.id : null) === askId && state.liveAsk === null &&
+      state.screenTimer === timer && !$('browser').hidden;
+    if (!current()) return;
+    const response = await fetch(`/api/runs/${runId}/screen`, { credentials: 'same-origin' });
+    if (!current() || !response.ok) return;
+    const blob = await response.blob();
+    if (!current()) return;
+    const url = URL.createObjectURL(blob);
+    if (!current()) { URL.revokeObjectURL(url); return; }
     const old = $('screen').src;
     $('screen').src = url;
     if (old.startsWith('blob:')) URL.revokeObjectURL(old);
@@ -388,6 +548,10 @@ function stopWatching() {
 function hideBrowser() {
   $('browser').hidden = true;
   $('live').src = 'about:blank';
+  const old = $('screen').src || '';
+  $('screen').removeAttribute('src');
+  $('screen').hidden = true;
+  if (old.startsWith('blob:')) URL.revokeObjectURL(old);
   updateBrowserButton();
 }
 
@@ -402,14 +566,20 @@ $('close-browser').addEventListener('click', () => {
 
 $('composer').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if ($('send').disabled) return;  // requestSubmit/Enter must obey the same in-flight guard as the button
   const text = $('message').value.trim();
   if (!text) return;
+  const view = state.view;
+  const thread = state.thread;
+  const current = () => state.view === view && state.thread === thread;
   $('send').disabled = true;
   try {
-    const path = state.thread === null ? '/api/threads' : `/api/threads/${state.thread}/messages`;
-    const created = await api(path, { method: 'POST', body: { text } });
-    $('message').value = '';
-    if (state.thread === null) {
+    const path = thread === null ? '/api/threads' : `/api/threads/${thread}/messages`;
+    const created = await api(path, { method: 'POST', body: { text } }, current);
+    await loadThreads();  // a newly-created chat stays discoverable even if its originating view changed
+    if (!current()) return;
+    if ($('message').value.trim() === text) $('message').value = '';
+    if (thread === null) {
       location.hash = `#/t/${created.thread_id}`;
       await loadThreads();
     } else {
@@ -417,6 +587,7 @@ $('composer').addEventListener('submit', async (event) => {
       await refresh();
     }
   } catch (error) {
+    if (!current()) return;
     alert(error.message);
     $('send').disabled = false;
   }
@@ -429,29 +600,101 @@ $('message').addEventListener('keydown', (event) => {
   }
 });
 
+// --- read-only workspace results ---
+
+async function openFiles() {
+  const view = ++state.view;
+  const current = () => state.view === view && location.hash === '#/files';
+  stopPolling();
+  stopStream();
+  stopWatching();
+  $('layout').hidden = true;
+  $('files').hidden = false;
+  $('file-list').replaceChildren();
+  $('files-status').textContent = 'Loading…';
+  $('files-title').focus();
+  try {
+    const data = await api('/api/files', {}, current);
+    if (!current()) return;
+    $('files-status').textContent = data.truncated ? 'Showing a partial list (up to 1,000 entries, 16 folders deep).' :
+      (data.files.length ? '' : 'No files yet. Ask the bot to download or generate a file.');
+    $('file-list').replaceChildren(...data.files.map((file) => {
+      const item = document.createElement('li');
+      const name = document.createElement('span');
+      name.textContent = `${file.path} (${file.size.toLocaleString()} bytes)`;
+      const download = button('Download', 'secondary', async () => {
+        download.disabled = true;
+        try {
+          const response = await fetch('/api/files/download', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: file.path }),
+          });
+          if (!current()) return;
+          if (response.status === 401) { signedOut(); return; }
+          if (!response.ok) {
+            $('files-status').textContent = response.status === 413 ? 'File exceeds the 20 MiB download limit.' :
+              'File unavailable. Refresh and try again.';
+            return;
+          }
+          const blob = await response.blob();
+          if (!current()) return;
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          const disposition = response.headers.get('Content-Disposition') || '';
+          link.download = decodeURIComponent(disposition.split("filename*=UTF-8''")[1] || 'download');
+          document.body.append(link);
+          link.click();
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (_) {
+          if (current()) $('files-status').textContent = 'Download failed. Try again.';
+        } finally {
+          download.disabled = file.size > data.max_download_bytes;
+        }
+      });
+      download.disabled = file.size > data.max_download_bytes;
+      if (download.disabled) download.title = 'Exceeds the 20 MiB download limit';
+      item.append(name, download);
+      return item;
+    }));
+  } catch (_) {
+    if (current()) $('files-status').textContent = 'Could not load files. Try Refresh.';
+  }
+}
+
+$('open-files').addEventListener('click', () => { location.hash = '#/files'; closeDrawer(); });
+$('refresh-files').addEventListener('click', () => openFiles());
+
 // --- saved sign-ins and schedules ---
 
 async function openSignins() {
+  const view = state.view;
+  const current = () => state.view === view && location.hash === '#/sign-ins';
   const list = $('signin-list');
-  const sites = await api('/api/sign-ins');
+  const sites = await api('/api/sign-ins', {}, current);
+  if (!current()) return;
   list.replaceChildren(...(sites.length ? sites.map((s) => {
     const item = document.createElement('li');
     const name = document.createElement('span');
     name.textContent = s.site;
     item.append(name, button('Forget', 'secondary', async () => {
-      await api(`/api/sign-ins/${encodeURIComponent(s.site)}`, { method: 'DELETE' });
-      await openSignins();
+      await api(`/api/sign-ins/${encodeURIComponent(s.site)}`, { method: 'DELETE' }, current);
+      if (current()) await openSignins();
     }));
     return item;
-  }) : [Object.assign(document.createElement('li'), { textContent: 'No saved sign-ins yet. Sign in through browser takeover when Monty asks.' })]));
+  }) : [Object.assign(document.createElement('li'), { textContent: 'No saved browser data yet. Sign in through browser takeover when Monty asks.' })]));
   $('signins').hidden = false;
   $('signins-title').focus();
 }
 
 async function openSchedules() {
+  const view = state.view;
+  const current = () => state.view === view && location.hash === '#/schedules';
   const list = $('schedule-list');
   let schedules = [];
-  try { schedules = await api('/api/schedules'); } catch (error) { if (error.status !== 404) throw error; }
+  try { schedules = await api('/api/schedules', {}, current); } catch (error) { if (current() && error.status !== 404) throw error; }
+  if (!current()) return;
   list.replaceChildren(...(schedules.length ? schedules.map((s) => {
     const item = document.createElement('li');
     const name = document.createElement('span');
@@ -464,13 +707,16 @@ async function openSchedules() {
     const actions = document.createElement('span');
     actions.className = 'list-actions';
     actions.append(
+      button('Open conversation', 'secondary', () => {
+        location.hash = `#/t/${s.thread_id}`;
+      }),
       button(s.paused ? 'Resume' : 'Pause', 'secondary', async () => {
-        await api(`/api/schedules/${s.id}/${s.paused ? 'resume' : 'pause'}`, { method: 'POST', body: {} });
-        await openSchedules();
+        await api(`/api/schedules/${s.id}/${s.paused ? 'resume' : 'pause'}`, { method: 'POST', body: {} }, current);
+        if (current()) await openSchedules();
       }),
       button('Delete', 'bad', async () => {
-        await api(`/api/schedules/${s.id}`, { method: 'DELETE' });
-        await openSchedules();
+        await api(`/api/schedules/${s.id}`, { method: 'DELETE' }, current);
+        if (current()) await openSchedules();
       }),
     );
     item.append(name, actions);
@@ -508,16 +754,17 @@ async function enableNotifications() {
   await api('/api/push/subscriptions', { method: 'POST', body: subscription.toJSON() });
   $('enable-notifications').textContent = 'Notifications are on';
 }
-async function stopNotifications() {
+async function stopNotifications(current = () => true) {
   // On sign-out, so this browser no longer gets this account's pushes.
   if (!('serviceWorker' in navigator)) return;
   const registration = await navigator.serviceWorker.getRegistration('/sw.js');
+  if (!current()) return;
   const subscription = registration && await registration.pushManager.getSubscription();
-  if (!subscription) return;
+  if (!current() || !subscription) return;
   try {
-    await api('/api/push/subscriptions', { method: 'DELETE', body: { endpoint: subscription.endpoint } });
+    await api('/api/push/subscriptions', { method: 'DELETE', body: { endpoint: subscription.endpoint } }, current);
   } finally {
-    await subscription.unsubscribe();
+    if (current()) await subscription.unsubscribe();
   }
 }
 
@@ -534,32 +781,55 @@ function notify(ask) {
 // --- routing ---
 
 async function route() {
+  $('files').hidden = true;
+  $('layout').hidden = false;
   $('signins').hidden = true;
   $('schedules').hidden = true;
   const hash = location.hash;
-  const isPage = hash === '#/sign-ins' || hash === '#/schedules';
-  $('layout').hidden = isPage;
+  const pages = [['open-files', '#/files', 'Files'], ['open-signins', '#/sign-ins', 'Saved browser data'],
+    ['open-schedules', '#/schedules', 'Schedules']];
+  const page = pages.find(([, path]) => hash === path);
+  $('layout').hidden = Boolean(page);
+  if (page) {
+    state.view++;
+    stopPolling();
+    stopStream();
+    state.liveAsk = null;
+    stopWatching();
+  }
   updateBrowserButton();
-  for (const [id, path] of [['open-signins', '#/sign-ins'], ['open-schedules', '#/schedules']]) {
+  for (const [id, path] of pages) {
     if (hash === path) $(id).setAttribute('aria-current', 'page'); else $(id).removeAttribute('aria-current');
   }
-  if (isPage) $('title').textContent = hash === '#/sign-ins' ? 'Saved sign-ins' : 'Schedules';
-  if (isPage) {
+  if (page) {
+    $('title').textContent = page[2];
+    const opening = hash === '#/files' ? openFiles() : hash === '#/sign-ins' ? openSignins() : openSchedules();
     await loadThreads();
-    return hash === '#/sign-ins' ? openSignins() : openSchedules();
+    return opening;
   }
   const match = hash.match(/^#\/t\/([0-9a-f-]{36})$/);
-  await openThread(match ? match[1] : null);
+  const opening = openThread(match ? match[1] : null);
+  const view = state.view;
+  const thread = state.thread;
+  await opening;
+  if (state.view !== view || state.thread !== thread) return;
   await loadThreads();
 }
 
-async function start() {
+async function start(current) {
+  if (!current) {
+    const view = state.view;
+    const thread = state.thread;
+    current = () => state.view === view && state.thread === thread;
+  }
   try {
-    await api('/api/me');
+    await api('/api/me', {}, current);
   } catch (error) {
+    if (!current()) return;
     show('signin');
     return;
   }
+  if (!current()) return;
   show('main');
   if (!state.routing) {  // once, though signing in again after a 401 calls start() again
     state.routing = true;

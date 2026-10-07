@@ -20,7 +20,23 @@ The app is Starlette plus DBOS in one process (`montybot/app.py`, `montybot/work
 model requests and browser calls are steps, and questions, approvals and hand-offs wait in `DBOS.recv`
 (`montybot/approvals.py`). The agent's code runs in Monty through `run_code` (`montybot/code.py`), with the browser
 as host functions; with `MONTY_URL` set it runs on Full Monty. Its file calls (`pathlib`, `open`) reach the user's
-own directory under `WORKSPACES_DIR` at `/work`, where browser downloads land too (`montybot/workspaces.py`). The browser contract and service are in [`montybot/browser/`](montybot/browser/README.md).
+own directory under `WORKSPACES_DIR` at `/work`, where browser downloads land too (`montybot/workspaces.py`). Heavy
+Python (pandas, PDFs) runs through `run_python` in real CPython, in a bubblewrap jail per call on the same files
+(`montybot/cpython.py`, Linux only). The browser contract and service are in [`montybot/browser/`](montybot/browser/README.md).
+
+## Observability
+
+`LOGFIRE_TOKEN` is optional: without it, no telemetry is sent to Logfire. With it, the app exports fixed-label
+HTTP, database pool/query, run, browser and Monty durations, HTTP response status, and numeric model token usage
+(including prompt-cache reads/writes). Cache usage is part of the model request span: providers do not expose a
+separate cache duration. Trace/span IDs correlate operations; user content is not needed for tracing.
+
+Pydantic AI keeps `include_content=False` and passes through an allowlist adapter before export. Messages, tool
+arguments/results, code, page contents, typed input, cookies/storage state, credentials, hand-off IDs/links, full
+URLs and exception text are excluded. Exported resources carry only the fixed `service.name=montybot` label;
+environment/detector resource metadata is discarded. HTTP/SQL auto-instrumentation and model metrics are deliberately
+disabled because they can expose URL, query or provider metadata. Keep operation names literal and do not add argument
+capture when extending instrumentation. `tests/e2e/test_traces.py` checks the exported privacy boundary.
 
 ## Web workspace
 
@@ -41,12 +57,15 @@ uv run pytest tests/e2e/test_frontend.py          # responsive UI and local API 
 uv run pytest tests/e2e --browser=chromium      # the same end-to-end tests in real (headless) Chrome
 uv run pytest -m u2                             # one user path (u1 ... u6)
 MONTYBOT_TEST_MODEL=anthropic:claude-sonnet-4-5 uv run pytest tests/e2e --browser=chromium --live   # nightly
+tests/linux/run.sh tests/test_cpython.py tests/e2e/test_files.py   # the tests that need Linux and bwrap, in Docker
 ```
 
 End-to-end tests run the real app in its own process against Postgres (`MONTYBOT_TEST_POSTGRES`, or a container they
 start with Docker), the fixture sites in `tests/sites` (one per user path), a scripted model (`tests/e2e/scripts.py`)
 and a scripted human who drives hand-offs through the live-view API. With `MONTYBOT_TEST_MODEL` the same tests run
-against a real model; `--live` adds real sites (`tests/e2e/test_live.py`).
+against a real model; `--live` adds real sites (`tests/e2e/test_live.py`). The CPython tier's tests need Linux with
+bwrap and are skipped elsewhere; `tests/linux/run.sh` runs them in an Ubuntu container on any Docker host (colima on a
+Mac), reaching `MONTYBOT_TEST_POSTGRES` and `MONTYBOT_TEST_MONTY_URL` on the Docker host's network.
 
 ## Notes
 
@@ -60,3 +79,12 @@ Dated files in [`notes/`](notes/), newest last. Later notes win over earlier one
 - [2026-10-06 monty-bot plan and browser design](<notes/2026-10-06 monty-bot plan and browser design.md>): the goals
   agreed so far (a hosted consumer bot built on Viktor), how the browser and user takeover work on one server, bot
   checks, speed, and milestones. Draft for discussion with Mike.
+
+### Nightly checks with a real model
+
+`.github/workflows/nightly.yml` runs the U1-U6 fixture paths and the small live-site list on Chromium with a real
+model. It is disabled by default to avoid surprise cost. Set the repository variable `ENABLE_NIGHTLY_MODEL_TESTS=true`
+and the Actions secret `ANTHROPIC_API_KEY` to opt in; then use Actions > Nightly user paths > Run workflow, or the nightly
+schedule. Calls are sequential and bounded. A live-site challenge is a signal to inspect, not proof of a completed
+sign-in or checkout. No live page or session artifacts are uploaded. Servo comparison and real bot-check evaluations
+remain the browser-engine issues, not a conclusion drawn from these Chromium checks.

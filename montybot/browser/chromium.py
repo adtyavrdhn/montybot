@@ -70,6 +70,7 @@ from montybot.browser.contract import (
     TargetNotFound,
     Type,
 )
+from montybot.browser.egress import PROXY_PORT, EgressProxy
 from montybot.browser.live import FrameSource
 from montybot.browser.snapshot import JSON, SnapshotWalker
 from montybot.browser.state import BLANK_URL, BrowserState, Cookie, origin_of
@@ -86,7 +87,10 @@ class ChromiumOptions:
     virtual_screen: bool = False
     """Give each browser its own Xvfb screen (Linux, headed only)."""
     bwrap: bool = False
-    """Run Chrome inside bubblewrap with its own profile folder (Linux)."""
+    """Run Chrome inside bubblewrap with its own profile folder and network namespace (Linux). Its connections go out
+    through an `EgressProxy`, which refuses private addresses."""
+    allow_private_networks: bool = False
+    """With `bwrap`: let pages reach loopback and private addresses. Only for local fixture sites in tests."""
     window_width: int = 1280
     window_height: int = 800
     """The window's outer size in pixels, and the virtual screen's size. The page gets a little less."""
@@ -157,6 +161,7 @@ class _Chrome:
     context: BrowserContext
     page: Page
     screen: VirtualScreen | None = None
+    proxy: EgressProxy | None = None
     failed_url: str = BLANK_URL
     """The last page that failed to load. Chrome shows an error page for it, at `chrome-error://chromewebdata/`."""
     downloads: list[_Downloading] = field(default_factory=list['_Downloading'])
@@ -191,6 +196,8 @@ class _Chrome:
             await asyncio.wait_for(self.context.close(), 15)
         if self.screen is not None:
             await self.screen.stop()
+        if self.proxy is not None:
+            await self.proxy.stop()
         shutil.rmtree(self.workdir, ignore_errors=True)
 
 
@@ -201,6 +208,9 @@ async def _launch(playwright: Playwright, options: ChromiumOptions) -> _Chrome:
     downloads = profile / 'downloads'
     downloads.mkdir()
     screen: VirtualScreen | None = None
+    proxy: EgressProxy | None = None
+    context: BrowserContext | None = None
+    args = [*_ARGS, f'--window-size={options.window_width},{options.window_height}', *options.extra_args]
     try:
         executable = options.executable_path
         env: dict[str, str | float | bool] | None = None
@@ -215,12 +225,17 @@ async def _launch(playwright: Playwright, options: ChromiumOptions) -> _Chrome:
         if options.bwrap:
             if shutil.which(options.bwrap_path) is None:
                 raise ActionFailed(f'could not start Chrome: {options.bwrap_path} not found')
+            proxy = EgressProxy(workdir / 'egress.sock', allow_private=options.allow_private_networks)
+            await proxy.start()
+            # Every connection through the proxy, loopback too, which Chrome would otherwise connect to directly.
+            args += [f'--proxy-server=socks5://127.0.0.1:{PROXY_PORT}', '--proxy-bypass-list=<-loopback>']
             executable = str(
                 write_bwrap_script(
                     path=workdir / 'chrome-in-bwrap',
                     chrome=Path(executable or playwright.chromium.executable_path),
                     profile=profile,
                     display=screen.display if screen else None,
+                    proxy=proxy.path,
                     bwrap=options.bwrap_path,
                 )
             )
@@ -230,7 +245,7 @@ async def _launch(playwright: Playwright, options: ChromiumOptions) -> _Chrome:
             headless=options.headless,
             chromium_sandbox=True,
             ignore_default_args=_IGNORED_DEFAULT_ARGS,
-            args=[*_ARGS, f'--window-size={options.window_width},{options.window_height}', *options.extra_args],
+            args=args,
             no_viewport=True,
             # #21: downloads are kept for the run's files. They land in the profile folder, the one Chrome can write
             # to inside bwrap, and `take_downloads` reads and deletes them.
@@ -239,15 +254,20 @@ async def _launch(playwright: Playwright, options: ChromiumOptions) -> _Chrome:
             env=env,
             timeout=options.navigation_timeout * 1000,
         )
+        context.set_default_timeout(options.action_timeout * 1000)
+        context.set_default_navigation_timeout(options.navigation_timeout * 1000)
+        page = context.pages[0] if context.pages else await context.new_page()
     except BaseException:
+        if context is not None:
+            with contextlib.suppress(PlaywrightError, TimeoutError):
+                await asyncio.wait_for(context.close(), 15)
         if screen is not None:
             await screen.stop()
+        if proxy is not None:
+            await proxy.stop()
         shutil.rmtree(workdir, ignore_errors=True)
         raise
-    context.set_default_timeout(options.action_timeout * 1000)
-    context.set_default_navigation_timeout(options.navigation_timeout * 1000)
-    page = context.pages[0] if context.pages else await context.new_page()
-    return _Chrome(workdir=workdir, context=context, page=page, screen=screen)
+    return _Chrome(workdir=workdir, context=context, page=page, screen=screen, proxy=proxy)
 
 
 class ChromiumBackend:

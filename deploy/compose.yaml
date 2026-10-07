@@ -1,5 +1,7 @@
-# The whole product on one server: Postgres, the app with its jailed browsers, and Caddy for HTTPS.
-# deploy/deploy.sh runs it on the VM with the settings in /opt/montybot/.env (made by deploy/bootstrap.sh).
+# The whole product on one server: Postgres with a nightly backup, the app with its jailed browsers, and Caddy for
+# HTTPS. deploy/deploy.sh runs it on the VM with the settings in /opt/montybot/.env (made by deploy/bootstrap.sh).
+# Networks: Caddy and the app share `edge`; the app, Postgres and the backup share `db`. The browsers reach neither:
+# their only way out is the app's egress proxy, which refuses private addresses (montybot/browser/egress.py).
 name: montybot
 
 services:
@@ -16,6 +18,28 @@ services:
       test: ['CMD-SHELL', 'pg_isready -U montybot']
       interval: 2s
       retries: 30
+    networks: [db]
+
+  # pg_dump every night at BACKUP_AT (UTC) into /opt/montybot/backups, keeping BACKUP_KEEP_DAYS days of dumps.
+  # One now: `docker compose exec backup backup now`. Restore: deploy/backup.sh says how.
+  backup:
+    image: postgres:17
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: montybot
+      PGPASSWORD: ${POSTGRES_PASSWORD:?}
+      PGDATABASE: montybot
+      BACKUP_AT: ${BACKUP_AT:-03:00}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    entrypoint: ['/usr/local/bin/backup']
+    volumes:
+      - ./backup.sh:/usr/local/bin/backup:ro
+      - ${BACKUP_DIR:-/opt/montybot/backups}:/backups
+    networks: [db]
 
   app:
     build:
@@ -39,15 +63,27 @@ services:
       CLAUDE_CODE_CREDENTIALS: file
       CLAUDE_CODE_AUTH_FILE: /data/claude-code/auth.json
       WORKSPACES_DIR: /data/workspaces
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      JEV_ENABLED: ${JEV_ENABLED:-false}
+      JEV_MODEL: ${JEV_MODEL:-jev-latest}
+      JEV_THRESHOLD: ${JEV_THRESHOLD:-0.8}
       LOGFIRE_TOKEN: ${LOGFIRE_TOKEN:-}
+      MONTY_URL: ${MONTY_URL:-}
     volumes:
       - claude-code:/data/claude-code
       - workspaces:/data/workspaces
-    # bwrap makes new namespaces for each Chrome, which Docker's default seccomp and AppArmor profiles forbid, and
-    # mounts a fresh /proc, which the kernel refuses while Docker masks paths under /proc (systempaths).
+    # bwrap makes new namespaces for each Chrome. Docker's defaults forbid that, so (see deploy/README.md):
+    # - seccomp.json is Docker's default profile plus the namespace and mount calls bwrap makes;
+    # - AppArmor: docker-default refuses bwrap's mounts, so the container runs unconfined and the host's `bwrap`
+    #   profile (deploy/bootstrap.sh) is the one program allowed to make user namespaces;
+    # - systempaths: the kernel refuses a fresh /proc while Docker masks paths under /proc;
+    # - no capabilities but SYS_CHROOT, which Chrome's own sandbox needs inside its user namespace.
     # bwrap is the boundary between browsers; the container is not.
+    cap_drop: [ALL]
+    cap_add: [SYS_CHROOT]
     security_opt:
-      - seccomp=unconfined
+      - no-new-privileges
+      - seccomp=./seccomp.json
       - apparmor=unconfined
       - systempaths=unconfined
     shm_size: 1gb
@@ -55,6 +91,38 @@ services:
       test: ['CMD', 'python3', '-c', "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
       interval: 5s
       retries: 60
+    networks: [edge, db]
+
+  # Installed manually by build-monty.sh; never fetched from a registry or built by app CD.
+  monty-server:
+    profiles: [full-monty]
+    image: montybot-monty-server:${MONTY_PRIVATE_COMMIT:-not-installed}
+    pull_policy: never
+    restart: unless-stopped
+    # Both services default to a 30s drain window; allow it to finish before SIGKILL.
+    stop_grace_period: 60s
+    environment:
+      MONTY_SERVER_WORKER_URL: ws://monty-worker:8000/
+      MONTY_SERVER_OBJECT_STORE_URI: file:///var/lib/monty-server
+      MONTY_SERVER_DEFAULT_PERSISTENCE: stored
+    volumes:
+      # The private Dockerfile creates this path owned by 65532:65532; fresh volumes inherit it.
+      - monty-sessions:/var/lib/monty-server
+    networks: [edge, monty]
+    depends_on: [monty-worker]
+
+  monty-worker:
+    profiles: [full-monty]
+    image: montybot-monty-worker:${MONTY_PRIVATE_COMMIT:-not-installed}
+    pull_policy: never
+    restart: unless-stopped
+    # Both services default to a 30s drain window; allow it to finish before SIGKILL.
+    stop_grace_period: 60s
+    environment:
+      MONTY_WORKER_MAX_SESSIONS: '32'
+      MONTY_WORKER_MAX_MEMORY_MIB: '256'
+    # Only the relay reaches this tier. No published ports or external network.
+    networks: [monty]
 
   caddy:
     image: caddy:2
@@ -72,8 +140,16 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+    networks: [edge]
+
+networks:
+  edge: {}
+  db: {}
+  monty:
+    internal: true
 
 volumes:
+  monty-sessions: {}
   postgres: {}
   claude-code: {}
   workspaces: {}
