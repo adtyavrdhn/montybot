@@ -23,7 +23,9 @@ public final class LiveSession {
         }
     }
 
-    public private(set) var state: State = .connecting
+    public private(set) var state: State = .connecting {
+        didSet { if state.isOver, !oldValue.isOver { finish() } }
+    }
     public private(set) var reason: String
     public private(set) var frame: LiveFrame?
     public private(set) var tabs: [LiveTab] = []
@@ -54,10 +56,22 @@ public final class LiveSession {
     private var outlineRefresh: Task<Void, Never>?
     static let maxRetries = 6
 
-    public init(request: URLRequest, reason: String, session: URLSession) {
+    /// The takeover's span: counts, connections and how it ended; never what the user typed or where the page is.
+    @ObservationIgnored private let span: TraceSpan
+    @ObservationIgnored private var handingBack: TraceSpan?
+    @ObservationIgnored private var connections = 0
+    @ObservationIgnored private var reconnects = 0
+    @ObservationIgnored private var disconnects = 0
+    @ObservationIgnored private var frames = 0
+    @ObservationIgnored private var elsewhere = 0
+    /// How it ended, in a word, for the span.
+    @ObservationIgnored private var outcome: String?
+
+    public init(request: URLRequest, reason: String, session: URLSession, span: TraceSpan = .none) {
         self.request = request
         self.reason = reason
         self.session = session
+        self.span = span
     }
 
     public func connect() {
@@ -67,6 +81,11 @@ public final class LiveSession {
         let task = session.webSocketTask(with: request)
         task.maximumMessageSize = 16 * 1024 * 1024
         self.task = task
+        connections += 1
+        if retries > 0 {
+            reconnects += 1
+            span.event("reconnecting", ["monty.live.attempt": .int(retries)])
+        }
         state = retries == 0 ? .connecting : .reconnecting
         task.resume()
         receiving = Task { [weak self] in await self?.receive(on: task) }
@@ -74,6 +93,7 @@ public final class LiveSession {
 
     /// Take the hand-off back after it was opened somewhere else.
     public func reconnect() {
+        span.event("taken back")
         retries = 0
         connect()
     }
@@ -84,18 +104,25 @@ public final class LiveSession {
         receiving = nil
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
-        if !state.isOver { state = .ended(givenBack: false) }
+        if !state.isOver {
+            outcome = outcome ?? "closed"
+            state = .ended(givenBack: false)
+        }
     }
 
     public func giveBack() {
         guard state == .driving, !givingBack else { return }
         flush()
         givingBack = true  // from here on the page is Monty's again: no more input from the user
+        handingBack = span.child("hand back")
         send(.giveBack)
         givingBackTimeout = Task { [weak self] in
             try? await Task.sleep(for: .seconds(10))
             guard let self, !Task.isCancelled, self.givingBack, !self.state.isOver else { return }
             self.givingBack = false
+            self.handingBack?.set("monty.live.confirmed", false)
+            self.handingBack?.end()
+            self.handingBack = nil
             self.show("Monty didn't confirm. Try giving it back again.")
         }
     }
@@ -181,11 +208,15 @@ public final class LiveSession {
                 return
             }
             if self.task !== task { return }
-            if state != .driving, !state.isOver { state = .driving }
+            if state != .driving, !state.isOver {
+                state = .driving
+                span.event("connected", ["monty.live.connection": .int(connections)])
+            }
             switch message {
             case .data(let data):
                 guard let frame = LiveFrame(data: data), frame.seq >= (self.frame?.seq ?? 0) || self.frame == nil else { continue }
                 self.frame = frame
+                frames += 1
                 retries = 0  // only a picture proves the connection works; a hello alone does not
             case .string(let text):
                 guard let message = LiveServerMessage(json: text) else { continue }
@@ -210,6 +241,7 @@ public final class LiveSession {
         case .error(let text):
             show(text)
         case .ended(let givenBack):
+            outcome = givenBack ? "given back" : "ended"
             state = .ended(givenBack: givenBack)
             givingBack = false
             givingBackTimeout?.cancel()
@@ -233,29 +265,32 @@ public final class LiveSession {
         guard !state.isOver else { return }
         givingBack = false
         givingBackTimeout?.cancel()
+        let response = task?.response as? HTTPURLResponse
+        let status = response?.statusCode
+        disconnects += 1
+        span.event("disconnected", ["monty.live.close_code": .int(code), "http.response.status_code": status.map { .int($0) }])
         // A refused upgrade never opens the socket: the HTTP status says why. A 401 asking for basic auth is the
         // private server's site login, not Monty's session: the user is still signed in.
-        let response = task?.response as? HTTPURLResponse
         if let response, APIClient.basicRealm(response) != nil {
-            state = .failed("Monty's server didn't accept its site login. Quit and reopen Monty to enter it again.")
+            fail("site_login", "Monty's server didn't accept its site login. Quit and reopen Monty to enter it again.")
             return
         }
-        switch response?.statusCode {
-        case 401: signedOut = true; state = .failed("You were signed out. Sign in again to take over."); return
-        case 403: state = .failed("Monty's server refused this connection."); return
-        case 404: state = .failed("This hand-off is no longer open."); return
+        switch status {
+        case 401: signedOut = true; fail("signed_out", "You were signed out. Sign in again to take over."); return
+        case 403: fail("refused", "Monty's server refused this connection."); return
+        case 404: fail("not_found", "This hand-off is no longer open."); return
         default: break
         }
         switch code {
-        case LiveCloseCode.ended: state = .ended(givenBack: false)
-        case LiveCloseCode.notFound: state = .failed("This hand-off is no longer open.")
-        case LiveCloseCode.signedOut: signedOut = true; state = .failed("You were signed out. Sign in again to take over.")
-        case LiveCloseCode.replaced: state = .elsewhere
-        case 1008: state = .failed("Monty's server refused this connection.")
+        case LiveCloseCode.ended: outcome = "ended"; state = .ended(givenBack: false)
+        case LiveCloseCode.notFound: fail("not_found", "This hand-off is no longer open.")
+        case LiveCloseCode.signedOut: signedOut = true; fail("signed_out", "You were signed out. Sign in again to take over.")
+        case LiveCloseCode.replaced: elsewhere += 1; state = .elsewhere
+        case 1008: fail("refused", "Monty's server refused this connection.")
         default:
             retries += 1
             guard retries <= Self.maxRetries else {
-                state = .failed("Couldn't reconnect to Monty's browser.")
+                fail("gave_up", "Couldn't reconnect to Monty's browser.")
                 return
             }
             state = .reconnecting
@@ -266,5 +301,29 @@ public final class LiveSession {
                 self.connect()
             }
         }
+    }
+
+    private func fail(_ kind: String, _ message: String) {
+        outcome = kind
+        state = .failed(message)
+    }
+
+    /// Ends the takeover's span (its duration is the takeover's), with what happened.
+    private func finish() {
+        let givenBack = state == .ended(givenBack: true)
+        handingBack?.set("monty.live.confirmed", givenBack)
+        handingBack?.end()
+        handingBack = nil
+        span.set("monty.live.outcome", outcome ?? "ended")
+        span.set("monty.live.given_back", givenBack)
+        span.set("monty.live.connections", connections)
+        span.set("monty.live.reconnects", reconnects)
+        span.set("monty.live.disconnects", disconnects)
+        span.set("monty.live.frames", frames)
+        span.set("monty.live.elsewhere", elsewhere)
+        if case .failed = state {
+            span.set("error.type", outcome ?? "failed")
+        }
+        span.end()
     }
 }

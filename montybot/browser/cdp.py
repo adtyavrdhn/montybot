@@ -763,7 +763,7 @@ class ChromiumCDPBackend:
             chrome.tabs[tab.target_id] = tab
             _listen_to_downloads(chrome)
             self._listen(chrome, tab)
-            _refuse_passkeys_in_popups(connection)
+            await _refuse_passkeys_in_new_pages(connection)
             await connection.send(
                 'Browser.setDownloadBehavior',
                 {'behavior': 'allowAndName', 'downloadPath': str(chrome.download_dir), 'eventsEnabled': True},
@@ -1083,23 +1083,30 @@ async def _refuse_passkeys(connection: CDPConnection, session: str) -> None:
     await connection.send('WebAuthn.addVirtualAuthenticator', {'options': _NO_PASSKEYS}, session=session)
 
 
-def _refuse_passkeys_in_popups(connection: CDPConnection) -> None:
-    """Do the same in every popup or tab a page opens, as Chrome reports it (`Target.setDiscoverTargets` is on). A
-    sign-in popup loads its page from the site first, so this is in place before the page can ask. The session stays
-    attached, since the empty key lives with it."""
+async def _refuse_passkeys_in_new_pages(connection: CDPConnection) -> None:
+    """Do the same in every page Chrome opens from now on: popups and tabs a page opens, and other runs' tabs. Chrome
+    holds each at its start (`Target.setAutoAttach` with `waitForDebuggerOnStart`, pages only) until it is set up and
+    let go, so not even a page that asks at once can reach Chrome's dialog first. The session stays attached, since
+    the empty key lives with it. Our own tabs get one in `_attach` too; a second empty key changes nothing."""
 
-    def created(params: CDPParams) -> None:
-        info = cast(CDPParams, params['targetInfo'])
-        if info.get('type') != 'page' or not info.get('openerId'):
-            return
+    def attached(params: CDPParams) -> None:
+        if not params.get('waitingForDebugger'):
+            return  # a page that was already running when this started
+        session = str(params['sessionId'])
 
         async def set_up() -> None:
-            attached = await connection.send('Target.attachToTarget', {'targetId': info['targetId'], 'flatten': True})
-            await _refuse_passkeys(connection, str(attached['sessionId']))
+            try:
+                with contextlib.suppress(CDPError):
+                    await _refuse_passkeys(connection, session)
+            finally:
+                await connection.send('Runtime.runIfWaitingForDebugger', session=session)
 
         asyncio.ensure_future(set_up()).add_done_callback(_ignore_result)
 
-    connection.on('Target.targetCreated', created)
+    connection.on('Target.attachedToTarget', attached)
+    connection.on('Target.detachedFromTarget', lambda params: connection.drop_session(str(params['sessionId'])))
+    auto_attach = {'autoAttach': True, 'waitForDebuggerOnStart': True, 'flatten': True, 'filter': [{'type': 'page'}]}
+    await connection.send('Target.setAutoAttach', auto_attach)
 
 
 def _ignore_result(future: asyncio.Future[_T]) -> None:
