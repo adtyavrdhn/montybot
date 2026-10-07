@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+@preconcurrency import OpenTelemetryApi
 
 public enum Route: Hashable, Sendable {
     /// A chat; nil is a new one.
@@ -63,7 +64,13 @@ public final class AppModel {
     /// Whether the user is driving Monty's browser: until they hand it back or close it, the app stays there.
     public var isTakingOver: Bool { chat?.live.map { !$0.state.isOver } ?? false }
     /// Whether the app is in front, and its window open; notifications are for when the user is not looking.
-    public var isActive = true
+    public var isActive = true {
+        didSet {
+            guard isActive != oldValue else { return }
+            telemetry.log(isActive ? "app foregrounded" : "app backgrounded")
+            if !isActive { telemetry.flush() }  // the user may quit, or the Mac sleep, from here
+        }
+    }
     public var isWindowVisible = true
     /// Called for each notice; the app shows it in Notification Center.
     public var notify: ((Notice) -> Void)?
@@ -78,6 +85,7 @@ public final class AppModel {
     }
 
     public var serverURL: URL { client.baseURL }
+    public var telemetry: Telemetry { client.telemetry }
     /// Chats waiting for the user, most recent first.
     public var needsYou: [ThreadSummary] { threads.filter { $0.status == .waiting } }
     public var working: [ThreadSummary] { threads.filter { $0.status?.isWorking == true } }
@@ -92,6 +100,9 @@ public final class AppModel {
     /// Counts changes made here to the chat list; a read that started before one is stale.
     private var localChanges = 0
     private var retrying: Task<Void, Never>?
+    /// When the app started, for its launch span (sent once telemetry is on, after sign-in).
+    private let launched = Date()
+    private var launchLogged = false
 
     public init(serverURL: URL? = nil, cookies: HTTPCookieStorage = .shared, defaults: UserDefaults = .standard) {
         self.cookies = cookies
@@ -124,7 +135,7 @@ public final class AppModel {
         } catch {}
         guard client.hasSessionCookie else { phase = .signedOut; return }
         do {
-            signedIn(try await client.me())
+            signedIn(try await client.me(), as: "session resumed")
         } catch APIError.signedOut {
             phase = .signedOut
         } catch {
@@ -160,11 +171,13 @@ public final class AppModel {
     }
 
     public func signIn(email: String, password: String) async throws {
-        signedIn(try await client.signIn(email: email.trimmingCharacters(in: .whitespaces), password: password))
+        let started = Date()
+        signedIn(try await client.signIn(email: email.trimmingCharacters(in: .whitespaces), password: password), as: "sign in", started: started)
     }
 
     public func signUp(email: String, password: String) async throws {
-        signedIn(try await client.signUp(email: email.trimmingCharacters(in: .whitespaces), password: password))
+        let started = Date()
+        signedIn(try await client.signUp(email: email.trimmingCharacters(in: .whitespaces), password: password), as: "sign up", started: started)
     }
 
     public func requestPasswordReset(email: String) async throws {
@@ -172,11 +185,16 @@ public final class AppModel {
     }
 
     public func resetPassword(email: String, code: String, password: String) async throws {
+        let started = Date()
         signedIn(try await client.resetPassword(email: email.trimmingCharacters(in: .whitespaces),
-                                                code: code.trimmingCharacters(in: .whitespaces), password: password))
+                                                code: code.trimmingCharacters(in: .whitespaces), password: password),
+                 as: "reset password", started: started)
     }
 
     public func signOut() async {
+        // Said, and sent, while the session still lets the server take it.
+        telemetry.log("sign out")
+        await telemetry.shutdown()
         try? await client.signOut()
         client.clearSession()
         reset()
@@ -187,6 +205,9 @@ public final class AppModel {
     /// The server said the session is over (expired, or signed out elsewhere).
     public func sessionEnded() {
         guard user != nil else { return }
+        telemetry.log("session ended")  // sent only if the server still takes it
+        let telemetry = telemetry
+        Task { await telemetry.shutdown() }
         client.clearSession()
         reset()
         signedOutReason = "Your session ended. Sign in again to carry on."
@@ -196,19 +217,30 @@ public final class AppModel {
     /// Talk to another server (signed out of this one).
     public func useServer(_ url: URL) {
         guard url != client.baseURL else { return }
+        let telemetry = telemetry
+        Task { await telemetry.shutdown() }
         reset()
         defaults.set(url.absoluteString, forKey: "serverURL")
         client = APIClient(baseURL: url, cookies: cookies, siteLogin: Self.siteLogins(defaults)[url.absoluteString])
         phase = .signedOut
     }
 
-    private func signedIn(_ user: User) {
+    /// `how` names the span telemetry gets for it, from `started`: it is only on (or off) once signed in.
+    private func signedIn(_ user: User, as how: String, started: Date = Date()) {
         retrying?.cancel()
         offline = false
         signedOutReason = nil
         phase = .signedIn(user)
         open(.chat(nil))
         startWatching()
+        let client = client
+        let launch = launchLogged ? nil : launched
+        launchLogged = true
+        Task {
+            await client.startTelemetry(userId: user.id)
+            if let launch { client.telemetry.log("app launch", ["monty.signed_in": .string(how)], start: launch) }
+            client.telemetry.log(how, start: started)
+        }
     }
 
     private func reset() {
@@ -263,11 +295,11 @@ public final class AppModel {
             let title = threads.first(where: { $0.id == id })?.title ?? ""
             let model = ChatModel(app: self, threadId: id, title: title)
             chat = model
-            Task { await model.load() }
-        case .schedules: Task { await loadSchedules() }
-        case .files: Task { await loadFiles() }
-        case .signIns: Task { await loadSavedSites() }
-        case .memory: Task { await loadMemories() }
+            if let id { Task { await telemetry.action("open chat", ["monty.thread_id": .string(id)]) { _ in await model.load() } } }
+        case .schedules: Task { await telemetry.action("open schedules") { _ in await loadSchedules() } }
+        case .files: Task { await telemetry.action("open files") { _ in await loadFiles() } }
+        case .signIns: Task { await telemetry.action("open saved sign-ins") { _ in await loadSavedSites() } }
+        case .memory: Task { await telemetry.action("open memory") { _ in await loadMemories() } }
         }
     }
 
@@ -355,7 +387,8 @@ public final class AppModel {
         watching = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                await self.loadThreads()
+                // Polling: no spans of its own, and not part of the sign-in that started it.
+                await Telemetry.$parent.withValue(nil) { await Telemetry.$quiet.withValue(true) { await self.loadThreads() } }
                 // Quick while Monty works, so a question or a finished task is noticed within seconds; calmer while
                 // chats only wait for the user.
                 let working = self.threads.contains { $0.status?.isWorking == true }
@@ -383,20 +416,36 @@ public final class AppModel {
                 guard let detail = try? await client.thread(thread.id) else { untold(thread, before); continue }
                 guard let ask = detail.run?.ask, notified.insert(ask.id).inserted else { continue }
                 let kind = Notice.Kind(rawValue: ask.kind.rawValue) ?? .question
-                notify(Notice(kind: kind, threadId: thread.id, title: Self.headline(for: ask.kind), body: ask.prompt))
+                let notice = Notice(kind: kind, threadId: thread.id, title: Self.headline(for: ask.kind), body: ask.prompt)
+                notify(notice)
+                noticePosted(notice, run: detail.run?.id, ask: ask.id)
             } else if thread.status == nil, before?.isActive == true, !looking {
                 guard let detail = try? await client.thread(thread.id) else { untold(thread, before); continue }
                 guard let run = detail.run else { continue }
+                let notice: Notice
                 switch run.status {
                 case .done:
                     let reply = run.output ?? detail.messages.last(where: { $0.role == .assistant })?.text ?? "Monty finished."
-                    notify(Notice(kind: .finished, threadId: thread.id, title: thread.title.readableTitle, body: Self.plain(reply)))
+                    notice = Notice(kind: .finished, threadId: thread.id, title: thread.title.readableTitle, body: Self.plain(reply))
                 case .failed:
-                    notify(Notice(kind: .finished, threadId: thread.id, title: thread.title.readableTitle, body: "Monty couldn't finish this task."))
+                    notice = Notice(kind: .finished, threadId: thread.id, title: thread.title.readableTitle, body: "Monty couldn't finish this task.")
                 default:
                     continue  // stopped: the user did that themselves
                 }
+                notify(notice)
+                noticePosted(notice, run: run.id, status: run.status)
             }
+        }
+    }
+
+    private func noticePosted(_ notice: Notice, run: String?, ask: String? = nil, status: RunStatus? = nil) {
+        telemetry.log("notification posted", [
+            "monty.notice.kind": .string(notice.kind.rawValue), "monty.thread_id": .string(notice.threadId),
+            "monty.run_id": run.map { .string($0) }, "monty.ask_id": ask.map { .string($0) },
+            "monty.run.status": status.map { .string($0.rawValue) },
+        ]) {
+            $0.content("monty.notice.title", notice.title)
+            $0.content("monty.notice.body", notice.body)
         }
     }
 
@@ -424,7 +473,11 @@ public final class AppModel {
     public func rename(_ thread: ThreadSummary, to title: String) async {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, title != thread.title else { return }
-        if await library({ try await self.client.rename(thread: thread.id, to: title) }) != nil {
+        let renamed = await telemetry.action("rename chat", ["monty.thread_id": .string(thread.id)]) { span in
+            span.content("monty.title", title)
+            return await library({ try await self.client.rename(thread: thread.id, to: title) }) != nil
+        }
+        if renamed {
             if let index = threads.firstIndex(where: { $0.id == thread.id }) {
                 threads[index] = ThreadSummary(id: thread.id, title: title, status: threads[index].status, outcome: threads[index].outcome)
             }
@@ -436,7 +489,10 @@ public final class AppModel {
 
     /// Deletes the chat; if it is the one on screen, a new task takes its place.
     public func delete(_ thread: ThreadSummary) async {
-        guard await library({ try await self.client.delete(thread: thread.id) }) != nil else { return }
+        let deleted = await telemetry.action("delete chat", ["monty.thread_id": .string(thread.id)]) { _ in
+            await library({ try await self.client.delete(thread: thread.id) }) != nil
+        }
+        guard deleted else { return }
         drafts[thread.id] = nil
         answerDrafts = answerDrafts.filter { $0.value.threadId != thread.id }
         chatVanished(thread.id)
@@ -450,31 +506,46 @@ public final class AppModel {
     public func loadMemories() async { memories = await library { try await self.client.memories() } ?? memories }
 
     public func setPaused(_ schedule: Schedule, _ paused: Bool) async {
-        if let updated = await library({ try await self.client.setPaused(schedule.id, paused) }) {
+        let updated = await telemetry.action(paused ? "pause schedule" : "resume schedule", ["monty.schedule_id": .string(schedule.id)]) { _ in
+            await library({ try await self.client.setPaused(schedule.id, paused) })
+        }
+        if let updated {
             schedules = schedules?.map { $0.id == updated.id ? updated : $0 }
         }
     }
 
     public func delete(_ schedule: Schedule) async {
-        if await library({ try await self.client.deleteSchedule(schedule.id) }) != nil {
+        let deleted = await telemetry.action("delete schedule", ["monty.schedule_id": .string(schedule.id)]) { _ in
+            await library({ try await self.client.deleteSchedule(schedule.id) }) != nil
+        }
+        if deleted {
             schedules?.removeAll { $0.id == schedule.id }
         }
     }
 
     public func forget(_ site: SavedSite) async {
-        if await library({ try await self.client.forget(site: site.site) }) != nil {
+        let forgotten = await telemetry.action("forget sign-in", ["monty.site": .string(site.site)]) { _ in
+            await library({ try await self.client.forget(site: site.site) }) != nil
+        }
+        if forgotten {
             savedSites?.removeAll { $0.site == site.site }
         }
     }
 
     public func forget(_ memory: Memory) async {
-        if await library({ try await self.client.deleteMemory(memory.id) }) != nil {
+        let forgotten = await telemetry.action("forget memory", ["monty.memory_id": .string(memory.id)]) { _ in
+            await library({ try await self.client.deleteMemory(memory.id) }) != nil
+        }
+        if forgotten {
             memories?.removeAll { $0.id == memory.id }
         }
     }
 
+    /// The file's name and path stay on the Mac; its size may go.
     public func download(_ file: WorkspaceFile) async -> (data: Data, name: String)? {
-        await library { try await self.client.download(file.path) }
+        await telemetry.action("download file", ["monty.file.size": .int(file.size)]) { _ in
+            await library { try await self.client.download(file.path) }
+        }
     }
 
     private func library<T>(_ call: () async throws -> T) async -> T? {
@@ -486,6 +557,7 @@ public final class AppModel {
             sessionEnded()
         } catch let error as APIError {
             libraryError = error.localizedDescription
+            telemetry.shown(error, libraryError, ["monty.route": .string(String(describing: route).components(separatedBy: "(").first ?? "")])
         } catch {}
         return nil
     }

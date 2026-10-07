@@ -13,6 +13,9 @@ from playwright.sync_api import Page, Route, expect, sync_playwright
 
 STATIC = Path(__file__).resolve().parents[2] / 'montybot' / 'static'
 THREAD = '11111111-1111-1111-1111-111111111111'
+RUN = '22222222-2222-2222-2222-222222222222'
+ASK = '33333333-3333-3333-3333-333333333333'
+USER = '44444444-4444-4444-4444-444444444444'
 
 
 @dataclass(kw_only=True)
@@ -26,15 +29,26 @@ class MockAPI:
     files_truncated: bool = False
     download_status: int = 200
     thread_status: str | None = None
+    telemetry: bool = False  # whether the server sends telemetry to Logfire
+    include_content: bool = False
     calls: list[tuple[str, str, object]] = field(default_factory=list)
+    traceparents: dict[tuple[str, str], str] = field(default_factory=dict)  # (method, path): the last one sent
+    exported: list[tuple[str, str]] = field(default_factory=list)  # (path, raw body) POSTed to /api/telemetry/v1
 
     def handle(self, route: Route) -> None:
         request = route.request
         path = request.url.split('monty.test', 1)[1]
         method = request.method
+        if path.startswith('/api/telemetry/v1/'):
+            self.calls.append((method, path, None))
+            self.exported.append((path, request.post_data or ''))
+            route.fulfill(status=200, body='{}', content_type='application/json')
+            return
         body = request.post_data_json if request.post_data else None
         self.calls.append((method, path, body))
-        if path == '/':
+        if traceparent := request.headers.get('traceparent'):
+            self.traceparents[(method, path)] = traceparent
+        if path.split('?', 1)[0] == '/':
             route.fulfill(path=str(STATIC / 'index.html'), content_type='text/html')
             return
         if path.startswith('/static/'):
@@ -46,6 +60,14 @@ class MockAPI:
         result: object = {}
         if path == '/api/me':
             status = 200 if self.signed_in else 401
+            result = {'id': USER, 'email': 'pat@example.test', 'name': 'Pat'} if self.signed_in else {}
+        elif path == '/api/telemetry':
+            result = {
+                'enabled': self.telemetry,
+                'include_content': self.include_content,
+                'environment': 'test',
+                'version': 'abc123',
+            }
         elif path in ('/api/signin', '/api/signup'):
             self.signed_in = True
             status = 201 if path == '/api/signup' else 200
@@ -62,7 +84,7 @@ class MockAPI:
                 {'role': 'user', 'text': body['text']},
                 {'role': 'assistant', 'text': 'Here are the options.'},
             ]
-            result = {'thread_id': THREAD}
+            result = {'thread_id': THREAD, 'run_id': RUN}
             status = 201
         elif path == f'/api/threads/{THREAD}':
             result = {'title': 'Compare flights to Lisbon', 'messages': self.messages, 'run': self.run}
@@ -845,3 +867,112 @@ def test_enter_mid_word_in_an_input_method_does_not_send(frontend: tuple[Page, M
     page.dispatch_event('#message', 'keydown', {'key': 'Enter', 'isComposing': True})
     assert not any(method == 'POST' for method, _, _ in mock.calls)
     expect(page.locator('#message')).to_have_value('にほん')
+
+
+# --- telemetry: the web app's own, forwarded to Logfire by the server ---
+
+UUID_URL = re.compile(r'/(?:threads|runs|asks|schedules|t)/[0-9a-f]{8}-[0-9a-f]{4}-')
+
+
+def telemetry_started(page: Page) -> bool:
+    page.wait_for_function('telemetryRun !== null')
+    return page.evaluate('telemetryRun.then(Boolean)')
+
+
+def flush_telemetry(page: Page, mock: MockAPI, *expected: str) -> str:
+    """Send the spans telemetry holds, as the browser does when the page is hidden, until they include `expected`."""
+    exported = ''
+    for _ in range(10):
+        with page.expect_request('**/api/telemetry/v1/traces'):
+            page.evaluate("document.dispatchEvent(new Event('pagehide'))")
+        exported = '\n'.join(body for path, body in mock.exported if path == '/api/telemetry/v1/traces')
+        if all(text in exported for text in expected):
+            return exported
+    pytest.fail(f'never exported: {[text for text in expected if text not in exported]}')
+
+
+def test_without_telemetry_nothing_is_loaded_or_sent(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    workspace(page, mock)
+    assert not telemetry_started(page)
+    page.fill('#message', 'Compare flights')
+    page.click('#send')
+    expect(page.locator('.msg.assistant')).to_have_text('Here are the options.')
+    assert ('GET', '/api/telemetry', None) in mock.calls
+    paths = [path for _, path, _ in mock.calls]
+    assert not [path for path in paths if path.startswith(('/static/telemetry', '/static/vendor', '/api/telemetry/'))]
+    assert not mock.traceparents
+
+
+def test_telemetry_traces_actions_as_route_templates_and_never_secrets(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.telemetry = True
+    page.goto('http://monty.test/?ref=secretquery#/new')
+    page.fill('#email', 'pat@example.test')
+    page.fill('#password', 'hunter2 horse battery')
+    page.click('#signin-button')
+    expect(page.locator('#composer')).to_be_visible()
+    assert telemetry_started(page)
+    page.fill('#message', 'Compare flights to Porto')
+    page.click('#send')
+    expect(page.locator('.msg.assistant')).to_have_text('Here are the options.')
+    # A hand-off: its link names it, and must not be sent.
+    page.route(
+        '**/api/runs/*/live',
+        lambda route: route.fulfill(content_type='application/json', body='{"url":"/live/handoff/secret-handoff-id"}'),
+    )
+    page.route(
+        '**/live/handoff/**',
+        lambda route: route.fulfill(
+            content_type='text/html',
+            body='<button onclick="parent.postMessage({kind: \'close-takeover\'}, location.origin)">Back to chat</button>',
+        ),
+    )
+    mock.run = {
+        'id': RUN,
+        'thread_id': THREAD,
+        'status': 'waiting',
+        'activity': [],
+        'ask': {'id': ASK, 'kind': 'handoff', 'prompt': 'Sign in to the shop.'},
+    }
+    page.evaluate('loadChat()')
+    page.get_by_role('button', name='Take over the browser').click()
+    expect(page.locator('#live')).to_be_visible()
+    page.frame_locator('#live').get_by_role('button', name='Back to chat').click()
+    expect(page.locator('#takeover')).not_to_be_visible()
+
+    exported = flush_telemetry(
+        page,
+        mock,
+        'send message',
+        'POST /api/threads',
+        '/api/threads/{thread_id}',
+        '/api/runs/{run_id}/live',
+        'take over the browser',
+        'live view open',
+        'signed in',
+    )
+    assert json.loads(exported.splitlines()[0])['resourceSpans']  # OTLP JSON
+    assert 'montybot-web' in exported
+    assert USER in exported  # the user is their opaque id
+    assert RUN in exported  # as an attribute, not in an address
+    assert mock.traceparents[('POST', '/api/threads')]  # the server joins the trace
+    everything = '\n'.join(body for _, body in mock.exported)
+    for secret in ('hunter2', 'pat@example.test', 'secret-handoff-id', '/live/handoff', 'secretquery', '#/t/'):
+        assert secret not in everything
+    assert not UUID_URL.search(everything)
+
+
+@pytest.mark.parametrize('include_content', [True, False])
+def test_telemetry_sends_message_text_only_as_content(frontend: tuple[Page, MockAPI], include_content: bool) -> None:
+    page, mock = frontend
+    mock.telemetry = True
+    mock.include_content = include_content
+    workspace(page, mock)
+    assert telemetry_started(page)
+    page.fill('#message', 'Compare flights to Porto')
+    page.click('#send')
+    expect(page.locator('.msg.assistant')).to_have_text('Here are the options.')
+    exported = flush_telemetry(page, mock, 'send message')
+    assert ('Compare flights to Porto' in exported) == include_content
+    assert ('text_length' in exported) != include_content

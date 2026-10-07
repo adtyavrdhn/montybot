@@ -90,6 +90,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// The last few seconds' spans, which the batch has not sent yet.
+    func applicationWillTerminate(_ notification: Notification) {
+        app.telemetry.flushBeforeQuitting()
+    }
+
     /// Closing the window keeps Monty in the menu bar, where it still says when a task needs you.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 

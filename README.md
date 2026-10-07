@@ -34,7 +34,8 @@ these decisions directly. Experimental Jev helpers remain available in the sourc
 
 - **Always:** Pydantic AI's agent, model and tool spans with model, provider and tool names, token and cache usage
   (so Logfire shows cost) and the conversation's shape; database, run,
-  browser and Monty timings; the site a browser step opens (host only); `run_id` on every span of a run and
+  browser and Monty timings; the site a browser step opens (host only); outgoing HTTP calls made with httpx, such as
+  model provider requests (method, URL and status, never headers or bodies); `run_id` on every span of a run and
   `thread_id`/`user_id` on `run.lifecycle`; exception types; the commit (`service.version`) and `ENVIRONMENT`;
   token and system (CPU, memory) metrics.
 - **With `LOGFIRE_INCLUDE_CONTENT` (default on, for the demo):** messages, replies, instructions (with the user's
@@ -45,6 +46,15 @@ these decisions directly. Experimental Jev helpers remain available in the sourc
   cookie, session and so on, including a sign-in page's snapshot.
 
 `tests/e2e/test_traces.py` holds these lines through a whole sign-in hand-off and order, with content on and off.
+
+The web and Mac apps send their own telemetry too, to the same Logfire project: page loads, Web Vitals, every API
+call by route template, the user's actions, the live view, and errors. They post OTLP to `/api/telemetry/v1/...`,
+which forwards it with the server's token, for signed-in users only, so neither app holds a token. `GET
+/api/telemetry` tells them whether to send anything (only with `LOGFIRE_TOKEN`) and whether to include content. A
+traced action sends `traceparent`, and the server's database, run and agent spans for it join the app's trace; there
+are still no HTTP server spans, and requests without the header, such as polling, are not traced. Forwarded data
+skips the server's scrubbing, so each app keeps to the lines above itself: URLs only as route templates, nothing
+from under `/live/`, no passwords, emails or file names, and content only with `LOGFIRE_INCLUDE_CONTENT`.
 
 ## Web workspace
 

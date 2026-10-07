@@ -2,7 +2,8 @@
 
 Always exported: span names, model/provider/tool names, token usage and cost, the conversation's shape, the deploy's
 commit and environment, the run/thread/user ids (random UUIDs), the site
-(host) a browser step visits, exception types, metrics and system metrics.
+(host) a browser step visits, outgoing HTTP calls made with httpx (method, URL, status; never headers or bodies),
+exception types, metrics and system metrics.
 
 Exported only with `LOGFIRE_INCLUDE_CONTENT` (on by default for the demo): messages, replies, instructions (which
 include the user's memories), the code the agent writes, page snapshots, and exception messages and tracebacks.
@@ -11,6 +12,11 @@ Never exported, whatever the settings: cookies and browser state, saved sign-ins
 session cookies, app secrets and API keys, hand-off ids and links, and push subscription URLs. None of these reach
 the agent. HTTP server requests are not traced.
 `tests/e2e/test_traces.py` holds these lines.
+
+The web and Mac apps send their own telemetry through `/api/telemetry/v1/...` (`api.forward_telemetry`), which
+forwards it to Logfire with the server's token. Forwarded data is not scrubbed here, so each client keeps to the same
+lines itself (`montybot/static/telemetry.js`, `macos/Sources/MontyKit/Telemetry.swift`). A client that traces an
+action sends `traceparent`, and `ClientTraceContext` puts the server's spans for that request in the client's trace.
 """
 
 from __future__ import annotations
@@ -24,10 +30,12 @@ from typing import Any, Literal, ParamSpec, TypeVar
 
 import logfire
 from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSWorkflowCancelledError
-from opentelemetry import trace
+from opentelemetry import context, trace
 from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.trace import Span, StatusCode
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from pydantic_monty import MontyError
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from montybot.browser.contract import BrowserError, LifecycleError
 from montybot.settings import Settings
@@ -52,6 +60,7 @@ def configure_observability(settings: Settings, *, span_processors: Sequence[Spa
         additional_span_processors=span_processors,
     )
     logfire.instrument_pydantic_ai(include_content=_include_content, version=5)
+    logfire.instrument_httpx()  # outgoing calls (model providers among them); never headers or bodies
     logfire.instrument_system_metrics()
 
 
@@ -109,3 +118,33 @@ def timed(name: str) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Corout
         return wrapped
 
     return decorate
+
+
+_TRACE_CONTEXT = TraceContextTextMapPropagator()
+_TRACE_HEADERS = (b'traceparent', b'tracestate')
+
+
+class ClientTraceContext:
+    """Continue a client's trace (W3C `traceparent`) for one request, without a span of its own.
+
+    The request's database spans, and a run it starts, join the client's trace. Requests without the header, such as
+    the apps' polling, are untraced as before. Only trace context is read: client baggage would set span attributes.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        carrier = {
+            name.decode('latin-1'): value.decode('latin-1')
+            for name, value in scope.get('headers', ())
+            if name in _TRACE_HEADERS
+        }
+        if scope['type'] not in ('http', 'websocket') or 'traceparent' not in carrier:
+            await self.app(scope, receive, send)
+            return
+        token = context.attach(_TRACE_CONTEXT.extract(carrier))
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            context.detach(token)
