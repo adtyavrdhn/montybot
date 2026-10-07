@@ -1,9 +1,12 @@
 """`BrowserHost`: the browser service. It owns every browser and implements `BrowserService` over any backend.
 
-- **One browser per run.** `start` makes a backend with `new_backend()` and opens it from the user's saved state. A
-  retry of the same run gets the same browser back, so a browser outlives the agent attempt that started it.
-- **One run per user.** A run holds the user's `JarLease` from `start` until `close`. Another run of the same user
-  gets `UserBusy` until then, so two runs never save over each other.
+- **One browser per run, or one tab per run.** `start` makes a backend with `new_backend()` and opens it from the
+  user's saved state. With `share_browser`, a run of a user whose browser is open gets a tab of that browser instead
+  (`TabsBackend.new_tab`), sharing its cookies, so runs of one user work side by side. A retry of the same run gets
+  the same browser or tab back, so it outlives the agent attempt that started it.
+- **One browser per user.** A run holds the user's `JarLease` from `start` until `close`. Without `share_browser`,
+  another run of the same user gets `UserBusy` until then, so two browsers never save over each other. With it, runs
+  share the lease, and the one browser they share is the only writer.
 - **Saving.** `save_state`, `end_handoff`, `close` and the idle reaper export the browser's state into the user's
   `SignInJar`. Call `save_state` before pausing a run, so a crash during the pause loses nothing.
 - **Idle reaper.** Inside `async with BrowserHost(...)`, a task saves and closes every browser that has not been used
@@ -39,6 +42,7 @@ from montybot.browser.contract import (
     DownloadsBackend,
     NotSupported,
     Screenshot,
+    TabsBackend,
     TargetNotFound,
 )
 from montybot.browser.jar import JarLease, SignInJar
@@ -114,7 +118,8 @@ class BrowserHost:
     """The browser service, in-process. See the module docstring.
 
     `idle_timeout` is in seconds. `reap_every` is how often the reaper looks, by default a quarter of `idle_timeout`
-    and at most a minute.
+    and at most a minute. `share_browser` (for an engine with tabs, `TabsBackend`) gives runs of the same user tabs
+    of one browser, so they run side by side; `max_open_browsers` then counts each user's browser once.
     """
 
     def __init__(
@@ -126,8 +131,11 @@ class BrowserHost:
         idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
         reap_every: float | None = None,
         max_open_browsers: int | None = None,
+        share_browser: bool = False,
     ) -> None:
         self._new_backend = new_backend
+        self._share_browser = share_browser
+        self._user_locks: dict[UserId, asyncio.Lock] = {}
         self._jar = jar
         self._lease = lease
         self.idle_timeout = idle_timeout
@@ -344,8 +352,8 @@ class BrowserHost:
         """Make the record for a run that `start` has not seen, taking the user's lease."""
         if run_id in self._closed:
             raise UnknownRun('no browser for this run')
-        held_already = await self._lease.holder(user_id=user_id) == run_id
-        if not await self._lease.acquire(user_id=user_id, run_id=run_id):
+        held_already = await self._lease.holds(user_id=user_id, run_id=run_id)
+        if not await self._lease.acquire(user_id=user_id, run_id=run_id, shared=self._share_browser):
             raise UserBusy("another run of this user's is using the browser and the saved sign-ins")
         if run_id in self._closed:  # closed while this call waited for the lease
             await self._lease.release(user_id=user_id, run_id=run_id)
@@ -363,7 +371,7 @@ class BrowserHost:
         """The run's record, or `UnknownRun`. A run this process has not seen, whose lease is still held, belonged to
         an earlier process: it is taken over and its browser restarted on first use."""
         run = self._runs.get(run_id)
-        if run is None and run_id not in self._closed and await self._lease.holder(user_id=user_id) == run_id:
+        if run is None and run_id not in self._closed and await self._lease.holds(user_id=user_id, run_id=run_id):
             run = self._runs.setdefault(run_id, _Run(run_id=run_id, user_id=user_id, restart_reason=SERVICE_RESTARTED))
         if run is None or run.user_id != user_id:
             raise UnknownRun('no browser for this run')
@@ -401,33 +409,50 @@ class BrowserHost:
     async def _open(self, run: _Run) -> BrowserBackend:
         if run.backend is not None:
             return run.backend
+        # One at a time per user, so a run opening a tab sees the browser another run of the user has just started.
+        async with self._user_locks.setdefault(run.user_id, asyncio.Lock()):
+            if (sibling := self._sibling(run)) is not None and (tab := await self._open_tab(run, sibling)) is not None:
+                return tab
+            return await self._launch(run)
+
+    def _sibling(self, run: _Run) -> TabsBackend | None:
+        """The open browser of another run of the same user, to open this run's tab in."""
+        if not self._share_browser:
+            return None
+        for other in self._runs.values():
+            if other is not run and other.user_id == run.user_id and isinstance(other.backend, TabsBackend):
+                return other.backend
+        return None
+
+    async def _open_tab(self, run: _Run, sibling: TabsBackend) -> BrowserBackend | None:
+        """Open the run's tab in the user's browser, at the run's last page. None if the browser could not give one:
+        it has stopped, and the run starts a new one."""
+        backend = sibling.new_tab()
+        try:
+            with timing('browser.open_tab'):
+                await backend.open(BrowserState(url=run.url))
+        except ActionFailed:
+            if not await _answers(backend):
+                await _close_quietly(backend)
+                return None
+            # The page did not load; the tab is open anyway, and the next snapshot shows the error.
+        except BaseException:
+            await _close_quietly(backend)
+            raise
+        return self._opened(run, backend, run.url)
+
+    async def _launch(self, run: _Run) -> BrowserBackend:
+        """Start a browser for the run from the user's saved state."""
         if self._max_open_browsers is not None:
             async with self._admission:
-                open_runs = [other for other in self._runs.values() if other.backend is not None and other is not run]
-                if len(open_runs) + self._launching >= self._max_open_browsers:
-                    # Reuse the idle reaper's save-and-drop path; never evict a hand-off or an active call.
-                    candidates = sorted(
-                        (other for other in open_runs if not other.handoff and not other.lock.locked()),
-                        key=lambda other: other.last_used,
-                    )
-                    for other in candidates:
-                        try:
-                            await asyncio.wait_for(other.lock.acquire(), 0.1)
-                        except TimeoutError:
-                            continue
-                        try:
-                            if other.backend is not None and other.handoff is None:
-                                await self._save_and_drop(other, 'the browser made room for another run')
-                                break
-                        finally:
-                            other.lock.release()
-                    else:
-                        raise ActionFailed('all browsers are in use; try again when another run finishes')
+                await self._make_room(run)
                 self._launching += 1  # Reserve without serialising slow page loads across runs.
         try:
             with timing('browser.state.load'):
                 state = await self._jar.load(user_id=run.user_id)
             backend = self._new_backend()
+            if self._share_browser and not isinstance(backend, TabsBackend):
+                raise TypeError('share_browser needs an engine with tabs (TabsBackend)')
             try:
                 with timing('browser.launch_restore'):
                     await backend.open(state)
@@ -436,16 +461,55 @@ class BrowserHost:
             except BaseException:
                 await _close_quietly(backend)
                 raise
-            run.backend = backend
-            run.url = state.url if state is not None else BLANK_URL
-            run.saved = True
-            if run.restart_reason is not None:
-                run.restarted = Restarted(reason=run.restart_reason, url=run.url)
-                run.restart_reason = None
-            return backend
+            return self._opened(run, backend, state.url if state is not None else BLANK_URL)
         finally:
             if self._max_open_browsers is not None:
                 self._launching -= 1
+
+    def _opened(self, run: _Run, backend: BrowserBackend, url: str) -> BrowserBackend:
+        run.backend = backend
+        run.url = url
+        run.saved = True
+        if run.restart_reason is not None:
+            run.restarted = Restarted(reason=run.restart_reason, url=run.url)
+            run.restart_reason = None
+        return backend
+
+    async def _make_room(self, run: _Run) -> None:
+        """With `max_open_browsers` browsers open, save and close the one used least recently, if none of its runs is
+        in a hand-off or a call. A user's tabs are one browser, closed together."""
+        browsers: dict[str, list[_Run]] = {}
+        for other in self._runs.values():
+            if other.backend is not None and other is not run:
+                key = f'user {other.user_id}' if self._share_browser else f'run {other.run_id}'
+                browsers.setdefault(key, []).append(other)
+        if self._max_open_browsers is None or len(browsers) + self._launching < self._max_open_browsers:
+            return
+        candidates = sorted(
+            (runs for runs in browsers.values() if not any(r.handoff or r.lock.locked() for r in runs)),
+            key=lambda runs: max(r.last_used for r in runs),
+        )
+        for runs in candidates:
+            held: list[_Run] = []
+            try:
+                for other in runs:
+                    await asyncio.wait_for(other.lock.acquire(), 0.1)
+                    held.append(other)
+            except TimeoutError:
+                for other in held:
+                    other.lock.release()
+                continue
+            try:
+                if all(other.handoff is None for other in runs):
+                    # Reuse the idle reaper's save-and-drop path.
+                    for other in runs:
+                        if other.backend is not None:
+                            await self._save_and_drop(other, 'the browser made room for another run')
+                    return
+            finally:
+                for other in held:
+                    other.lock.release()
+        raise ActionFailed('all browsers are in use; try again when another run finishes')
 
     @timed('browser.backend.call')
     async def _call(self, run: _Run, backend: BrowserBackend, use: Callable[[BrowserBackend], Awaitable[T]]) -> T:
@@ -489,7 +553,7 @@ class BrowserHost:
 
     @timed('browser.state.store')
     async def _store(self, run: _Run, state: BrowserState) -> None:
-        if await self._lease.holder(user_id=run.user_id) != run.run_id:
+        if not await self._lease.holds(user_id=run.user_id, run_id=run.run_id):
             raise UserBusy("this run no longer holds the user's saved sign-ins, so it cannot save them")
         await self._jar.save(user_id=run.user_id, state=state)
         run.url = state.url

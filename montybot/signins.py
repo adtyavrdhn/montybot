@@ -5,7 +5,8 @@ browser service.
   deployment's key. A saved state is a set of live credentials, so it is never logged and never leaves this module
   except to the browser service.
 - **Versioned**: each save bumps `version`; the row holds the latest.
-- **One writer at a time**: a run holds the user's lease from its browser's start until it closes. The lease expires
+- **One browser at a time**: a run holds the user's lease from its browser's start until it closes. Runs whose tabs
+  share one browser on this server hold it together (`shared`, the lease's `owner`). The lease expires
   (`LEASE_SECONDS`) so a run that never ended cannot lock the user out forever; a live run renews it on every browser
   call and before every wait (`montybot.browsing.Session`, `montybot.approvals.save_browser`), and a wait is shorter.
 """
@@ -96,22 +97,35 @@ class PostgresJar:
 
 
 class PostgresLease:
-    """`JarLease` in `montybot.jar_leases`. An expired lease counts as free."""
+    """`JarLease` in `montybot.jar_leases`, one row per holding run. An expired row counts as free. `owner` is the
+    server (its `EXECUTOR_ID`): runs share the lease only on the same one, where they share one browser."""
 
-    def __init__(self, pool: Pool, seconds: float = LEASE_SECONDS) -> None:
+    def __init__(self, pool: Pool, seconds: float = LEASE_SECONDS, *, owner: str = '') -> None:
         self._pool = pool
         self._ttl = timedelta(seconds=seconds)
+        self._owner = owner
 
-    async def acquire(self, *, user_id: UserId, run_id: RunId) -> bool:
-        async with self._pool.connection() as connection:
-            cursor = await connection.execute(
-                'INSERT INTO montybot.jar_leases (user_id, run_id, expires_at) VALUES (%s, %s, now() + %s) '
-                'ON CONFLICT (user_id) DO UPDATE SET run_id = EXCLUDED.run_id, expires_at = EXCLUDED.expires_at '
-                'WHERE montybot.jar_leases.run_id = EXCLUDED.run_id OR montybot.jar_leases.expires_at < now() '
-                'RETURNING run_id',
-                (user_id, run_id, self._ttl),
+    async def acquire(self, *, user_id: UserId, run_id: RunId, shared: bool = False) -> bool:
+        async with self._pool.connection() as connection, connection.transaction():
+            # One acquire per user at a time, so two runs cannot both see the other's row missing.
+            await connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s::text, 0))', (user_id,))
+            await connection.execute(
+                'DELETE FROM montybot.jar_leases WHERE user_id = %s AND expires_at < now()', (user_id,)
             )
-            return await cursor.fetchone() is not None
+            cursor = await connection.execute(
+                'SELECT 1 FROM montybot.jar_leases WHERE user_id = %s AND run_id <> %s '
+                'AND NOT (%s AND shared AND owner = %s) LIMIT 1',
+                (user_id, run_id, shared, self._owner),
+            )
+            if await cursor.fetchone() is not None:
+                return False
+            await connection.execute(
+                'INSERT INTO montybot.jar_leases (user_id, run_id, expires_at, shared, owner) '
+                'VALUES (%s, %s, now() + %s, %s, %s) ON CONFLICT (user_id, run_id) '
+                'DO UPDATE SET expires_at = EXCLUDED.expires_at, shared = EXCLUDED.shared, owner = EXCLUDED.owner',
+                (user_id, run_id, self._ttl, shared, self._owner),
+            )
+            return True
 
     async def renew(self, *, user_id: UserId, run_id: RunId) -> None:
         """Extend the run's lease if it still holds it. Never takes a free lease: a run that was stopped meanwhile
@@ -122,13 +136,13 @@ class PostgresLease:
                 (self._ttl, user_id, run_id),
             )
 
-    async def holder(self, *, user_id: UserId) -> RunId | None:
+    async def holds(self, *, user_id: UserId, run_id: RunId) -> bool:
         async with self._pool.connection() as connection:
             cursor = await connection.execute(
-                'SELECT run_id FROM montybot.jar_leases WHERE user_id = %s AND expires_at >= now()', (user_id,)
+                'SELECT 1 FROM montybot.jar_leases WHERE user_id = %s AND run_id = %s AND expires_at >= now()',
+                (user_id, run_id),
             )
-            row = await cursor.fetchone()
-            return None if row is None else row['run_id']
+            return await cursor.fetchone() is not None
 
     async def release(self, *, user_id: UserId, run_id: RunId) -> None:
         async with self._pool.connection() as connection:

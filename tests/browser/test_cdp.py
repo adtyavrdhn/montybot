@@ -36,10 +36,13 @@ from montybot.browser.contract import (
     MouseDown,
     Navigate,
     Selector,
+    TabsBackend,
     TargetNotFound,
     Type,
 )
-from montybot.browser.live import Frame, OutlineSource, Tabs, Viewport
+from montybot.browser.host import BrowserHost
+from montybot.browser.jar import InMemoryJar, InMemoryJarLease
+from montybot.browser.live import Frame, FrameSource, OutlineSource, Tabs, Viewport
 from montybot.browser.state import BrowserState, Cookie
 
 pytestmark = pytest.mark.anyio
@@ -323,6 +326,143 @@ async def test_live_view(site: Site) -> None:
         assert shot.width == frame.width  # its own size again
 
 
+# --- tabs: one Chrome per user, one tab per run ---
+
+
+class _Account(BaseHTTPRequestHandler):
+    """`/sign-in` sets an HttpOnly cookie; `/me` says whether the request carried it; `/popup` opens `/me`."""
+
+    def do_GET(self) -> None:
+        extra: list[tuple[str, str]] = []
+        if self.path == '/sign-in':
+            body = '<title>Signed in</title><p>welcome'
+            extra = [('Set-Cookie', 'sid=s3cret; HttpOnly; Path=/')]
+        elif self.path == '/popup':
+            body = '<title>Popup</title><button onclick="window.open(\'/me\')">Open</button>'
+        else:
+            body = '<title>Me</title><p>' + ('signed in' if 'sid=s3cret' in self.headers.get('Cookie', '') else 'anon')
+        data = f'<!doctype html>{body}'.encode()
+        self.send_response(200)
+        for name, value in [('Content-Type', 'text/html'), ('Content-Length', str(len(data))), *extra]:
+            self.send_header(name, value)
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+@contextmanager
+def account() -> Iterator[str]:
+    server = ThreadingHTTPServer(('127.0.0.1', 0), _Account)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f'http://127.0.0.1:{server.server_address[1]}'
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+async def tabs_shown(source: FrameSource) -> int:
+    async def first_tabs() -> int:
+        async for update in source.updates():
+            if isinstance(update, Tabs):
+                return len(update.tabs)
+        raise AssertionError('the live view ended')
+
+    return await asyncio.wait_for(first_tabs(), 10)
+
+
+JAILED = CDPOptions(bwrap=True, virtual_screen=True, allow_private_networks=True)
+
+
+@needs_chrome
+@pytest.mark.parametrize('options', [HEADLESS, pytest.param(JAILED, marks=needs_jail, id='jailed')], ids=str)
+async def test_tabs_share_one_chrome_and_close_on_their_own(options: CDPOptions) -> None:
+    """Headless, and as on the server: headed on Xvfb in bwrap, where each tab is a window of its own."""
+    with account() as origin:
+        first = ChromiumCDPBackend(options)
+        await first.open(BrowserState(url=f'{origin}/sign-in'))
+        second = first.new_tab()
+        assert isinstance(first, TabsBackend)
+        workdir = first.workdir
+        assert workdir is not None
+        try:
+            await second.open(BrowserState(url=f'{origin}/me'))
+            assert 'signed in' in (await second.snapshot()).text  # the cookie the other tab got
+            assert second.pid == first.pid
+            exported = await second.export()
+            assert exported.url == f'{origin}/me' and [c.name for c in exported.cookies] == ['sid']
+            assert (await first.snapshot()).url == f'{origin}/sign-in'
+            for tab in (first, second):  # both draw: neither is a background tab
+                assert (await tab.screenshot()).width > 0
+
+            await first.close()  # its tab only
+            await second.act(Navigate(url=f'{origin}/me'))
+            assert 'signed in' in (await second.snapshot()).text and workdir.exists()
+        finally:
+            await second.close()
+            await first.close()
+        assert not workdir.exists()  # Chrome stopped with its last tab
+
+
+@needs_chrome
+async def test_a_live_view_shows_its_own_tab_and_popups_only() -> None:
+    with account() as origin:
+        async with chrome() as first:
+            await first.open(BrowserState(url=f'{origin}/popup'))
+            second = first.new_tab()
+            try:
+                await second.open(BrowserState(url=f'{origin}/me'))
+                await first.act(Click(target=Selector(css='button')))  # opens a popup from the first tab
+                mine = await first.live_view()
+                try:
+                    deadline = time.monotonic() + 5
+                    while await tabs_shown(mine) != 2:
+                        assert time.monotonic() < deadline, 'the popup never showed'
+                finally:
+                    await mine.close()
+                theirs = await second.live_view()
+                try:
+                    assert await tabs_shown(theirs) == 1  # not the other run's tab, nor its popup
+                finally:
+                    await theirs.close()
+            finally:
+                await second.close()
+
+
+@needs_chrome
+async def test_runs_of_one_user_share_one_browser_in_the_service() -> None:
+    with account() as origin:
+        jar = InMemoryJar()
+        host = BrowserHost(
+            new_backend=lambda: ChromiumCDPBackend(HEADLESS),
+            jar=jar,
+            lease=InMemoryJarLease(),
+            max_open_browsers=1,
+            share_browser=True,
+        )
+        one, two = {'run_id': 'run-1', 'user_id': 'alice'}, {'run_id': 'run-2', 'user_id': 'alice'}
+        bob = {'run_id': 'run-3', 'user_id': 'bob'}
+        async with host:
+            await host.start(**one)
+            await host.act(**one, action=Navigate(url=f'{origin}/sign-in'))
+            await host.start_handoff(**one, reason='Please sign in')
+            await host.start(**two)  # not UserBusy: a tab of the same browser, which counts once
+            await host.act(**two, action=Navigate(url=f'{origin}/me'))
+            assert 'signed in' in (await host.snapshot(**two)).snapshot.text  # while the other run is handed off
+            with pytest.raises(ActionFailed, match='all browsers are in use'):
+                await host.start(**bob)  # the only browser is in a hand-off
+
+            await host.close(**one)
+            assert 'signed in' in (await host.snapshot(**two)).snapshot.text
+            await host.start(**bob)  # makes room: alice's idle browser is saved and closed
+            restarted = (await host.snapshot(**two)).restarted
+            assert restarted is not None and 'made room' in restarted.reason
+            state = await jar.load(user_id='alice')
+            assert state is not None and [c.name for c in state.cookies] == ['sid']
+
+
 _ASK_FOR_A_PASSKEY = """<script>
 const report = (text) => (window.opener || window).document.getElementById('out').textContent += text + ' ';
 navigator.credentials.get({publicKey: {challenge: new Uint8Array(16), rpId: 'localhost', timeout: 30000}})
@@ -360,9 +500,15 @@ async def test_passkey_requests_fail_at_once_in_the_tab_and_its_popups() -> None
     try:
         async with chrome() as browser:
             await browser.open(BrowserState(url=f'{origin}/'))
-            await wait_for_text(browser, 'NotAllowedError')
+            await wait_for_text(browser, 'NotAllowedError', timeout=15)
             await browser.act(Click(target=Selector(css='button')))
-            await wait_for_text(browser, 'NotAllowedError NotAllowedError')
+            await wait_for_text(browser, 'NotAllowedError NotAllowedError', timeout=15)
+            other_run = browser.new_tab()  # another run's tab of the same Chrome
+            try:
+                await other_run.open(BrowserState(url=f'{origin}/'))
+                await wait_for_text(other_run, 'NotAllowedError', timeout=15)
+            finally:
+                await other_run.close()
     finally:
         server.shutdown()
         server.server_close()

@@ -17,7 +17,7 @@ from dbos import DBOS, DBOSConfig
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
-from montybot.browser.contract import BrowserBackend
+from montybot.browser.contract import BrowserBackend, TabsBackend
 from montybot.browser.host import BrowserHost
 from montybot.crypto import deployment_key
 from montybot.db import Pool, create_pool, migrate
@@ -82,13 +82,16 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
     pool = create_pool(settings.database_url)
     await pool.open()
     jar = PostgresJar(pool, deployment_key(settings.encryption_key.get_secret_value()))
-    lease = PostgresLease(pool)
+    # Runs of one user share the lease, and one browser in tabs, only on this server.
+    lease = PostgresLease(pool, owner=settings.executor_id)
+    new_backend = backend_factory(settings.browser_backend)
     browser = BrowserHost(
-        new_backend=backend_factory(settings.browser_backend),
+        new_backend=new_backend,
         jar=jar,
         lease=lease,
         idle_timeout=settings.browser_idle_timeout_seconds,
         max_open_browsers=settings.browser_max_open,
+        share_browser=isinstance(new_backend(), TabsBackend),  # a closed backend: making one starts nothing
     )
     DBOS(
         config=DBOSConfig(

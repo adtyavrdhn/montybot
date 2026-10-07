@@ -373,6 +373,17 @@ def is_navigation_race(error: CDPError) -> bool:
 
 
 @dataclass(kw_only=True)
+class _Downloading:
+    """A download Chrome started (#21)."""
+
+    guid: str
+    name: str
+    started: float
+    state: asyncio.Future[str]
+    """`completed` or `canceled`."""
+
+
+@dataclass(kw_only=True)
 class _Tab:
     """The run's tab: its CDP session and what its main frame did, as events arrive."""
 
@@ -383,8 +394,12 @@ class _Tab:
     `same-document`, `stopped`, `load`, and `download` (with the download's guid), from any frame."""
     document_url: str = BLANK_URL
     """The main frame's document URL. An error page is `chrome-error://chromewebdata/`."""
-    origins: set[str] = field(default_factory=set[str])
-    """Origins of the documents this tab showed, for export."""
+    frames: set[str] = field(default_factory=set[str])
+    """Ids of the frames this tab has shown, so a download is told to the tab it started in."""
+    downloads: list[_Downloading] = field(default_factory=list[_Downloading])
+    """Downloads started and not yet taken."""
+    running: dict[str, _Downloading] = field(default_factory=dict[str, _Downloading])
+    """Downloads not finished yet, by guid, taken or not."""
     changed: asyncio.Event = field(default_factory=asyncio.Event)
 
     def note(self, kind: str, loader: str = '') -> None:
@@ -415,34 +430,25 @@ class _Tab:
 
 
 @dataclass(kw_only=True)
-class _Downloading:
-    """A download Chrome started (#21)."""
-
-    guid: str
-    name: str
-    started: float
-    state: asyncio.Future[str]
-    """`completed` or `canceled`."""
-
-
-@dataclass(kw_only=True)
 class _Chrome:
-    """One running Chrome and everything started for it."""
+    """One running Chrome and everything started for it, shared by the backends of its tabs."""
 
     workdir: Path
     process: asyncio.subprocess.Process
     connection: CDPConnection
-    tab: _Tab
     screen: VirtualScreen | None = None
     proxy: EgressProxy | None = None
-    downloads: list[_Downloading] = field(default_factory=list[_Downloading])
-    """Downloads started and not yet taken."""
-    running: dict[str, _Downloading] = field(default_factory=dict[str, _Downloading])
-    """Downloads not finished yet, by guid, taken or not."""
+    tabs: dict[str, _Tab] = field(default_factory=dict[str, _Tab])
+    """The open tabs of our backends, by target id. Chrome stops when the last one closes."""
+    origins: set[str] = field(default_factory=set[str])
+    """Origins of the documents any tab showed, and of the storage seeded at start, for export."""
 
     @property
     def download_dir(self) -> Path:
         return self.workdir / 'profile' / 'downloads'
+
+    def tab_of_frame(self, frame_id: str) -> _Tab | None:
+        return next((tab for tab in self.tabs.values() if frame_id in tab.frames), None)
 
     async def stop(self) -> None:
         self.connection.close()
@@ -458,15 +464,18 @@ class _Chrome:
 
 
 class ChromiumCDPBackend:
-    """A `BrowserBackend` running Chrome over our own CDP pipe. One Chrome, one tab, per `open()`. Also a
-    `LiveViewBackend` and a `DownloadsBackend`."""
+    """A `BrowserBackend` running Chrome over our own CDP pipe: one tab of a Chrome. `open()` starts a Chrome; a
+    backend from `new_tab()` opens another tab of that Chrome instead (`TabsBackend`). Also a `LiveViewBackend` and
+    a `DownloadsBackend`."""
 
     def __init__(self, options: CDPOptions | None = None) -> None:
         self.options = options or CDPOptions()
         self._chrome: _Chrome | None = None
+        self._tab: _Tab | None = None
+        self._share: _Chrome | None = None
+        """The running Chrome to open a tab in, for a backend from `new_tab()`."""
         self._walker = SnapshotWalker(run_script=self._evaluate)
         self._input: CDPInput | None = None
-        self._seeded_origins: set[str] = set()
 
     @property
     def workdir(self) -> Path | None:
@@ -486,20 +495,36 @@ class ChromiumCDPBackend:
         from montybot.liveview.cdp import CDPFrameSource
 
         chrome = self._require_open()
-        return await CDPFrameSource.start(chrome.connection, home=chrome.tab.target_id)
+        return await CDPFrameSource.start(chrome.connection, home=self._current_tab().target_id)
+
+    # --- TabsBackend ---
+
+    def new_tab(self) -> ChromiumCDPBackend:
+        """A closed backend for a new tab of this Chrome. It shares the cookies and storage; its `open(state)` only goes
+        to `state.url`."""
+        tab = ChromiumCDPBackend(self.options)
+        tab._share = self._require_open()
+        return tab
 
     # --- BrowserBackend ---
 
     async def open(self, state: BrowserState | None) -> None:
         if self._chrome is not None:
             raise LifecycleError('the browser is already open')
-        self._chrome = await self._launch()
         self._walker = SnapshotWalker(run_script=self._evaluate)
-        self._input = CDPInput(self._chrome.connection, self._chrome.tab.session)
-        self._seeded_origins = set()
+        if self._share is not None:
+            chrome = self._share
+            self._tab = await self._open_tab(chrome)
+            self._chrome = chrome
+            self._input = CDPInput(chrome.connection, self._tab.session)
+            if state is not None and state.url != BLANK_URL:
+                await self._goto(state.url)
+            return
+        chrome, self._tab = await self._launch()
+        self._chrome = chrome
+        self._input = CDPInput(chrome.connection, self._tab.session)
         if state is None:
             return
-        chrome = self._chrome
         script = ''
         try:
             cookies = [_to_cdp(c) for c in state.cookies if not 0 <= c.expires < time.time()]
@@ -509,7 +534,7 @@ class ChromiumCDPBackend:
                 async with self._side_tab() as side:
                     for origin, items in state.local_storage.items():
                         await side(origin, _WRITE_STORAGE, cast(JSON, items))
-                        self._seeded_origins.add(origin)
+                        chrome.origins.add(origin)
             if state.session_storage:
                 # Only while the first page loads, in our world, before the page's scripts: later loads keep what
                 # the pages left in sessionStorage.
@@ -532,16 +557,17 @@ class ChromiumCDPBackend:
                     await self._send('Page.removeScriptToEvaluateOnNewDocument', {'identifier': script})
 
     async def export(self) -> BrowserState:
+        """The whole browser's cookies and storage, every tab's origins included, with this tab's URL."""
         chrome = self._require_open()
         try:
             url = await self._url()
             origin = origin_of(url)
             local: dict[str, dict[str, str]] = {}
             session: dict[str, str] = {}
-            if origin is not None and origin == origin_of(chrome.tab.document_url):  # not on an error page
+            if origin is not None and origin == origin_of(self._current_tab().document_url):  # not on an error page
                 local[origin] = cast(dict[str, str], await self._evaluate(_READ_STORAGE, 'localStorage'))
                 session = cast(dict[str, str], await self._evaluate(_READ_STORAGE, 'sessionStorage'))
-            others = sorted((self._seeded_origins | chrome.tab.origins) - {origin})
+            others = sorted(chrome.origins - {origin})
             if others:
                 async with self._side_tab() as side:
                     for other in others:
@@ -567,7 +593,7 @@ class ChromiumCDPBackend:
         return Snapshot(url=await self._url(), title=snapshot.title, text=snapshot.text)
 
     async def act(self, action: Action) -> None:
-        chrome = self._require_open()
+        tab = self._current_tab()
         mouse = self._mouse()
         try:
             resolved = await self._walker.resolve(action)  # a ref becomes a point to click, or typing at the caret
@@ -578,15 +604,15 @@ class ChromiumCDPBackend:
                     await self._goto(url)
                 case Click(target=target):
                     at = target if isinstance(target, Point) else await self._find(target, typing=False)
-                    async with self._settled(chrome.tab):
+                    async with self._settled(tab):
                         await mouse.click(at)
                 case Type(text=text, target=target):
                     if target is not None:
                         await self._find(target, typing=True)
-                    async with self._settled(chrome.tab):
+                    async with self._settled(tab):
                         await mouse.type(text)
                 case Press(key=key, modifiers=modifiers):
-                    async with self._settled(chrome.tab):
+                    async with self._settled(tab):
                         await mouse.press(key, modifiers)
                 case Scroll(delta_x=dx, delta_y=dy, at=at):
                     await mouse.wheel(at or await self._centre(), dx, dy)
@@ -596,7 +622,7 @@ class ChromiumCDPBackend:
                 case MouseMove(at=at):
                     await mouse.mouse('mouseMoved', at)
                 case MouseUp(at=at, button=button):
-                    async with self._settled(chrome.tab):
+                    async with self._settled(tab):
                         await mouse.mouse('mouseMoved', at)
                         await mouse.mouse('mouseReleased', at, button)
         except CDPError as error:
@@ -617,10 +643,19 @@ class ChromiumCDPBackend:
         return Screenshot(png=base64.b64decode(shot['data']), width=width, height=height)
 
     async def close(self) -> None:
-        chrome, self._chrome, self._input = self._chrome, None, None
-        if chrome is not None:
-            for downloading in chrome.running.values():
-                downloading.state.cancel()
+        """Close this tab, and Chrome with its last tab."""
+        chrome, tab = self._chrome, self._tab
+        self._chrome = self._tab = self._input = self._share = None
+        if chrome is None or tab is None:
+            return
+        for downloading in tab.running.values():
+            downloading.state.cancel()
+        chrome.tabs.pop(tab.target_id, None)
+        if chrome.tabs:
+            with contextlib.suppress(CDPError, CDPClosed):
+                await chrome.connection.send('Target.closeTarget', {'targetId': tab.target_id})
+            chrome.connection.drop_session(tab.session)
+        else:
             await chrome.stop()
 
     # --- DownloadsBackend (#21) ---
@@ -629,7 +664,8 @@ class ChromiumCDPBackend:
         """The downloads finished since the last call. One still running gets up to `navigation_timeout` from its
         start to finish, else it is cancelled. A failed download is dropped."""
         chrome = self._require_open()
-        pending, chrome.downloads = chrome.downloads, []
+        tab = self._current_tab()
+        pending, tab.downloads = tab.downloads, []
         if not pending:
             return []
         deadline = max(d.started for d in pending) + self.options.navigation_timeout
@@ -640,7 +676,7 @@ class ChromiumCDPBackend:
             state = downloading.state
             if not state.done():
                 state.cancel()
-                chrome.running.pop(downloading.guid, None)
+                tab.running.pop(downloading.guid, None)
                 with contextlib.suppress(CDPError):
                     await chrome.connection.send('Browser.cancelDownload', {'guid': downloading.guid})
             elif not state.cancelled() and state.result() == 'completed':
@@ -653,7 +689,7 @@ class ChromiumCDPBackend:
 
     # --- starting ---
 
-    async def _launch(self) -> _Chrome:
+    async def _launch(self) -> tuple[_Chrome, _Tab]:
         options = self.options
         workdir = Path(tempfile.mkdtemp(prefix='montybot-cdp-'))
         profile = workdir / 'profile'
@@ -723,10 +759,10 @@ class ChromiumCDPBackend:
                 # Chrome's fatal error, such as "No usable sandbox!", not the stack trace after it.
                 reason = next((line.split('] ', 1)[-1] for line in log if ':FATAL:' in line), '\n'.join(log[-5:]))
                 raise ActionFailed(f'could not start Chrome: {reason[:300] or type(error).__name__}') from None
-            chrome = _Chrome(
-                workdir=workdir, process=process, connection=connection, tab=tab, screen=screen, proxy=proxy
-            )
-            self._listen(chrome)
+            chrome = _Chrome(workdir=workdir, process=process, connection=connection, screen=screen, proxy=proxy)
+            chrome.tabs[tab.target_id] = tab
+            _listen_to_downloads(chrome)
+            self._listen(chrome, tab)
             _refuse_passkeys_in_popups(connection)
             await connection.send(
                 'Browser.setDownloadBehavior',
@@ -747,10 +783,24 @@ class ChromiumCDPBackend:
                 await proxy.stop()
             shutil.rmtree(workdir, ignore_errors=True)
             raise
-        return chrome
+        return chrome, tab
+
+    async def _open_tab(self, chrome: _Chrome) -> _Tab:
+        """A new tab in its own window of a running Chrome, so it is never a background tab."""
+        if chrome.process.returncode is not None or not chrome.tabs:
+            raise ActionFailed('the browser this tab was for has closed')
+        connection = chrome.connection
+        try:
+            created = await connection.send('Target.createTarget', {'url': BLANK_URL, 'newWindow': True})
+            tab = await _attach(connection, str(created['targetId']))
+        except (CDPError, CDPClosed) as error:
+            raise ActionFailed(f'could not open a tab: {error}') from None
+        chrome.tabs[tab.target_id] = tab
+        self._listen(chrome, tab)
+        return tab
 
     async def _first_tab(self, connection: CDPConnection, process: asyncio.subprocess.Process) -> _Tab:
-        """Wait for the tab Chrome opens at start, attach to it, and turn on the page events `act` waits for."""
+        """Wait for the tab Chrome opens at start, and attach to it."""
         while True:
             if process.returncode is not None:
                 raise CDPClosed('Target.getTargets')
@@ -759,24 +809,12 @@ class ChromiumCDPBackend:
             if pages:
                 break
             await asyncio.sleep(0.02)
-        target_id = str(pages[0]['targetId'])
-        _, attached = await asyncio.gather(
-            connection.send('Target.setDiscoverTargets', {'discover': True}),  # for the live view's tabs
-            connection.send('Target.attachToTarget', {'targetId': target_id, 'flatten': True}),
-        )
-        tab = _Tab(target_id=target_id, session=str(attached['sessionId']))
-        await asyncio.gather(
-            connection.send('Page.enable', session=tab.session),
-            connection.send('Page.setLifecycleEventsEnabled', {'enabled': True}, session=tab.session),
-            # A window on a screen with no window manager (Xvfb) may not get the focus. The page gets it, as the
-            # front window of a desktop would, as Playwright does for its pages.
-            connection.send('Emulation.setFocusEmulationEnabled', {'enabled': True}, session=tab.session),
-            _refuse_passkeys(connection, tab.session),
-        )
-        return tab
+        await connection.send('Target.setDiscoverTargets', {'discover': True})  # for the live view's tabs
+        return await _attach(connection, str(pages[0]['targetId']))
 
-    def _listen(self, chrome: _Chrome) -> None:
-        connection, tab = chrome.connection, chrome.tab
+    def _listen(self, chrome: _Chrome, tab: _Tab) -> None:
+        """Follow the tab's main frame for `act`'s waits, note the origins it shows, and answer its dialogs."""
+        connection = chrome.connection
         main = tab.target_id
 
         def started(params: CDPParams) -> None:
@@ -786,8 +824,9 @@ class ChromiumCDPBackend:
         def navigated(params: CDPParams) -> None:
             frame = cast(CDPParams, params['frame'])
             url = str(frame.get('url', ''))
+            tab.frames.add(str(frame['id']))
             if origin := origin_of(url):
-                tab.origins.add(origin)
+                chrome.origins.add(origin)
             if frame['id'] == main:
                 tab.document_url = url
                 tab.note('committed', str(frame['loaderId']))
@@ -810,23 +849,6 @@ class ChromiumCDPBackend:
             send = connection.send('Page.handleJavaScriptDialog', {'accept': accept}, session=tab.session)
             asyncio.ensure_future(send).add_done_callback(_ignore_result)
 
-        def download_begins(params: CDPParams) -> None:
-            guid = str(params['guid'])
-            future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
-            name = str(params.get('suggestedFilename') or 'download')
-            downloading = _Downloading(guid=guid, name=name, started=time.monotonic(), state=future)
-            chrome.downloads.append(downloading)
-            chrome.running[guid] = downloading
-            tab.note('download', guid)
-
-        def download_progress(params: CDPParams) -> None:
-            state = str(params.get('state'))
-            if state not in ('completed', 'canceled'):
-                return
-            downloading = chrome.running.pop(str(params['guid']), None)
-            if downloading is not None and not downloading.state.done():
-                downloading.state.set_result(state)
-
         session = tab.session
         for method in ('Page.frameRequestedNavigation', 'Page.frameStartedNavigating', 'Page.frameStartedLoading'):
             connection.on(method, started, session=session)
@@ -835,8 +857,6 @@ class ChromiumCDPBackend:
         connection.on('Page.frameStoppedLoading', stopped, session=session)
         connection.on('Page.lifecycleEvent', lifecycle, session=session)
         connection.on('Page.javascriptDialogOpening', dialog, session=session)
-        connection.on('Browser.downloadWillBegin', download_begins)
-        connection.on('Browser.downloadProgress', download_progress)
 
     # --- internals ---
 
@@ -845,6 +865,11 @@ class ChromiumCDPBackend:
             raise LifecycleError('the browser is not open')
         return self._chrome
 
+    def _current_tab(self) -> _Tab:
+        self._require_open()
+        assert self._tab is not None
+        return self._tab
+
     def _mouse(self) -> CDPInput:
         self._require_open()
         assert self._input is not None
@@ -852,7 +877,7 @@ class ChromiumCDPBackend:
 
     async def _send(self, method: str, params: CDPParams | None = None) -> CDPParams:
         chrome = self._require_open()
-        return await chrome.connection.send(method, params, session=chrome.tab.session)
+        return await chrome.connection.send(method, params, session=self._current_tab().session)
 
     async def _url(self) -> str:
         """The tab's URL as its address bar shows it: an error page shows the URL that failed."""
@@ -863,7 +888,7 @@ class ChromiumCDPBackend:
     async def _evaluate(self, function: str, arg: JSON = None) -> object:
         """`evaluate` in the run's tab, retried while a navigation replaces the document under it."""
         chrome = self._require_open()
-        tab = chrome.tab
+        tab = self._current_tab()
         for attempt in range(3):
             mark = len(tab.events)
             try:
@@ -875,8 +900,7 @@ class ChromiumCDPBackend:
         raise AssertionError('unreachable')
 
     async def _goto(self, url: str) -> None:
-        chrome = self._require_open()
-        tab = chrome.tab
+        tab = self._current_tab()
         timeout = self.options.navigation_timeout
         mark = len(tab.events)
         try:
@@ -990,6 +1014,53 @@ class ChromiumCDPBackend:
                 await connection.send('Target.closeTarget', {'targetId': target_id})
             if session:
                 connection.drop_session(session)
+
+
+async def _attach(connection: CDPConnection, target_id: str) -> _Tab:
+    """Attach to a page and turn on the page events `act` waits for."""
+    attached = await connection.send('Target.attachToTarget', {'targetId': target_id, 'flatten': True})
+    tab = _Tab(target_id=target_id, session=str(attached['sessionId']), frames={target_id})
+    await asyncio.gather(
+        connection.send('Page.enable', session=tab.session),
+        connection.send('Page.setLifecycleEventsEnabled', {'enabled': True}, session=tab.session),
+        # A window on a screen with no window manager (Xvfb) may not get the focus. The page gets it, as the
+        # front window of a desktop would, as Playwright does for its pages.
+        connection.send('Emulation.setFocusEmulationEnabled', {'enabled': True}, session=tab.session),
+        _refuse_passkeys(connection, tab.session),
+    )
+    return tab
+
+
+def _listen_to_downloads(chrome: _Chrome) -> None:
+    """Give each download to the tab whose frame started it. One from a frame of no tab of ours (a popup) goes to the
+    only tab, when there is one."""
+
+    def download_begins(params: CDPParams) -> None:
+        tab = chrome.tab_of_frame(str(params.get('frameId', '')))
+        if tab is None and len(chrome.tabs) == 1:
+            tab = next(iter(chrome.tabs.values()))
+        if tab is None:
+            return  # Chrome still saves it in the profile, which goes when Chrome stops
+        guid = str(params['guid'])
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        name = str(params.get('suggestedFilename') or 'download')
+        downloading = _Downloading(guid=guid, name=name, started=time.monotonic(), state=future)
+        tab.downloads.append(downloading)
+        tab.running[guid] = downloading
+        tab.note('download', guid)
+
+    def download_progress(params: CDPParams) -> None:
+        state = str(params.get('state'))
+        if state not in ('completed', 'canceled'):
+            return
+        guid = str(params['guid'])
+        for tab in chrome.tabs.values():
+            downloading = tab.running.pop(guid, None)
+            if downloading is not None and not downloading.state.done():
+                downloading.state.set_result(state)
+
+    chrome.connection.on('Browser.downloadWillBegin', download_begins)
+    chrome.connection.on('Browser.downloadProgress', download_progress)
 
 
 _T = TypeVar('_T')
