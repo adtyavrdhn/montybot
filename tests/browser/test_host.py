@@ -132,6 +132,33 @@ async def test_browser_cap_saves_and_eviction_restores_state() -> None:
     assert not setup.made[1].is_open
 
 
+async def test_browser_under_construction_uses_a_slot() -> None:
+    started, proceed = asyncio.Event(), asyncio.Event()
+
+    class SlowBrowser(FakeBrowser):
+        async def open(self, state: BrowserState | None) -> None:
+            started.set()
+            await proceed.wait()
+            await super().open(state)
+
+    setup = Setup()
+    host = BrowserHost(
+        new_backend=lambda: SlowBrowser(pages=shop_pages()),
+        jar=setup.jar,
+        lease=setup.lease,
+        max_open_browsers=1,
+    )
+    first = asyncio.create_task(host.start(**ALICE))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        with pytest.raises(ActionFailed, match='all browsers are in use'):
+            await asyncio.wait_for(host.start(run_id='run-2', user_id='bob'), 1)
+    finally:
+        proceed.set()
+        await first
+    assert host._launching == 0
+
+
 async def test_browser_cap_does_not_evict_a_handoff() -> None:
     setup = Setup()
     host = BrowserHost(new_backend=setup.new_backend, jar=setup.jar, lease=setup.lease, max_open_browsers=1)

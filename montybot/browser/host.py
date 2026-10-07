@@ -136,6 +136,7 @@ class BrowserHost:
             raise ValueError('max_open_browsers must be positive')
         self._max_open_browsers = max_open_browsers
         self._admission = asyncio.Lock()
+        self._launching = 0
         self._runs: dict[RunId, _Run] = {}
         self._closed: set[RunId] = set()
         self._reaper: asyncio.Task[None] | None = None
@@ -400,11 +401,10 @@ class BrowserHost:
     async def _open(self, run: _Run) -> BrowserBackend:
         if run.backend is not None:
             return run.backend
-        # Serialise launches: a browser under construction also consumes a slot.
-        async with self._admission:
-            if self._max_open_browsers is not None:
+        if self._max_open_browsers is not None:
+            async with self._admission:
                 open_runs = [other for other in self._runs.values() if other.backend is not None and other is not run]
-                if len(open_runs) >= self._max_open_browsers:
+                if len(open_runs) + self._launching >= self._max_open_browsers:
                     # Reuse the idle reaper's save-and-drop path; never evict a hand-off or an active call.
                     candidates = sorted(
                         (other for other in open_runs if not other.handoff and not other.lock.locked()),
@@ -423,6 +423,8 @@ class BrowserHost:
                             other.lock.release()
                     else:
                         raise ActionFailed('all browsers are in use; try again when another run finishes')
+                self._launching += 1  # Reserve without serialising slow page loads across runs.
+        try:
             with timing('browser.state.load'):
                 state = await self._jar.load(user_id=run.user_id)
             backend = self._new_backend()
@@ -441,6 +443,9 @@ class BrowserHost:
                 run.restarted = Restarted(reason=run.restart_reason, url=run.url)
                 run.restart_reason = None
             return backend
+        finally:
+            if self._max_open_browsers is not None:
+                self._launching -= 1
 
     @timed('browser.backend.call')
     async def _call(self, run: _Run, backend: BrowserBackend, use: Callable[[BrowserBackend], Awaitable[T]]) -> T:
