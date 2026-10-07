@@ -42,11 +42,17 @@ $('signup-button').addEventListener('click', () => {
   $('signin-button').textContent = state.signingUp ? 'Create account' : 'Sign in';
   $('signup-button').textContent = state.signingUp ? 'I have an account' : 'Create an account';
   $('password').autocomplete = state.signingUp ? 'new-password' : 'current-password';
+  $('auth-title').textContent = state.signingUp ? 'Make room for Monty' : 'Welcome back';
+  $('auth-description').textContent = state.signingUp ? 'Create an account to start your first chat.' : 'Sign in to pick up where you left off.';
+  $('signin-error').textContent = '';
+  $('email').focus();
 });
 
 $('signin-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   $('signin-error').textContent = '';
+  $('signin-button').disabled = true;
+  $('signup-button').disabled = true;
   try {
     await api(state.signingUp ? '/api/signup' : '/api/signin', {
       method: 'POST', body: { email: $('email').value, password: $('password').value },
@@ -54,6 +60,9 @@ $('signin-form').addEventListener('submit', async (event) => {
     await start();
   } catch (error) {
     $('signin-error').textContent = error.message;
+  } finally {
+    $('signin-button').disabled = false;
+    $('signup-button').disabled = false;
   }
 });
 
@@ -78,14 +87,63 @@ async function loadThreads() {
     const button = document.createElement('button');
     button.textContent = thread.title || 'Untitled';
     button.className = thread.id === state.thread ? 'current' : '';
+    if (thread.id === state.thread) button.setAttribute('aria-current', 'page');
+    button.title = thread.title || 'Untitled';
     button.addEventListener('click', () => { location.hash = `#/t/${thread.id}`; closeDrawer(); });
     item.append(button);
     return item;
   }));
+  if (!threads.length) {
+    const empty = document.createElement('li');
+    empty.className = 'thread-empty';
+    empty.textContent = 'Your next task starts with a new chat.';
+    list.append(empty);
+  }
 }
 
-function closeDrawer() { $('drawer').classList.remove('open'); }
-$('menu-button').addEventListener('click', () => $('drawer').classList.toggle('open'));
+const desktop = window.matchMedia('(min-width: 900px)');
+function syncDrawer() {
+  const open = !desktop.matches && $('drawer').classList.contains('open');
+  $('drawer').inert = !desktop.matches && !open;
+  $('drawer-backdrop').hidden = !open;
+  $('menu-button').setAttribute('aria-expanded', String(open));
+  for (const id of ['layout', 'signins', 'schedules', 'browser-button']) $(id).inert = open;
+}
+function closeDrawer(restoreFocus = false) {
+  const focusInside = $('drawer').contains(document.activeElement);
+  $('drawer').classList.remove('open');
+  syncDrawer();
+  if (!desktop.matches) {
+    if (restoreFocus) $('menu-button').focus(); else if (focusInside) $('message').focus();
+  }
+}
+$('menu-button').addEventListener('click', () => {
+  const open = $('drawer').classList.toggle('open');
+  syncDrawer();
+  if (open) $('close-drawer').focus();
+});
+$('close-drawer').addEventListener('click', () => closeDrawer(true));
+$('drawer-backdrop').addEventListener('click', () => closeDrawer(true));
+desktop.addEventListener('change', () => { closeDrawer(); updateBrowserButton(); });
+document.addEventListener('keydown', (event) => {
+  if (desktop.matches) return;
+  const drawerOpen = $('drawer').classList.contains('open');
+  const browserOpen = !$('browser').hidden && !$('layout').hidden;
+  if (!drawerOpen && !browserOpen) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    if (drawerOpen) closeDrawer(true); else $('close-browser').click();
+  }
+  if (event.key === 'Tab') {
+    const panel = drawerOpen ? $('drawer') : $('browser');
+    const controls = [...panel.querySelectorAll('button:not(:disabled), iframe:not([hidden])')];
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }
+});
+syncDrawer();
 $('new-chat').addEventListener('click', () => { location.hash = '#/new'; closeDrawer(); });
 
 function message(role, text) {
@@ -98,8 +156,34 @@ function message(role, text) {
 function emptyChat() {
   const div = document.createElement('div');
   div.className = 'empty';
-  div.innerHTML = '<h2>What should I do?</h2><p>For example: “Find the three cheapest flights to Lisbon next Friday”, ' +
-    '“Check my last order on the shop”, or “Every Tuesday, put my shopping list in my cart”.</p>';
+  div.innerHTML = '<span class="monty-mark" aria-hidden="true">m<span>•</span></span>' +
+    '<h2>What can I take off your list?</h2>' +
+    '<p>Give me a task on the web. I’ll work in my browser and ask when I need your help.</p>';
+  const suggestions = document.createElement('div');
+  suggestions.className = 'suggestions';
+  const examples = [
+    ['↗', 'Find something worth the trip', 'Find the three cheapest flights to Lisbon next Friday.'],
+    ['▣', 'Pick up where you left off', 'Check the status of my last order on the shop.'],
+    ['◷', 'Make it a regular thing', 'Every Tuesday at 9, check the price of my usual shopping list.'],
+  ];
+  for (const [icon, title, text] of examples) {
+    const suggestion = button('', 'suggestion', () => {
+      $('message').value = text;
+      $('message').focus();
+    });
+    const symbol = document.createElement('span');
+    symbol.textContent = icon;
+    symbol.setAttribute('aria-hidden', 'true');
+    const copy = document.createElement('span');
+    const heading = document.createElement('strong');
+    heading.textContent = title;
+    const detail = document.createElement('small');
+    detail.textContent = text;
+    copy.append(heading, detail);
+    suggestion.append(symbol, copy);
+    suggestions.append(suggestion);
+  }
+  div.append(suggestions);
   return div;
 }
 
@@ -114,6 +198,7 @@ async function openThread(id) {
   $('ask').dataset.id = '';
   $('status').hidden = true;
   if (id === null) {
+    renderRun(null);
     $('title').textContent = 'New chat';
     $('messages').replaceChildren(emptyChat());
     return;
@@ -133,7 +218,7 @@ async function refresh() {
     throw error;
   }
   if (state.thread !== id) return;  // the user opened another chat meanwhile
-  $('title').textContent = thread.title || 'monty-bot';
+  if (!$('layout').hidden) $('title').textContent = thread.title || 'Monty';
   const box = $('messages');
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
   box.replaceChildren(...thread.messages.map((m) => message(m.role, m.text)));
@@ -176,6 +261,10 @@ function updateBrowserButton() {
   const run = state.run;
   const working = run && (run.status === 'queued' || run.status === 'running') && run.activity.length;
   $('browser-button').hidden = !(working && $('browser').hidden);
+  const mobileBrowser = !desktop.matches && !$('browser').hidden && !$('layout').hidden;
+  $('chat').inert = mobileBrowser;
+  document.querySelector('.bar').inert = mobileBrowser;
+  if (mobileBrowser) $('drawer').inert = true; else syncDrawer();
 }
 
 // --- what the bot asks ---
@@ -199,6 +288,7 @@ function renderAsk(ask) {
     const input = document.createElement('textarea');
     input.rows = 2;
     input.placeholder = 'Your answer';
+    input.setAttribute('aria-label', 'Your answer to Monty');
     const send = button('Answer', '', async () => {
       if (!input.value.trim()) { input.focus(); return; }
       await answer(ask, { text: input.value });
@@ -253,6 +343,7 @@ async function takeOver(ask) {
   $('live').src = link.url;
   $('browser').hidden = false;
   updateBrowserButton();
+  $('close-browser').focus();
 }
 
 // --- the bot's browser, while it works ---
@@ -300,8 +391,12 @@ function hideBrowser() {
   updateBrowserButton();
 }
 
-$('browser-button').addEventListener('click', showScreen);
-$('close-browser').addEventListener('click', () => { $('browser').hidden = true; updateBrowserButton(); });
+$('browser-button').addEventListener('click', () => { showScreen(); $('close-browser').focus(); });
+$('close-browser').addEventListener('click', () => {
+  $('browser').hidden = true;
+  updateBrowserButton();
+  if (!$('browser-button').hidden) $('browser-button').focus(); else $('message').focus();
+});
 
 // --- sending ---
 
@@ -348,8 +443,9 @@ async function openSignins() {
       await openSignins();
     }));
     return item;
-  }) : [Object.assign(document.createElement('li'), { textContent: 'None yet.' })]));
+  }) : [Object.assign(document.createElement('li'), { textContent: 'No saved sign-ins yet. Sign in through browser takeover when Monty asks.' })]));
   $('signins').hidden = false;
+  $('signins-title').focus();
 }
 
 async function openSchedules() {
@@ -359,8 +455,14 @@ async function openSchedules() {
   list.replaceChildren(...(schedules.length ? schedules.map((s) => {
     const item = document.createElement('li');
     const name = document.createElement('span');
-    name.textContent = `${s.name}: ${s.when}${s.paused ? ' (paused)' : ''}`;
+    const title = document.createElement('strong');
+    title.textContent = s.name;
+    const detail = document.createElement('span');
+    detail.className = 'list-detail';
+    detail.textContent = `${s.when}${s.paused ? ' (paused)' : ''}`;
+    name.append(title, detail);
     const actions = document.createElement('span');
+    actions.className = 'list-actions';
     actions.append(
       button(s.paused ? 'Resume' : 'Pause', 'secondary', async () => {
         await api(`/api/schedules/${s.id}/${s.paused ? 'resume' : 'pause'}`, { method: 'POST', body: {} });
@@ -373,14 +475,15 @@ async function openSchedules() {
     );
     item.append(name, actions);
     return item;
-  }) : [Object.assign(document.createElement('li'), { textContent: 'None yet.' })]));
+  }) : [Object.assign(document.createElement('li'), { textContent: 'No scheduled tasks yet. Tell Monty what to do and when in a chat.' })]));
   $('schedules').hidden = false;
+  $('schedules-title').focus();
 }
 
 $('open-signins').addEventListener('click', () => { location.hash = '#/sign-ins'; closeDrawer(); });
 $('open-schedules').addEventListener('click', () => { location.hash = '#/schedules'; closeDrawer(); });
 for (const back of document.querySelectorAll('.page .back')) {
-  back.addEventListener('click', () => history.back());
+  back.addEventListener('click', () => { location.hash = state.thread ? `#/t/${state.thread}` : '#/new'; });
 }
 
 // --- notifications: a push to the phone when the bot needs the user ---
@@ -434,8 +537,17 @@ async function route() {
   $('signins').hidden = true;
   $('schedules').hidden = true;
   const hash = location.hash;
-  if (hash === '#/sign-ins') return openSignins();
-  if (hash === '#/schedules') return openSchedules();
+  const isPage = hash === '#/sign-ins' || hash === '#/schedules';
+  $('layout').hidden = isPage;
+  updateBrowserButton();
+  for (const [id, path] of [['open-signins', '#/sign-ins'], ['open-schedules', '#/schedules']]) {
+    if (hash === path) $(id).setAttribute('aria-current', 'page'); else $(id).removeAttribute('aria-current');
+  }
+  if (isPage) $('title').textContent = hash === '#/sign-ins' ? 'Saved sign-ins' : 'Schedules';
+  if (isPage) {
+    await loadThreads();
+    return hash === '#/sign-ins' ? openSignins() : openSchedules();
+  }
   const match = hash.match(/^#\/t\/([0-9a-f-]{36})$/);
   await openThread(match ? match[1] : null);
   await loadThreads();
