@@ -802,6 +802,8 @@ def test_background_refreshes_stay_quiet_offline(frontend: tuple[Page, MockAPI])
     page.evaluate('reportUnlessOffline(loadThreads())')  # as the 15-second refresh does
     page.wait_for_timeout(300)
     expect(page.locator('#notice')).to_be_hidden()
+    page.evaluate("reportUnlessOffline(Promise.reject(new TypeError('a bug, not the network')))")
+    expect(page.locator('#notice-text')).to_have_text('a bug, not the network')  # only offline is quiet
 
 
 def test_a_sign_in_the_browser_does_not_keep_is_explained(frontend: tuple[Page, MockAPI]) -> None:
@@ -809,7 +811,10 @@ def test_a_sign_in_the_browser_does_not_keep_is_explained(frontend: tuple[Page, 
     page.goto('http://monty.test/')
     # Signed in, but the session cookie is not kept, so /api/me still answers 401.
     page.route('**/api/signin', lambda route: route.fulfill(status=200, content_type='application/json', body='{}'))
+    page.route('**/api/signup', lambda route: route.fulfill(status=201, content_type='application/json', body='{}'))
+    page.click('#signup-button')  # creating an account
     page.fill('#email', 'pat@example.test')
     page.fill('#password', 'correct horse')
     page.click('#signin-button')
-    expect(page.locator('#signin-error')).to_contain_text('Allow cookies for this site')
+    expect(page.locator('#signin-error')).to_contain_text('Allow cookies for this site, then sign in.')
+    expect(page.locator('#signin-button')).to_have_text('Sign in')  # the account exists now: back to signing in

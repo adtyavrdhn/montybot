@@ -103,7 +103,7 @@ function onClose(code) {
     useHere.hidden = false;
     return;
   }
-  status.textContent = 'Connection lost. Reconnecting...';
+  status.textContent = 'Connection lost. Reconnecting…';
   setTimeout(connect, Math.min(500 * 2 ** retries++, 10000));
 }
 

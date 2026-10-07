@@ -53,7 +53,9 @@ async function api(path, { method = 'GET', body } = {}) {
     data = (response.headers.get('Content-Type') || '').includes('application/json') ? await response.json() : null;
   } catch (error) {
     if (error.name === 'AbortError') throw error;
-    throw new Error('Could not reach Monty. Check your connection, and try again.');  // not the browser's words
+    const offline = new Error('Could not reach Monty. Check your connection, and try again.');  // not the browser's
+    offline.offline = true;
+    throw offline;
   }
   if (response.status === 401 && !['/api/signin', '/api/me'].includes(path)) signedOut();
   if (!response.ok) {
@@ -71,19 +73,20 @@ function problem(status, detail) {
   return detail || `Something went wrong (${status}). Please try again.`;
 }
 
-function reportUnlessOffline(promise) {
-  // For refreshes nobody asked for: offline, the page already says it is reconnecting, so only a server's answer
-  // (an error with a status) is worth a notice.
-  report(promise.catch((error) => { if (error.status) throw error; }));
+function showError(error) {
+  if (error.name === 'AbortError') return;  // a request of a page the user has left
+  console.error(error);
+  showNotice(error.message);
 }
 
 function report(promise) {
-  // For event handlers: show what went wrong, but not for requests of a page the user has left.
-  promise.catch((error) => {
-    if (error.name === 'AbortError') return;
-    console.error(error);
-    showNotice(error.message);
-  });
+  // For event handlers: show what went wrong.
+  promise.catch(showError);
+}
+
+function reportUnlessOffline(promise) {
+  // For refreshes nobody asked for: offline, the page already says it is reconnecting.
+  promise.catch((error) => { if (!error.offline) showError(error); });
 }
 
 function showNotice(text) {
@@ -150,16 +153,23 @@ $('signin-form').addEventListener('submit', async (event) => {
     await api(state.signingUp ? '/api/signup' : '/api/signin', {
       method: 'POST', body: { email: $('email').value, password: $('password').value },
     });
-    await start();
-    if (!$('signin').hidden && !$('signin-error').textContent) {
-      // Signed in, yet still signed out: the browser did not keep the session cookie.
-      $('signin-error').textContent = 'You were signed in, but this browser did not keep it. Allow cookies for this site, then try again.';
-    }
   } catch (error) {
     $('signin-error').textContent = error.message;
+    return;
   } finally {
     $('signin-button').disabled = false;
     $('signup-button').disabled = false;
+  }
+  try {
+    await start();
+  } catch (error) {
+    showError(error);  // signed in, but the first chat or list did not load: a notice on the page that opened
+    return;
+  }
+  if (!$('signin').hidden && !$('signin-error').textContent) {
+    // Signed in, yet still signed out: the browser did not keep the session cookie. The account exists now either way.
+    if (state.signingUp) $('signup-button').click();  // back to signing in
+    $('signin-error').textContent = 'You were signed in, but this browser did not save your sign-in. Allow cookies for this site, then sign in.';
   }
 });
 
@@ -188,7 +198,7 @@ async function loadThreads() {
   const open = $('layout').hidden ? null : threads.find((thread) => thread.id === state.threadId);
   const shownWorking = Boolean(state.run && ACTIVE.includes(state.run.status));
   const streamDown = !events || events.readyState === EventSource.CLOSED;
-  if (open && (Boolean(open.status) !== shownWorking || (shownWorking && streamDown))) report(loadChat());
+  if (open && (Boolean(open.status) !== shownWorking || (shownWorking && streamDown))) reportUnlessOffline(loadChat());
   const currentId = $('layout').hidden ? null : state.threadId;  // on Files or Schedules no chat is the current page
   const shown = JSON.stringify([currentId, threads]);
   if (shown === state.threadsShown) return;
