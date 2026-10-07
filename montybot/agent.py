@@ -58,11 +58,11 @@ CACHE = AnthropicModelSettings(
 definitions and the conversation so far (page snapshots included). Other providers ignore these keys."""
 
 
-def build_agent(model: Model | str, *, stream: bool = False, jev: bool = False) -> Agent[RunDeps, str]:
+def build_agent(model: Model | str, *, jev: bool = False) -> Agent[RunDeps, str]:
     """Tools run one at a time: they number their DBOS steps as they go, and an ask must be the run's only one."""
     return Agent[RunDeps, str](
         model,
-        name='montybot_stream' if stream else 'montybot',
+        name='montybot_stream',  # DBOS records model steps under this name; keep it so paused runs resume
         deps_type=RunDeps,
         instructions=[
             INSTRUCTIONS,
@@ -91,12 +91,9 @@ def build_agent(model: Model | str, *, stream: bool = False, jev: bool = False) 
             HandleDeferredToolCalls(handler=approvals.handle_approvals),
             DBOSDurability(
                 parallel_execution_mode='sequential',
-                # Function-only scripted models deliberately retain agent.run's
-                # nonstream request path; they have no request_stream implementation.
+                # Scripted models without a stream function cannot stream.
                 event_stream_handler=(
-                    streaming.handler
-                    if stream and not (isinstance(model, FunctionModel) and model.stream_function is None)
-                    else None
+                    None if isinstance(model, FunctionModel) and model.stream_function is None else streaming.handler
                 ),
             ),
         ],
