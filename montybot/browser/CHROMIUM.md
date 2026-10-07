@@ -53,8 +53,12 @@ Each `open()` starts a new Chrome; nothing is shared between browsers.
 - Chrome's own sandbox stays on (`chromium_sandbox=True`). It needs unprivileged user namespaces inside bwrap.
 
 - **Its own network, with one way out.** `--unshare-net` leaves Chrome only a loopback interface. `socat` inside
-  forwards `127.0.0.1:1080` to a Unix socket mounted from outside, where the browser's `EgressProxy` (`egress.py`)
-  answers SOCKS5. Chrome is started with `--proxy-server=socks5://127.0.0.1:1080 --proxy-bypass-list=<-loopback>`, so
+  forwards `127.0.0.1:1080` to a Unix socket mounted from outside, where `EgressProxy` (`egress.py`) answers SOCKS5.
+  On the deployed server the proxy runs in a container with no database network or app secrets; the app mounts its
+  socket directory read-only. The **directory**, not the socket inode, is mounted in bwrap, so new connections use
+  the replacement socket after a proxy restart. The app checks the SOCKS greeting before starting Chrome and fails
+  closed if the sidecar is down. Local server tests can use an in-process per-browser proxy instead. Chrome starts
+  with `--proxy-server=socks5://127.0.0.1:1080 --proxy-bypass-list=<-loopback>`, so
   every connection, loopback included, goes there with its host name; the proxy resolves it and refuses any private,
   loopback or link-local answer (`ipaddress.is_global`). Pages cannot reach the app's database, the host, or the
   cloud metadata address, by name or by number. Only TCP leaves, so there is no QUIC and no WebRTC UDP.

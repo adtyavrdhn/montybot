@@ -54,6 +54,24 @@ async def connect(proxy: Path, host: str, port: int) -> tuple[int, asyncio.Strea
     return reply[1], reader, writer
 
 
+async def test_proxy_can_restart_on_its_socket_path(socket_dir: Path) -> None:
+    path = socket_dir / 'egress.sock'
+    path.touch()  # a crashed sidecar can leave a stale socket in its volume
+    proxy = EgressProxy(path)
+    await proxy.start()
+    await proxy.stop()
+    assert not path.exists()
+    await proxy.start()
+    try:
+        reader, writer = await asyncio.open_unix_connection(str(path))
+        writer.write(b'\x05\x01\x00')
+        assert await reader.readexactly(2) == b'\x05\x00'
+        writer.close()
+        await writer.wait_closed()
+    finally:
+        await proxy.stop()
+
+
 async def test_refuses_private_addresses_and_names(socket_dir: Path) -> None:
     server, port = await echo_server()
     proxy = EgressProxy(socket_dir / 'egress.sock')

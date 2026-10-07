@@ -7,6 +7,7 @@ Playwright runs our wrapper script, the CDP pipe survives the `exec`, and everyt
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import struct
@@ -28,6 +29,7 @@ from montybot.browser.chromium_linux import (
 )
 from montybot.browser.conformance import Site, sample_state, serve_site
 from montybot.browser.contract import ActionFailed, Navigate
+from montybot.browser.egress import EgressProxy
 
 pytestmark = pytest.mark.anyio
 
@@ -121,6 +123,21 @@ def test_bwrap_command_with_a_proxy(tmp_path: Path) -> None:
     assert script.endswith('exec "$0" "$@"')  # Chrome gets Playwright's arguments and keeps fds 3 and 4
 
 
+def test_bwrap_command_with_a_shared_proxy(tmp_path: Path) -> None:
+    socket_dir = tmp_path / 'sockets'
+    proxy = socket_dir / 'egress.sock'
+    command = bwrap_command(
+        chrome=Path('/opt/chrome/chrome'),
+        profile=tmp_path / 'profile',
+        display=None,
+        proxy=proxy,
+        proxy_directory=socket_dir,
+    )
+    pairs = list(zip(command, command[1:], command[2:], strict=False))
+    assert ('--ro-bind', str(socket_dir), str(socket_dir)) in pairs
+    assert ('--bind', str(proxy), str(proxy)) not in pairs
+
+
 def test_bwrap_script_quotes_paths(tmp_path: Path) -> None:
     script = write_bwrap_script(
         path=tmp_path / 'chrome-in-bwrap', chrome=Path('/a b/Chrome'), profile=tmp_path / 'p', display=None
@@ -209,6 +226,54 @@ needs_linux_server = pytest.mark.skipif(
 async def test_real_bwrap_and_xvfb() -> None:
     async with server_backend(ChromiumOptions.server(allow_private_networks=True)) as backend:
         await check_server_launch(backend, serve_site())
+
+
+@needs_linux_server
+async def test_shared_proxy_survives_restart_inside_bwrap(tmp_path: Path) -> None:
+    socket_dir = tmp_path / 'sockets'
+    socket_dir.mkdir()
+    socket_path = socket_dir / 'proxy.sock'
+    proxy = EgressProxy(socket_path)
+    await proxy.start()
+    profile = tmp_path / 'profile'
+    profile.mkdir()
+    script = (
+        'import socket; '
+        f'p={str(socket_path)!r}; '
+        "s=socket.socket(socket.AF_UNIX); s.connect(p); s.sendall(b'\\x05\\x01\\x00'); "
+        'print(s.recv(2).hex(), flush=True); s.close(); '
+        'input(); '
+        "s=socket.socket(socket.AF_UNIX); s.connect(p); s.sendall(b'\\x05\\x01\\x00'); "
+        'print(s.recv(2).hex(), flush=True); s.close()'
+    )
+    process = await asyncio.create_subprocess_exec(
+        *bwrap_command(
+            chrome=Path('/usr/bin/python3'),
+            profile=profile,
+            display=None,
+            proxy=socket_path,
+            proxy_directory=socket_dir,
+        ),
+        '-c',
+        script,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        assert process.stdout is not None and process.stdin is not None
+        assert await asyncio.wait_for(process.stdout.readline(), 10) == b'0500\n'
+        await proxy.stop()
+        await proxy.start()
+        process.stdin.write(b'next\n')
+        await process.stdin.drain()
+        assert await asyncio.wait_for(process.stdout.readline(), 10) == b'0500\n'
+        assert await asyncio.wait_for(process.wait(), 10) == 0
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+        await proxy.stop()
 
 
 @needs_linux_server

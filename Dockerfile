@@ -22,7 +22,8 @@ COPY montybot ./montybot
 RUN uv sync --frozen --no-dev
 
 # The Claude Code sign-in and the users' files live on volumes mounted here; a new named volume copies this owner.
-RUN mkdir -p /data/claude-code /data/workspaces && chown pwuser:pwuser /data/claude-code /data/workspaces
+RUN mkdir -p /data/claude-code /data/workspaces /run/browser-egress \
+    && chown pwuser:pwuser /data/claude-code /data/workspaces /run/browser-egress
 USER pwuser
 
 # Last, so a new commit rebuilds nothing else. Logfire reports it as service.version.

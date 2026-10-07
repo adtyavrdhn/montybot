@@ -6,7 +6,7 @@ into the jail. Chrome sends every connection there (`--proxy-server=socks5://...
 name unresolved, so the proxy does the DNS lookup itself and connects to the address it checked:
 
 ```
-Chrome --TCP--> socat (in the jail) --Unix socket--> EgressProxy (in the app) --TCP--> public address
+Chrome --TCP--> socat (in the jail) --Unix socket--> EgressProxy (sidecar on the server) --TCP--> public address
 ```
 
 Only public addresses are allowed (`ipaddress.is_global`), unless `allow_private`: a page cannot reach the app's own
@@ -47,6 +47,8 @@ class EgressProxy:
         self._connections: set[asyncio.Task[None]] = set()
 
     async def start(self) -> None:
+        # The sidecar may restart on a persistent volume after an unclean exit.
+        self.path.unlink(missing_ok=True)
         self._server = await asyncio.start_unix_server(self._serve, path=str(self.path))
         self.path.chmod(0o600)
 
@@ -58,6 +60,7 @@ class EgressProxy:
             await asyncio.gather(*self._connections, return_exceptions=True)
             await self._server.wait_closed()
             self._server = None
+            self.path.unlink(missing_ok=True)
 
     async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         task = asyncio.current_task()
