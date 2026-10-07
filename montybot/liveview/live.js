@@ -99,7 +99,7 @@ function onClose(code) {
   if (code === 4404) return finish('This takeover has ended. Go back to the chat, and take over again if Monty still needs you.');
   if (code === 4401) return finish('Sign in, then open this link again.');
   if (code === 4409) {
-    status.textContent = 'You are driving Monty\'s browser in another window or device.';
+    status.textContent = 'You are driving Monty\'s browser in another window or on another device.';
     useHere.hidden = false;
     return;
   }

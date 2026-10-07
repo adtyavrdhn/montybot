@@ -165,6 +165,10 @@ async function loadThreads() {
   const load = ++state.threadLoads;
   const threads = await api('/api/threads');
   if (load !== state.threadLoads) return;  // a later load is drawing the list
+  const open = $('layout').hidden ? null : threads.find((thread) => thread.id === state.threadId);
+  if (open && open.status && !(state.run && ACTIVE.includes(state.run.status))) {
+    report(loadChat());  // a run started in the open chat elsewhere (a schedule, another tab): show it
+  }
   const currentId = $('layout').hidden ? null : state.threadId;  // on Files or Schedules no chat is the current page
   const shown = JSON.stringify([currentId, threads]);
   if (shown === state.threadsShown) return;
@@ -612,8 +616,13 @@ async function send(text) {
   try {
     created = await api(path, { method: 'POST', body: { text, timezone: TIMEZONE } });
   } catch (error) {
+    if (page !== before) throw error;
+    if (error.status === 409) await loadChat();  // Monty started on this chat elsewhere (a schedule, another tab)
     if (error.status !== 404 || threadId === null) throw error;
-    location.hash = '#/new';  // the chat was deleted (with its schedule); the message is still in the box
+    // The chat was deleted with its schedule; the message is still in the box. Show the notice once the new
+    // chat has opened, as opening a page clears notices.
+    location.hash = '#/new';
+    await new Promise((resolve) => window.addEventListener('hashchange', resolve, { once: true }));
     throw new Error('That chat was deleted. Send your message again to start a new chat.');
   }
   if ($('message').value.trim() === text) $('message').value = '';

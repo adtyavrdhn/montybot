@@ -721,3 +721,32 @@ def test_inline_triple_backticks_do_not_swallow_the_reply(frontend: tuple[Page, 
     page.goto(f'http://monty.test/#/t/{THREAD}')
     expect(page.locator('.msg.assistant pre')).to_have_count(0)
     expect(page.locator('.msg.assistant strong')).to_have_text('start')
+
+
+def test_a_run_started_elsewhere_shows_in_the_open_chat(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    mock.messages = [{'role': 'user', 'text': 'Weekly order check'}]
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    expect(page.locator('#send')).to_be_visible()
+    mock.thread_status = 'running'  # a schedule started it
+    mock.run = {'id': 'run', 'thread_id': THREAD, 'status': 'running', 'activity': ['Opening shop.test'], 'ask': None}
+    page.evaluate('loadThreads()')  # as the 15-second refresh does
+    expect(page.locator('#stop')).to_be_visible()
+    expect(page.locator('#status')).to_have_text('Opening shop.test')
+
+
+def test_sending_to_a_deleted_chat_starts_over_and_says_why(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    mock.messages = [{'role': 'user', 'text': 'Weekly order check'}]
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    page.route(
+        '**/api/threads/*/messages',
+        lambda route: route.fulfill(status=404, content_type='application/json', body='{"detail":"not found"}'),
+    )
+    page.fill('#message', 'Run it now')
+    page.click('#send')
+    expect(page).to_have_url('http://monty.test/#/new')
+    expect(page.locator('#notice')).to_contain_text('That chat was deleted')
+    expect(page.locator('#message')).to_have_value('Run it now')
