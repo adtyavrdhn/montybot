@@ -119,6 +119,36 @@ jobs:
       - run: uv sync --locked
       - run: uv run pytest -q -p no:cacheprovider -rs tests/browser/test_servo.py tests/browser/test_egress.py
 
+  # Lightpanda is evaluated, not deployed (#18): its conformance, unjailed and in the server's jail (bwrap, no network
+  # but the egress proxy, CDP only on a Unix socket). Not a deploy gate. The release binary is pinned by its SHA-256.
+  lightpanda-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      LIGHTPANDA_SHA256: aa5a4b8ed53d1e38b3c73f5b2647d0a84a82e6744557f45f9a9c85858aa031c3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Allow user namespaces, install bwrap and socat
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends bubblewrap socat
+      - name: Lightpanda 1.0.0
+        run: |
+          mkdir -p "$RUNNER_TEMP/lightpanda"
+          curl -fsSL -o "$RUNNER_TEMP/lightpanda/lightpanda" \
+            https://github.com/lightpanda-io/browser/releases/download/1.0.0/lightpanda-x86_64-linux
+          echo "$LIGHTPANDA_SHA256  $RUNNER_TEMP/lightpanda/lightpanda" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/lightpanda/lightpanda"
+          echo "MONTYBOT_LIGHTPANDA_BINARY=$RUNNER_TEMP/lightpanda/lightpanda" >> "$GITHUB_ENV"
+      - run: uv sync --locked
+      - run: uv run pytest -q -p no:cacheprovider -rs tests/browser/test_lightpanda.py tests/browser/test_egress.py
+
   # Chrome over our own CDP pipe, no Playwright at runtime, is evaluated, not deployed (cdp.md): its conformance,
   # unjailed and in the server's jail (headed on Xvfb, bwrap, no network but the egress proxy), its live view, and the
   # end-to-end suite. Not a deploy gate. Chrome for Testing is pinned by its SHA-256: the build Playwright 1.63 runs.
@@ -158,7 +188,8 @@ jobs:
           echo "$CHROME_SHA256  $RUNNER_TEMP/chrome.zip" | sha256sum -c -
           unzip -q "$RUNNER_TEMP/chrome.zip" -d "$RUNNER_TEMP"
           echo "MONTYBOT_CHROME_BINARY=$RUNNER_TEMP/chrome-linux64/chrome" >> "$GITHUB_ENV"
-          uv run playwright install-deps chromium
+      # Not the engine: the end-to-end tests drive the web app as its user would, in Playwright's headless shell.
+      - run: uv run playwright install --with-deps --only-shell chromium
       - run: uv run pytest -q -p no:cacheprovider -rs tests/browser/test_cdp.py tests/browser/test_egress.py
       - run: uv run pytest -q -p no:cacheprovider -rs tests/liveview/test_liveview_engines.py -k cdp
       - run: uv run pytest -q -p no:cacheprovider -n 4 --durations=10 tests/e2e --browser=cdp

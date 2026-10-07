@@ -9,17 +9,22 @@
 # /proc, which Docker's default profiles forbid, hence the three `security-opt`s, as in deploy/compose.yaml.
 #
 # For the Servo tests, set MONTYBOT_SERVO_BINARY to servoshell from the Linux release for the Docker host's
-# architecture (unpacked on this machine); its folder is mounted read-only at the same path.
+# architecture (unpacked on this machine); its folder is mounted read-only at the same path. The same goes for
+# MONTYBOT_LIGHTPANDA_BINARY and the Lightpanda Linux release binary.
 set -eu
 cd "$(dirname "$0")/../.."
 docker build --load --quiet --tag montybot-linux-tests tests/linux >/dev/null  # --load: a buildx container driver
-servo=''
+mounts=''
 if [ -n "${MONTYBOT_SERVO_BINARY:-}" ]; then
     servo_dir=$(dirname "$MONTYBOT_SERVO_BINARY")
-    servo="--volume $servo_dir:$servo_dir:ro --env MONTYBOT_SERVO_BINARY"
+    mounts="--volume $servo_dir:$servo_dir:ro --env MONTYBOT_SERVO_BINARY"
 fi
-# shellcheck disable=SC2086  # $servo is several words on purpose
-exec docker run --rm --network host $servo \
+if [ -n "${MONTYBOT_LIGHTPANDA_BINARY:-}" ]; then
+    lightpanda_dir=$(dirname "$MONTYBOT_LIGHTPANDA_BINARY")
+    mounts="$mounts --volume $lightpanda_dir:$lightpanda_dir:ro --env MONTYBOT_LIGHTPANDA_BINARY"
+fi
+# shellcheck disable=SC2086  # $mounts is several words on purpose
+exec docker run --rm --network host $mounts \
     --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined \
     --volume "$PWD:/checkout:ro" --volume montybot-linux-tests-uv:/home/tester/.cache/uv \
     --env MONTYBOT_TEST_POSTGRES --env MONTYBOT_TEST_MONTY_URL \

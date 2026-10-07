@@ -317,7 +317,8 @@
       heading = outerHeading;
     };
 
-    walk(document.body || document.documentElement, '');
+    const top = document.body || document.documentElement;
+    if (top) walk(top, '');  // Lightpanda's about:blank has no element at all
     flush();
     return items;
   }

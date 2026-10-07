@@ -11,10 +11,15 @@ factory. `LazyChromium` starts one Playwright per process on the first `open()` 
 | `montybot.engines:servo_server` | evaluation only: headless Servo in the same jail and egress proxy (`servo.md`) |
 | `montybot.engines:chromium_cdp_server` | evaluation: the same Chrome and jail, over our own CDP pipe, no Playwright (`cdp.md`) |
 | `montybot.engines:chromium_cdp_headless` | the same in Chrome's headless mode, unjailed, for tests |
+| `montybot.engines:lightpanda_server` | evaluation only: Lightpanda in the same jail and egress proxy (`lightpanda.md`) |
 
 Servo needs servoshell at `$MONTYBOT_SERVO_BINARY`, which the app image does not ship. Its sessions are not saved
-between runs on a stock build (`NotSupported('export')`), so keep `chromium_server` for real users. The CDP backend uses
-the app image's Playwright Chromium, or `$MONTYBOT_CHROME_BINARY`.
+between runs on a stock build (`NotSupported('export')`), so keep `chromium_server` for real users.
+
+Lightpanda needs its binary at `$MONTYBOT_LIGHTPANDA_BINARY`, which the app image does not ship either. It draws no
+pixels, so it has no screenshots, no live view and no hand-off: also not for real users.
+
+The CDP backend uses the app image's Playwright Chromium, or `$MONTYBOT_CHROME_BINARY`.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ from playwright.async_api import Playwright, async_playwright
 from montybot.browser.cdp import CDPOptions, ChromiumCDPBackend
 from montybot.browser.chromium import ChromiumBackend, ChromiumOptions
 from montybot.browser.contract import Action, Download, Screenshot, Snapshot
+from montybot.browser.lightpanda import LightpandaBackend, LightpandaOptions
 from montybot.browser.live import FrameSource
 from montybot.browser.servo import ServoBackend, ServoOptions
 from montybot.browser.state import BrowserState
@@ -121,3 +127,8 @@ def chromium_cdp_headless() -> ChromiumCDPBackend:
 def servo_server() -> ServoBackend:
     """Always jailed: Servo's WebDriver listens on every interface, so it never runs on the server's own network."""
     return ServoBackend(ServoOptions(bwrap=True, egress_socket=_egress_socket()))
+
+
+def lightpanda_server() -> LightpandaBackend:
+    """Always jailed: the server's network is reached only through the egress proxy."""
+    return LightpandaBackend(LightpandaOptions(bwrap=True, egress_socket=_egress_socket()))

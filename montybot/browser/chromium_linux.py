@@ -22,6 +22,7 @@ import os
 import secrets
 import shlex
 import struct
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -174,10 +175,11 @@ def bwrap_command(
     proxy: Path | None = None,
     proxy_directory: Path | None = None,
     expose: tuple[int, Path] | None = None,
+    env: Mapping[str, str] | None = None,
     bwrap: str = 'bwrap',
 ) -> list[str]:
     """The bwrap command line that runs `chrome` (or another browser, such as servoshell) with `profile` as its only
-    writable folder.
+    writable folder. `env` adds to the few variables the jail sets.
 
     Chrome's own arguments, which Playwright passes (`--user-data-dir=PROFILE`, `--remote-debugging-pipe`, ...),
     go after this. The profile is mounted at the same path inside, so Playwright's `--user-data-dir` works unchanged.
@@ -212,12 +214,12 @@ def bwrap_command(
     command += ['--ro-bind', chrome_dir, chrome_dir]
     command += ['--proc', '/proc', '--dev', '/dev', '--tmpfs', '/dev/shm', '--tmpfs', '/tmp']
     command += ['--bind', str(profile), str(profile), '--chdir', str(profile)]
-    env = {'HOME': str(profile), 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
+    variables = {'HOME': str(profile), 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', **(env or {})}
     if display is not None:
         command += ['--bind', str(display.socket), str(display.socket)]
         command += ['--ro-bind', str(display.xauthority), str(display.xauthority)]
-        env |= {'DISPLAY': display.name, 'XAUTHORITY': str(display.xauthority)}
-    for name, value in env.items():
+        variables |= {'DISPLAY': display.name, 'XAUTHORITY': str(display.xauthority)}
+    for name, value in variables.items():
         command += ['--setenv', name, value]
     if proxy is None:
         if expose is not None:
