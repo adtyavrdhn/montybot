@@ -48,7 +48,8 @@ async def ask_user(ctx: RunContext[RunDeps], question: str) -> str:
 
 
 CACHE = AnthropicModelSettings(
-    anthropic_cache=True,
+    # Automatic caching conflicts with explicit message breakpoints. Override model defaults too.
+    anthropic_cache=False,
     anthropic_cache_instructions=True,
     anthropic_cache_tool_definitions=True,
     anthropic_cache_messages=True,
