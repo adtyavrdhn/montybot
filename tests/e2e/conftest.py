@@ -44,6 +44,8 @@ BACKENDS = {
     'chromium': 'montybot.engines:chromium_headless',
     # Unjailed headless servoshell at MONTYBOT_SERVO_BINARY, for the engine evaluation (#18).
     'servo': 'montybot.browser.servo:ServoBackend',
+    # Unjailed Lightpanda at MONTYBOT_LIGHTPANDA_BINARY, for the same evaluation.
+    'lightpanda': 'montybot.browser.lightpanda:LightpandaBackend',
 }
 
 
