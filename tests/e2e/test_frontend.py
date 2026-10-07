@@ -38,6 +38,7 @@ class MockAPI:
     def handle(self, route: Route) -> None:
         request = route.request
         path = request.url.split('monty.test', 1)[1]
+        path = path.removesuffix('?refresh')  # the chat list's background refresh is the same request
         method = request.method
         if path.startswith('/api/telemetry/v1/'):
             self.calls.append((method, path, None))
@@ -880,11 +881,15 @@ def telemetry_started(page: Page) -> bool:
 
 
 def flush_telemetry(page: Page, mock: MockAPI, *expected: str) -> str:
-    """Send the spans telemetry holds, as the browser does when the page is hidden, until they include `expected`."""
+    """Send the spans telemetry holds, as the browser does when the page is hidden, until they include `expected`.
+
+    A request's span ends a moment after its answer, so a flush may find nothing new: then there is no export to wait
+    for, and the next flush sends it.
+    """
     exported = ''
-    for _ in range(10):
-        with page.expect_request('**/api/telemetry/v1/traces'):
-            page.evaluate("document.dispatchEvent(new Event('pagehide'))")
+    for _ in range(40):
+        page.evaluate("document.dispatchEvent(new Event('pagehide'))")
+        page.wait_for_timeout(250)
         exported = '\n'.join(body for path, body in mock.exported if path == '/api/telemetry/v1/traces')
         if all(text in exported for text in expected):
             return exported
@@ -991,3 +996,16 @@ def test_telemetry_is_sent_before_signing_out(frontend: tuple[Page, MockAPI]) ->
     assert ('POST', '/api/telemetry/v1/traces') in calls[:signout]
     exported = '\n'.join(body for path, body in mock.exported if path == '/api/telemetry/v1/traces')
     assert '"sign out"' in exported
+
+
+def test_telemetry_leaves_the_chat_list_refresh_out(frontend: tuple[Page, MockAPI]) -> None:
+    """Polling is not the user's doing: no span, and no `traceparent`, so the server records nothing for it."""
+    page, mock = frontend
+    mock.telemetry = True
+    workspace(page, mock)
+    assert telemetry_started(page)
+    mock.traceparents.clear()
+    page.evaluate('loadThreads({ refresh: true })')
+    assert ('GET', '/api/threads') not in mock.traceparents
+    page.evaluate('loadThreads()')  # the user's own, such as after sending: traced
+    assert mock.traceparents[('GET', '/api/threads')]

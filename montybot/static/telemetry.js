@@ -205,7 +205,9 @@ export function start(settings, user) {
   // Returns what stops it: removes its listeners, sends what is left, and shuts the SDK down.
   includeContent = Boolean(settings.include_content);
   const endpoint = (signal) => new URL(`/api/telemetry/v1/${signal}`, location.origin).href;  // the exporter needs it absolute
-  const ignored = [/\/api\/telemetry(\/|$)/, /\/api\/runs\/[^/]+\/screen$/];  // its own requests; a screenshot a second
+  // Its own requests, and polling (a screenshot a second, the chat list's refresh): neither is the user's doing, and the
+  // server's spans for them would be noise.
+  const ignored = [/\/api\/telemetry(\/|$)/, /\/api\/runs\/[^/]+\/screen$/, /\/api\/threads\?refresh$/];
   const shutdown = logfire.configure({
     traceUrl: endpoint('traces'),
     metrics: { metricUrl: endpoint('metrics') },

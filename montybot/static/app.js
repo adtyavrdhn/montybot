@@ -288,9 +288,10 @@ async function signOut() {
 
 // --- the chat list ---
 
-async function loadThreads() {
+async function loadThreads({ refresh = false } = {}) {
+  // `refresh`: the background refresh, which telemetry leaves out (`telemetry.js`): it is polling, not the user.
   const load = ++state.threadLoads;
-  const threads = await api('/api/threads');
+  const threads = await api(refresh ? '/api/threads?refresh' : '/api/threads');
   if (load !== state.threadLoads) return;  // a later load is drawing the list
   // The open chat catches up when the list knows better: a run started elsewhere (a schedule, another tab), or
   // finished while the chat's event stream was down for good (an HTTP error closes it; only a reload reopens it).
@@ -327,7 +328,7 @@ async function loadThreads() {
 
 setInterval(() => {
   // Another chat may start needing the user at any time.
-  if (!$('main').hidden && document.visibilityState === 'visible') reportUnlessOffline(loadThreads());
+  if (!$('main').hidden && document.visibilityState === 'visible') reportUnlessOffline(loadThreads({ refresh: true }));
 }, 15000);
 
 // --- the drawer, on small screens ---
