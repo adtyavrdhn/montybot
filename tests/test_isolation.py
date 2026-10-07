@@ -15,6 +15,7 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 from montybot import crypto, memory, schedules, signins, store
 from montybot.browser.state import BrowserState, Cookie
 from montybot.db import Pool, create_pool, migrate
+from montybot.models import AskKind
 from montybot.workspaces import WorkspaceFiles, Workspaces, save_download
 
 pytestmark = pytest.mark.anyio
@@ -397,7 +398,8 @@ async def test_the_chat_list_says_what_a_waiting_chat_waits_for(pool: Pool) -> N
         await store.create_run(
             connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt='buy eggs', trigger='message'
         )
-        for occurrence, kind in [(1, 'question'), (2, 'approval')]:
+        asks: list[tuple[int, AskKind]] = [(1, 'question'), (2, 'approval')]
+        for occurrence, kind in asks:
             await store.create_ask(
                 connection,
                 ask_id=str(uuid.uuid4()),
