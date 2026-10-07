@@ -40,7 +40,7 @@ from pydantic_ai.models.test import TestModel
 from sites.shop import Shop
 from starlette.types import ASGIApp, Message, Scope
 
-from montybot import observability
+from montybot import api, observability
 from montybot.app import create_app
 from montybot.browser.contract import ActionFailed, LifecycleError
 from montybot.browser.service import UnknownRun
@@ -558,7 +558,18 @@ def test_client_trace_context_websocket_and_lifespan(local_traces: InMemorySpanE
     asyncio.run(call({'type': 'websocket', 'headers': [(b'traceparent', TRACEPARENT.encode())]}))
     asyncio.run(call({'type': 'lifespan'}))
     asyncio.run(call({'type': 'http', 'headers': [(b'traceparent', b'not-a-traceparent')]}))
-    assert seen == ['websocket', 'lifespan', 'http']
-    websocket, lifespan, invalid = local_traces.get_finished_spans()
+    unsampled = f'00-{CLIENT_TRACE_ID}-{CLIENT_SPAN_ID}-00'  # would switch the server's own spans off
+    asyncio.run(call({'type': 'http', 'headers': [(b'traceparent', unsampled.encode())]}))
+    assert seen == ['websocket', 'lifespan', 'http', 'http']
+    websocket, lifespan, invalid, not_sampled = local_traces.get_finished_spans()
     assert websocket.parent is not None and websocket.parent.span_id == int(CLIENT_SPAN_ID, 16)
-    assert lifespan.parent is None and invalid.parent is None
+    assert lifespan.parent is None and invalid.parent is None and not_sampled.parent is None
+
+
+def test_client_telemetry_is_bounded_per_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(api, '_telemetry_sent', {})
+    monkeypatch.setattr(api, 'TELEMETRY_PER_MINUTE', (3, 100))
+    assert [api.telemetry_allowed('a', 10, now=0) for _ in range(4)] == [True, True, True, False]
+    assert api.telemetry_allowed('b', 100, now=1)  # each user has their own minute
+    assert not api.telemetry_allowed('b', 1, now=2)
+    assert api.telemetry_allowed('a', 10, now=60)  # a new minute

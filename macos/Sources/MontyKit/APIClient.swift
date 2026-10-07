@@ -116,10 +116,11 @@ public final class APIClient: Sendable {
     /// Sends the app's traces for this user if the server takes them, through this client's session and site login;
     /// stops if it no longer does. Never fails: telemetry is not worth bothering the user about.
     public func startTelemetry(userId: String) async {
+        let generation = telemetry.currentGeneration  // signing out while the server answers wins
         let settings = (try? await telemetrySettings()) ?? .off
         guard !telemetry.isConfigured(settings, userId: userId) else { return }
         let exporter = Telemetry.exporter(settings, baseURL: baseURL, session: session, siteLogin: siteLogin)
-        telemetry.configure(settings, exporter: exporter, userId: userId)
+        telemetry.configure(settings, exporter: exporter, userId: userId, generation: generation)
     }
 
     // MARK: accounts

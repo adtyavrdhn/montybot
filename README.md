@@ -56,7 +56,8 @@ call by route template, the user's actions, the live view, and errors. They post
 which forwards it with the server's token, for signed-in users only, so neither app holds a token. `GET
 /api/telemetry` tells them whether to send anything (only with `LOGFIRE_TOKEN`) and whether to include content. A
 traced action sends `traceparent`, and the server's database, run and agent spans for it join the app's trace; there
-are still no HTTP server spans, and requests without the header, such as polling, are not traced. Forwarded data
+are still no HTTP server spans, and requests without the header are not traced (the Mac app's polling and the
+web app's screenshots send none; the web app's other requests do). Forwarded data
 skips the server's scrubbing, so each app keeps to the lines above itself: URLs only as route templates, nothing
 from under `/live/`, no passwords, emails or file names, and content only with `LOGFIRE_INCLUDE_CONTENT`.
 

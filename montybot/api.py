@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import secrets
+import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from typing import Annotated, Any, TypeVar
@@ -681,6 +682,21 @@ async def remove_memory(request: Request, user: User) -> Response:
 
 OTLP_TYPES = ('application/json', 'application/x-protobuf')
 MAX_TELEMETRY_BYTES = 5 * 1024 * 1024
+TELEMETRY_PER_MINUTE = (120, 10 * 1024 * 1024)
+"""Exports and bytes one user may send a minute: far above what the apps send, and a bound on the rest."""
+_telemetry_sent: dict[str, tuple[float, int, int]] = {}  # user id: the minute's start, exports and bytes so far
+
+
+def telemetry_allowed(user_id: str, size: int, now: float) -> bool:
+    """Whether this export fits in the user's minute. Each server process counts its own."""
+    for stale in [key for key, (start, _, _) in _telemetry_sent.items() if now - start >= 60]:
+        del _telemetry_sent[stale]
+    start, exports, sent = _telemetry_sent.get(user_id, (now, 0, 0))
+    max_exports, max_bytes = TELEMETRY_PER_MINUTE
+    if exports + 1 > max_exports or sent + size > max_bytes:
+        return False
+    _telemetry_sent[user_id] = (start, exports + 1, sent + size)
+    return True
 
 
 @auth.signed_in
@@ -702,12 +718,20 @@ async def forward_telemetry(request: Request) -> Response:
     server's token, so no token is in the apps. Only the body and its content type are forwarded, never cookies.
 
     Not `auth.signed_in`, which takes only JSON: OTLP protobuf needs a CORS preflight too, so it is as safe.
-    Without `LOGFIRE_TOKEN` the answer is 403 and nothing is sent.
+    Without `LOGFIRE_TOKEN` the answer is 403 and nothing is sent. Anyone may sign up, so each user's sending is
+    bounded (`TELEMETRY_PER_MINUTE`); what they send is not checked, so their spans are only as true as their app.
     """
-    if await auth.signed_in_user(request) is None:
+    user = await auth.signed_in_user(request)
+    if user is None:
         return JSONResponse({'detail': 'sign in first'}, status_code=401)
     if request.headers.get('content-type', '').split(';')[0].strip() not in OTLP_TYPES:
         return JSONResponse({'detail': 'send OTLP'}, status_code=415)
+    try:
+        size = int(request.headers['content-length'])
+    except (KeyError, ValueError):
+        size = MAX_TELEMETRY_BYTES  # unknown: count it as the most it may be
+    if not telemetry_allowed(user.id, size, time.monotonic()):
+        return JSONResponse({'detail': 'too much telemetry'}, status_code=429, headers={'Retry-After': '60'})
     return await logfire.forward_export_request_starlette(request, max_body_size=MAX_TELEMETRY_BYTES)
 
 
