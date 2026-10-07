@@ -147,6 +147,39 @@ jobs:
       - run: uv sync --locked
       - run: uv run pytest -q -p no:cacheprovider -rs tests/browser/test_lightpanda.py tests/browser/test_egress.py
 
+  # Camoufox (anti-detect Firefox) is evaluated, not deployed (#18): its conformance headless, and in the server's jail
+  # (headed in Xvfb, bwrap, no network but the egress proxy, BiDi only on a Unix socket). Not a deploy gate. The release
+  # has no checksum file; this SHA-256 is GitHub's asset digest, checked against a download.
+  camoufox-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CAMOUFOX_SHA256: 72637885ee67c93466ad377831c647192f8f08fb5c6fd9279de1320b49dd2b53
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Allow user namespaces, install bwrap, socat, Xvfb and fontconfig
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends bubblewrap socat xvfb fontconfig unzip
+      - name: Camoufox 156.0.1-beta.36
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/camoufox.zip" \
+            https://github.com/daijro/camoufox/releases/download/v156.0.1-beta.36/camoufox-156.0.1-beta.36-lin.x86_64.zip
+          echo "$CAMOUFOX_SHA256  $RUNNER_TEMP/camoufox.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/camoufox.zip" -d "$RUNNER_TEMP/camoufox"
+          rm "$RUNNER_TEMP/camoufox.zip"
+          echo "MONTYBOT_CAMOUFOX_BINARY=$RUNNER_TEMP/camoufox/camoufox" >> "$GITHUB_ENV"
+      - run: uv sync --locked
+      - name: Firefox's system libraries
+        run: uv run playwright install-deps firefox
+      - run: uv run pytest -q -p no:cacheprovider -rs tests/browser/test_camoufox.py tests/browser/test_egress.py
+
   sidecar-smoke:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
