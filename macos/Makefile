@@ -1,6 +1,7 @@
 # Monty for Mac. `make` lists what you can do; `make run` is all you need to try it locally.
 .DEFAULT_GOAL := help
-SERVER ?= http://127.0.0.1:8000
+SERVER ?= https://35-188-200-101.sslip.io
+LOCAL ?= http://127.0.0.1:8000
 REPO := $(abspath ..)
 
 .PHONY: help setup dev app run test journeys tour share clean
@@ -15,7 +16,7 @@ setup:  ## Check the tools (Xcode, uv) and install the server's Python packages
 	cd $(REPO) && uv sync
 	cd $(REPO) && uv run playwright install chromium
 
-dev:  ## Run a local montybot for the app (scripted model, fixture sites, embedded Postgres; Ctrl-C stops it)
+dev:  ## For development only: a local montybot with a demo model (make app SERVER=$(LOCAL) to use it)
 	cd $(REPO) && uv run python macos/scripts/dev_server.py
 
 app:  ## Build build/Monty.app for SERVER
@@ -24,12 +25,12 @@ app:  ## Build build/Monty.app for SERVER
 run: app  ## Build and open the app
 	open build/Monty.app
 
-test:  ## Unit tests, and the journeys too when a dev server is up
-	@if curl -fs $(SERVER)/healthz >/dev/null; then MONTY_TEST_SERVER=$(SERVER) swift test; \
-	else echo "No server at $(SERVER): unit tests only (run 'make dev' in another terminal for the journeys)"; swift test; fi
+test:  ## Unit tests, and the journeys too when 'make dev' is running (never against the real server)
+	@if curl -fs $(LOCAL)/healthz >/dev/null; then MONTY_TEST_SERVER=$(LOCAL) swift test; \
+	else echo "No dev server at $(LOCAL): unit tests only (run 'make dev' in another terminal for the journeys)"; swift test; fi
 
-tour: app  ## Every screen as PNG and text in build/tour (needs 'make dev' and an unlocked Mac)
-	scripts/tour.sh build/tour
+tour:  ## Every screen as PNG and text in build/tour (needs 'make dev' and an unlocked Mac)
+	scripts/build-app.sh $(LOCAL) && scripts/tour.sh build/tour
 
 share: app  ## build/Monty.zip to send to someone (ad hoc signed; see README for Developer ID)
 	cd build && rm -f Monty.zip && ditto -c -k --keepParent Monty.app Monty.zip

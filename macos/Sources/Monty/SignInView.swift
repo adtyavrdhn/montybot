@@ -22,6 +22,8 @@ struct RootView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .signedOut:
                 SignInView()
+            case .siteLogin:
+                SiteLoginView()
             case .signedIn:
                 MainView()
             }
@@ -246,6 +248,74 @@ struct SignInView: View {
                 self.error = error.localizedDescription
                 focus = .password
             }
+            working = false
+        }
+    }
+}
+
+/// A private server (Mike's has a site login in front of the app): its login, once, before Monty's own sign-in.
+struct SiteLoginView: View {
+    @Environment(AppModel.self) private var app
+    @State private var user = ""
+    @State private var password = ""
+    @State private var error: String?
+    @State private var working = false
+    @FocusState private var focus: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Logomark(size: 26)
+                Text("Monty").font(.system(size: 17, weight: .semibold))
+            }
+            .padding(.bottom, 22)
+            Text("This Monty is private").font(.system(size: 20, weight: .semibold)).accessibilityAddTraits(.isHeader)
+            Text("Enter the site login for \(app.serverURL.host() ?? "the server"). You only need to do this once on this Mac.")
+                .font(.system(size: 13))
+                .foregroundStyle(Palette.onSurfaceVariant)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 4)
+                .padding(.bottom, 20)
+            TextField("Username", text: $user, prompt: Text("Username"))
+                .labelsHidden().accessibilityLabel("Username")
+                .textContentType(.username)
+                .focused($focus)
+                .field(focused: focus)
+                .padding(.bottom, 10)
+            SecureField("Password", text: $password, prompt: Text("Password"))
+                .labelsHidden().accessibilityLabel("Password")
+                .field(focused: false)
+                .onSubmit(submit)
+            Group {
+                if let error {
+                    Label(error, systemImage: "exclamationmark.circle").font(.system(size: 12)).foregroundStyle(Palette.onErrorContainer)
+                }
+            }
+            .frame(minHeight: 18, alignment: .topLeading)
+            .padding(.top, 8)
+            Button(action: submit) {
+                HStack(spacing: 8) {
+                    if working { ProgressView().controlSize(.small).tint(Palette.onLink) }
+                    Text("Continue")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.primary)
+            .keyboardShortcut(.defaultAction)
+            .disabled(working || user.isEmpty || password.isEmpty)
+        }
+        .frame(width: 340)
+        .card(padding: 28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { focus = true }
+    }
+
+    private func submit() {
+        guard !working, !user.isEmpty, !password.isEmpty else { return }
+        working = true
+        error = nil
+        Task {
+            do { try await app.useSiteLogin(user: user, password: password) } catch { self.error = "That login didn't work. Check it with whoever runs the server." }
             working = false
         }
     }

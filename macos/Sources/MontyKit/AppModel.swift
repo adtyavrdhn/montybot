@@ -33,6 +33,8 @@ public final class AppModel {
         case launching
         /// The server can't be reached at launch; the saved session is kept and the app keeps trying.
         case unreachable
+        /// The server is private: its site login is needed before anything else (`realm` names it).
+        case siteLogin(realm: String)
         case signedOut
         case signedIn(User)
     }
@@ -108,6 +110,12 @@ public final class AppModel {
 
     /// At launch: carry on signed in if the saved session is still good.
     public func start() async {
+        do {
+            _ = try await client.threads()  // a cheap way to learn whether the server wants a site login, or us
+        } catch APIError.siteLogin(let realm) {
+            phase = .siteLogin(realm: realm)
+            return
+        } catch {}
         guard client.hasSessionCookie else { phase = .signedOut; return }
         do {
             signedIn(try await client.me())
@@ -124,6 +132,14 @@ public final class AppModel {
                 await self.start()
             }
         }
+    }
+
+    /// The private server's site login, entered once and kept in the keychain.
+    public func useSiteLogin(user: String, password: String) async throws {
+        guard case .siteLogin(let realm) = phase else { return }
+        client.saveSiteLogin(user: user, password: password, realm: realm)
+        await start()
+        if case .siteLogin = phase { throw APIError.server(status: 401, detail: "that site login didn't work") }
     }
 
     /// From the "can't reach Monty" screen: try now.

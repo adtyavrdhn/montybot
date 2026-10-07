@@ -17,10 +17,9 @@ scripts            dev_server.py, build-app.sh, make-icon.swift, tour.sh and ax-
 
 ```bash
 cd macos
-make setup     # once: checks Xcode and uv, installs the server's Python packages and Chromium
-make dev       # a local montybot (scripted model, fixture sites, embedded Postgres); leave it running
-make run       # in another terminal: builds and opens Monty.app
-make           # everything else: test, tour, share, clean
+make run       # builds and opens Monty.app, talking to the deployed server (it asks once for its site login)
+make share     # build/Monty.zip to send to someone
+make           # everything else: setup, dev (a local server for development), test, tour, clean
 ```
 
 To give someone the app: `SERVER=https://monty.example.com make share` makes `build/Monty.zip`. It is signed ad
