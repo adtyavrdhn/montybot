@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 from conftest import App
-from playwright.sync_api import Page, expect, sync_playwright
+from playwright.sync_api import FloatRect, Page, expect, sync_playwright
 from sites.shop import Shop
 
 from montybot.workspaces import Workspaces, save_download
@@ -54,7 +54,7 @@ def send(page: Page, text: str) -> None:
     page.click('#send')
 
 
-def assert_fits_the_window(page: Page, selector: str) -> dict[str, float]:
+def assert_fits_the_window(page: Page, selector: str) -> FloatRect:
     """The element is wholly on screen: nothing of it needs scrolling to."""
     box = page.frame_locator('#live').locator(selector).bounding_box()
     viewport = page.viewport_size
