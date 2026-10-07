@@ -7,14 +7,14 @@ factory. `LazyChromium` starts one Playwright per process on the first `open()` 
 |---|---|
 | `montybot.engines:chromium` | a window on this machine (Mac or Linux desktop), or the server setup on Linux without one |
 | `montybot.engines:chromium_headless` | Playwright's headless shell, for CI and tests |
-| `montybot.engines:chromium_server` | the Linux server: Xvfb per browser, inside bwrap |
+| `montybot.engines:chromium_server` | the Linux server through Playwright: Xvfb per browser, inside bwrap; the previous default, kept to roll back |
 | `montybot.engines:servo_server` | evaluation only: headless Servo in the same jail and egress proxy (`servo.md`) |
-| `montybot.engines:chromium_cdp_server` | evaluation: the same Chrome and jail, over our own CDP pipe, no Playwright (`cdp.md`) |
+| `montybot.engines:chromium_cdp_server` | the server's default: the same Chrome and jail, over our own CDP pipe, no Playwright (`cdp.md`) |
 | `montybot.engines:chromium_cdp_headless` | the same in Chrome's headless mode, unjailed, for tests |
 | `montybot.engines:lightpanda_server` | evaluation only: Lightpanda in the same jail and egress proxy (`lightpanda.md`) |
 
 Servo needs servoshell at `$MONTYBOT_SERVO_BINARY`, which the app image does not ship. Its sessions are not saved
-between runs on a stock build (`NotSupported('export')`), so keep `chromium_server` for real users.
+between runs on a stock build (`NotSupported('export')`), so not for real users.
 
 Lightpanda needs its binary at `$MONTYBOT_LIGHTPANDA_BINARY`, which the app image does not ship either. It draws no
 pixels, so it has no screenshots, no live view and no hand-off: also not for real users.

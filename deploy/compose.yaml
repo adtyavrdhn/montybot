@@ -88,7 +88,9 @@ services:
       SECURE_COOKIES: 'true'
       EXECUTOR_ID: vm-1
       MODEL: ${MODEL:-claude-code:claude-opus-5-5}
-      BROWSER_BACKEND: ${BROWSER_BACKEND:-montybot.engines:chromium_server}
+      # Chrome over our own CDP pipe (montybot/browser/cdp.md). Roll back to Playwright with
+      # BROWSER_BACKEND=montybot.engines:chromium_server in /opt/montybot/.env.
+      BROWSER_BACKEND: ${BROWSER_BACKEND:-montybot.engines:chromium_cdp_server}
       BROWSER_MAX_OPEN: ${BROWSER_MAX_OPEN:-2}
       BROWSER_EGRESS_SOCKET: /run/browser-egress/proxy.sock
       CLAUDE_CODE_CREDENTIALS: file
