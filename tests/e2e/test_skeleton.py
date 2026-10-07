@@ -55,6 +55,23 @@ def test_a_waiting_run_survives_the_app_being_killed(app: App, client: Client) -
     assert len(memories) == 1 and 'green' in memories[0]['text'].lower()  # written once, after the restart
 
 
+def test_parallel_tool_calls_replay_after_the_app_is_killed(app: App, client: Client) -> None:
+    """Three tool calls of one response run in parallel, then the run waits. Killed and started again, DBOS replays
+    their recorded steps in the same order: each memory is written once, and the results are where they were."""
+    client.sign_up()
+    thread = client.ask('Remember two things about me, then ask')
+    question = client.wait_for_ask(thread, 'question')
+
+    app.kill()
+    app.start()
+
+    assert client.wait_for_ask(thread, 'question')['id'] == question['id']
+    client.answer(question, text='nothing')
+    assert client.wait_for_reply(thread) == 'Remembered. | Remembered. | [] | You said: nothing'
+    memories = sorted(m['text'] for m in client.http.get('/api/memories').json())
+    assert memories == ['Buys free-range eggs', 'Shops on Mondays']
+
+
 def test_sign_in_through_a_hand_off_then_approve_the_order(client: Client, shop: Shop) -> None:
     client.sign_up()
     thread = client.ask(f'Order eggs from {shop.url}')

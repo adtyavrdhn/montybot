@@ -164,7 +164,7 @@ async def refused_url(url: str, *, allow_private: bool) -> str | None:
     return None
 
 
-@browser_tools.tool
+@browser_tools.tool(sequential=True)  # the run has one browser
 async def commit(ctx: RunContext[RunDeps], target: str, description: str) -> str:
     """Click something that cannot be undone, such as placing an order, paying, booking or sending a message as the
     user. The user is asked first, with `description` ("Place the order for eggs, milk and bread: $12.40"), unless a
@@ -182,7 +182,7 @@ async def commit(ctx: RunContext[RunDeps], target: str, description: str) -> str
     return await browser_step(ctx, 'commit', use)
 
 
-@browser_tools.tool
+@browser_tools.tool(sequential=True)  # several DBOS steps and a wait for the user
 async def hand_off(ctx: RunContext[RunDeps], reason: str) -> str:
     """Give the browser to the user for a step you must not or cannot do: a password, a 2FA code, a CAPTCHA or
     press-and-hold check, a payment form. `reason` is shown to them ("Please sign in to the shop"). Waits until they

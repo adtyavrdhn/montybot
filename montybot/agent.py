@@ -37,7 +37,7 @@ You are Monty, a personal assistant that does things for the user on the web, in
 user_tools: FunctionToolset[RunDeps] = FunctionToolset(id='user')
 
 
-@user_tools.tool
+@user_tools.tool(sequential=True)  # several DBOS steps and a wait for the user
 async def ask_user(ctx: RunContext[RunDeps], question: str) -> str:
     """Ask the user a question and wait for the answer. Only when you cannot reasonably go on without it."""
     reply = await approvals.ask(ctx, 'question', question)
@@ -68,7 +68,11 @@ definitions and the conversation so far (page snapshots included). Other provide
 
 
 def build_agent(model: Model | str) -> Agent[RunDeps, str]:
-    """Tools run one at a time: they number their DBOS steps as they go, and an ask must be the run's only one."""
+    """Tool calls of one response run in parallel (`parallel_ordered_events`). DBOS numbers a step when it starts, so
+    replay matches only if each parallel tool takes its one step before it first waits, as the memory, schedule and
+    `run_python` tools do. Tools that make several steps or share the run's state are `sequential=True` barriers that
+    run alone: `run_code` (the run's Monty session and browser), `commit`, `hand_off`, `ask_user` and
+    `schedule_task` (an ask must be the run's only one)."""
     return Agent[RunDeps, str](
         model,
         name='montybot',  # what Logfire shows (`invoke_agent montybot`); DBOS step names are DBOSDurability's `name`
@@ -96,7 +100,7 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
                 # The name runs' model steps were recorded under, from when there was a streaming and a
                 # non-streaming agent; keep it so paused runs resume.
                 name='montybot_stream',
-                parallel_execution_mode='sequential',
+                parallel_execution_mode='parallel_ordered_events',
                 # Scripted models without a stream function cannot stream.
                 event_stream_handler=(
                     None if isinstance(model, FunctionModel) and model.stream_function is None else streaming.handler

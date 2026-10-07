@@ -324,7 +324,7 @@ async def run_snippet(
 code_tools: FunctionToolset[RunDeps] = FunctionToolset(id='code')
 
 
-@code_tools.tool
+@code_tools.tool(sequential=True)  # one Monty session per run: two at once would lose variables
 @timed('code.run')
 async def run_code(ctx: RunContext[RunDeps], code: str) -> str:
     """Run Python in your session, with your browser as async functions inside it (see the instructions). Returns
