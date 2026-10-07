@@ -45,12 +45,14 @@ function send(message) {
 
 function connect() {
   useHere.hidden = true;
+  shown = 0;  // a new connection numbers its frames from 1 again
   socket = new WebSocket(socketUrl());
   socket.binaryType = 'arraybuffer';
   socket.onopen = () => { retries = 0; status.textContent = 'You are driving the browser.'; };
+  const mine = socket;
   socket.onmessage = (event) => {
     if (typeof event.data === 'string') onMessage(JSON.parse(event.data));
-    else onFrame(event.data);
+    else onFrame(event.data, mine);
   };
   socket.onclose = (event) => onClose(event.code);
 }
@@ -74,11 +76,12 @@ function onMessage(message) {
   }
 }
 
-async function onFrame(buffer) {
+async function onFrame(buffer, from) {
   const length = new DataView(buffer).getUint32(0);
   const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 4, length)));
   const bitmap = await createImageBitmap(new Blob([new Uint8Array(buffer, 4 + length)], { type: header.mime }));
-  if (header.seq < shown) { bitmap.close(); return; }  // decoded out of order; a newer frame is already up
+  // Decoded out of order (a newer frame is already up), or from a connection that has since been replaced.
+  if (from !== socket || header.seq < shown) { bitmap.close(); return; }
   shown = header.seq;
   size = { width: header.width, height: header.height };
   if (view.width !== bitmap.width || view.height !== bitmap.height) {
@@ -93,7 +96,7 @@ function onClose(code) {
   socket = null;
   if (finished) return;
   if (code === 4410) return finish('Monty has its browser back. Nothing more to do here.');
-  if (code === 4404) return finish('This link is not for you, or it has expired.');
+  if (code === 4404) return finish('This takeover has ended. Go back to the chat, and take over again if Monty still needs you.');
   if (code === 4401) return finish('Sign in, then open this link again.');
   if (code === 4409) {
     status.textContent = 'You are driving Monty\'s browser in another window or device.';

@@ -116,7 +116,7 @@ def test_a_weekly_cart_fill_over_two_weeks(
     assert 'Scheduled' in client.wait_for_reply(chat)
     (weekly,) = schedules(client)
     assert weekly['name'] == 'Weekly groceries' and not weekly['paused']
-    assert weekly['when'] == 'Mondays at 09:00 (0 9 * * 1, Europe/London)'
+    assert weekly['when'] == 'Mondays at 09:00 (Europe/London)'
     thread = weekly['thread_id']
 
     # Week 1: no saved sign-in yet, so the run hands off and the user signs in.

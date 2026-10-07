@@ -175,7 +175,8 @@ async def thread_schedule(connection: Connection, user_id: str, thread_id: str) 
 async def create_run(
     connection: Connection, *, run_id: str, user_id: str, thread_id: str, prompt: str, trigger: Trigger
 ) -> Run:
-    """Raises `ActiveRun` when the thread has an unfinished run. Call inside a transaction."""
+    """Raises `ActiveRun` when the thread has an unfinished run, `ThreadGone` when it was deleted. Call inside a
+    transaction."""
     try:
         async with connection.transaction():
             cursor = await connection.execute(
@@ -184,7 +185,7 @@ async def create_run(
                 (run_id, user_id, thread_id, trigger, prompt),
             )
     except UniqueViolation as error:
-        raise ActiveRun('this thread is still working on the last message') from error
+        raise ActiveRun('Monty is still working on the last message in this chat.') from error
     except ForeignKeyViolation as error:
         raise ThreadGone('this chat was deleted') from error
     row = await cursor.fetchone()

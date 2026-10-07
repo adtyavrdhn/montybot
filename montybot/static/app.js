@@ -1,9 +1,9 @@
-// monty-bot web app: chat with the bot, watch its browser, take over when it asks. No build step, no framework.
+// The Monty web app: chat with Monty, watch its browser, take over when it asks. No build step, no framework.
 //
-// Staying correct while the user moves around: everything that belongs to what is on screen (its requests, the run's
-// event stream, the browser screenshots) is tied to `page.signal`. Opening another chat or page aborts it, which
-// cancels those requests and closes the stream, so an old chat can never draw over a new one. The user's own actions
-// (sending, answering, stopping) are not tied to it: they always finish.
+// Staying correct while the user moves around: `newPage()` tears down everything that belongs to what is on screen.
+// It aborts `page`, whose signal every read (`api()` GET) uses, and closes the run's event stream and the browser
+// screenshots, so an old chat can never draw over a new one. The user's own actions (sending, answering,
+// stopping) are not tied to it: they always finish.
 'use strict';
 
 const $ = (id) => document.getElementById(id);
@@ -49,11 +49,18 @@ async function api(path, { method = 'GET', body } = {}) {
   const data = (response.headers.get('Content-Type') || '').includes('application/json') ? await response.json() : null;
   if (response.status === 401 && !['/api/signin', '/api/me'].includes(path)) signedOut();
   if (!response.ok) {
-    const error = new Error(data && typeof data.detail === 'string' ? data.detail : `Request failed (${response.status})`);
+    const error = new Error(problem(response.status, data && typeof data.detail === 'string' ? data.detail : null));
     error.status = response.status;
     throw error;
   }
   return data;
+}
+
+function problem(status, detail) {
+  // The server's words where they are meant for the user; plain ones where they are not.
+  if (status === 404) return 'That is no longer here: it may have finished or been deleted.';
+  if (status === 422) return 'Please check what you typed, and try again.';
+  return detail || `Something went wrong (${status}). Please try again.`;
 }
 
 function report(promise) {
@@ -158,11 +165,11 @@ async function loadThreads() {
   const load = ++state.threadLoads;
   const threads = await api('/api/threads');
   if (load !== state.threadLoads) return;  // a later load is drawing the list
-  const shown = JSON.stringify([$('layout').hidden ? null : state.threadId, threads]);
+  const currentId = $('layout').hidden ? null : state.threadId;  // on Files or Schedules no chat is the current page
+  const shown = JSON.stringify([currentId, threads]);
   if (shown === state.threadsShown) return;
   state.threadsShown = shown;
   const focusedId = $('threads').contains(document.activeElement) ? document.activeElement.dataset.id : null;
-  const currentId = $('layout').hidden ? null : state.threadId;  // on Files or Schedules no chat is the current page
   const badges = { waiting: 'Needs you', running: 'Working', queued: 'Working' };
   $('threads').replaceChildren(...threads.map((thread) => {
     const open = element('button', '', thread.id === currentId ? 'current' : '');
@@ -449,6 +456,7 @@ function renderAsk(ask) {
   if (ask.kind === 'question') {
     const input = element('textarea');
     input.rows = 2;
+    input.maxLength = 20000;
     input.placeholder = 'Your answer';
     input.setAttribute('aria-label', 'Your answer to Monty');
     row.append(input, button('Answer', '', async () => {
@@ -495,10 +503,9 @@ async function takeOver(ask) {
     return;
   }
   if (page !== before || !state.run || !state.run.ask || state.run.ask.id !== ask.id) return;  // left, or it ended
-  stopWatching();
   state.takeoverAskId = ask.id;
   $('live').src = link.url;
-  // A modal dialog: the page behind cannot be reached and Escape closes it.
+  // A modal dialog: the page behind cannot be reached. The live view's own "Back to chat" closes it.
   $('takeover').showModal();
   $('live').focus();
 }
@@ -523,8 +530,10 @@ $('takeover').addEventListener('close', () => {  // also after Escape
 
 function startWatching() {
   // A screenshot a second while the browser panel is open.
-  if (watching) return;
+  if (watching && watching.runId === state.run.id) return;
+  stopWatching();  // another run's screenshots
   watching = new AbortController();
+  watching.runId = state.run.id;
   const signal = watching.signal;
   const runId = state.run.id;
   if (desktop.matches && !state.browserClosed) showBrowser();
@@ -599,7 +608,14 @@ async function send(text) {
   const before = page;
   const threadId = state.threadId;
   const path = threadId === null ? '/api/threads' : `/api/threads/${threadId}/messages`;
-  const created = await api(path, { method: 'POST', body: { text, timezone: TIMEZONE } });
+  let created;
+  try {
+    created = await api(path, { method: 'POST', body: { text, timezone: TIMEZONE } });
+  } catch (error) {
+    if (error.status !== 404 || threadId === null) throw error;
+    location.hash = '#/new';  // the chat was deleted (with its schedule); the message is still in the box
+    throw new Error('That chat was deleted. Send your message again to start a new chat.');
+  }
   if ($('message').value.trim() === text) $('message').value = '';
   if (page !== before) {
     await loadThreads();  // the user went elsewhere: the chat is in the list
@@ -707,7 +723,7 @@ async function openSchedules() {
     name.append(element('strong', s.name), element('span', `${s.when}${s.paused ? ' (paused)' : ''}`, 'list-detail'));
     const actions = element('span', '', 'list-actions');
     actions.append(
-      button('Open conversation', 'secondary', () => { location.hash = `#/t/${s.thread_id}`; }),
+      button('Open chat', 'secondary', () => { location.hash = `#/t/${s.thread_id}`; }),
       button(s.paused ? 'Resume' : 'Pause', 'secondary', async () => {
         await api(`/api/schedules/${s.id}/${s.paused ? 'resume' : 'pause'}`, { method: 'POST', body: {} });
         await openSchedules();
@@ -744,9 +760,19 @@ async function showNotificationButton() {
   const response = await fetch('/api/push/key', { credentials: 'same-origin' });  // not tied to the page on screen
   state.pushKey = response.ok ? (await response.json()).public_key : null;
   $('enable-notifications').hidden = !state.pushKey;
+  $('notifications-label').textContent = 'Notify me when Monty needs me';
   const registration = state.pushKey && await navigator.serviceWorker.getRegistration('/sw.js');
   const subscription = registration && await registration.pushManager.getSubscription();
-  if (subscription && Notification.permission === 'granted') $('notifications-label').textContent = 'Notifications are on';
+  if (!subscription || Notification.permission !== 'granted') return;
+  // Say "on" only once the server has it for whoever is signed in now. A subscription another account made on
+  // this device would send that account's pushes here: drop it.
+  try {
+    await api('/api/push/subscriptions', { method: 'POST', body: subscription.toJSON() });
+    $('notifications-label').textContent = 'Notifications are on';
+  } catch (error) {
+    if (error.status !== 409) throw error;
+    await subscription.unsubscribe();
+  }
 }
 
 async function enableNotifications() {
@@ -793,7 +819,6 @@ async function route() {
   if (found) {
     newPage();
     $('title').textContent = found[1];
-    updateBrowserButton();
     await Promise.all([found[2](), loadThreads()]);
     return;
   }

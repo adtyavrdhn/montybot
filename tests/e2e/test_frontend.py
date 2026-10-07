@@ -463,7 +463,7 @@ def test_schedule_opens_its_conversation(frontend: tuple[Page, MockAPI], width: 
     if width < 900:
         page.click('#menu-button')
     page.click('#open-schedules')
-    page.get_by_role('button', name='Open conversation', exact=True).click()
+    page.get_by_role('button', name='Open chat', exact=True).click()
     expect(page).to_have_url(f'http://monty.test/#/t/{THREAD}')
     expect(page.locator('#schedules')).not_to_be_visible()
     expect(page.locator('#composer')).to_be_visible()
@@ -709,3 +709,15 @@ def test_the_chat_list_keeps_focus_and_marks_no_chat_on_other_pages(frontend: tu
     expect(page.locator('#threads button').first).to_be_focused()
     page.click('#open-files')
     expect(page.locator('#threads button.current')).to_have_count(0)
+
+
+def test_inline_triple_backticks_do_not_swallow_the_reply(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    mock.messages = [
+        {'role': 'user', 'text': 'How do I install it?'},
+        {'role': 'assistant', 'text': 'Run ```npm install``` first.\n\nThen **start** it.'},
+    ]
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    expect(page.locator('.msg.assistant pre')).to_have_count(0)
+    expect(page.locator('.msg.assistant strong')).to_have_text('start')

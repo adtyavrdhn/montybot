@@ -328,6 +328,7 @@ async def run_events(request: Request, user: User) -> Response:
     async def events() -> AsyncIterator[str]:
         previous_view: dict[str, Any] | None = None
         previous_preview: dict[str, Any] | None = None
+        yield 'retry: 1000\n\n'  # reconnect after a second, well before the page would warn about a lost connection
         # Periodically reconnect so SessionMiddleware validates the cookie signature/age again.
         deadline = asyncio.get_running_loop().time() + 300
         while asyncio.get_running_loop().time() < deadline and not await request.is_disconnected():
@@ -672,7 +673,7 @@ def schedule_json(schedule: Schedule, paused: bool) -> dict[str, Any]:
     return {
         'id': schedule.id,
         'name': schedule.name,
-        'when': f'{schedule.when} ({schedule.cron}, {schedule.timezone})',
+        'when': f'{schedule.when} ({schedule.timezone})',
         'paused': paused,
         'watch': schedule.watch,
         'thread_id': schedule.thread_id,

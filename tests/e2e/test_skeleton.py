@@ -97,6 +97,9 @@ def test_stop_a_run_that_waits_for_the_user(client: Client) -> None:
     question = client.wait_for_ask(thread, 'question')
     assert statuses(client) == {thread: 'waiting'}
     run_id = client.thread(thread)['run']['id']
+    with client.http.stream('GET', f'/api/runs/{run_id}/events') as events:
+        # The browser reconnects after a second when the server ends a stream, before the page warns about it.
+        assert next(events.iter_lines()) == 'retry: 1000'
 
     assert client.http.post(f'/api/runs/{run_id}/stop', json={}).status_code == 200
 
