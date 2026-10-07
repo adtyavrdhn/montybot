@@ -13,9 +13,7 @@ links, resource and scope, is searched. Standalone tests require no database.
 from __future__ import annotations
 
 import asyncio
-import json
 import threading
-import urllib.request
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -30,6 +28,7 @@ import pytest
 import uvicorn
 from conftest import Client, Human
 from helpers import eventually, free_port
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -84,6 +83,9 @@ def serve_traced(
         **settings,
     )
     configure_observability(configured, span_processors=[SimpleSpanProcessor(exporter)])
+    # The tests' httpx client stands in for an app elsewhere. Instrumented in this process, it would trace every
+    # request and send its own `traceparent`, over one a test sends.
+    HTTPXClientInstrumentor().uninstrument()
     server = uvicorn.Server(uvicorn.Config(create_app(configured), host='127.0.0.1', port=port, log_level='warning'))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -168,6 +170,13 @@ def test_traces(traced: tuple[InProcessApp, InMemorySpanExporter, bool], databas
 
     (lifecycle,) = [span for span in spans if span.name == 'run.lifecycle']
     assert (lifecycle.attributes or {})['user_id'] == str(user[0])
+    # An untraced client's run is a trace of its own, the agent in it; requests and polling start none.
+    assert lifecycle.parent is None
+    (agent_run,) = [span for span in spans if span.name == 'invoke_agent montybot']
+    assert agent_run.context and lifecycle.context
+    assert agent_run.context.trace_id == lifecycle.context.trace_id
+    roots = {span.name for span in spans if span.parent is None}
+    assert not roots & {'db.query', 'db.pool.acquire', 'run.dispatch', 'browser.peek_screenshot'}, roots
     model_requests = [span for span in spans if span.name == 'chat scripted']
     assert all((span.attributes or {}).get('run_id') == run_id for span in model_requests)
     assert 'http.server' not in names
@@ -492,21 +501,13 @@ def test_client_trace_joins_server_spans(
     client = Client(app)  # pyright: ignore[reportArgumentType]
     client.sign_up()
     exporter.clear()
-    # Not through httpx, which Logfire instruments in this process: its own span would replace our traceparent.
-    sent = urllib.request.Request(
-        f'{app.url}/api/threads',
-        data=b'{"text": "Say hello"}',
-        headers={
-            'content-type': 'application/json',
-            'cookie': '; '.join(f'{name}={value}' for name, value in client.http.cookies.items()),
-            'traceparent': TRACEPARENT,
-            'baggage': 'user_id=forged',
-        },
+    response = client.http.post(
+        '/api/threads',
+        json={'text': 'Say hello'},
+        headers={'traceparent': TRACEPARENT, 'baggage': 'user_id=forged'},
     )
-    with urllib.request.urlopen(sent) as response:
-        assert response.status == 201
-        thread_id = json.load(response)['thread_id']
-    assert client.wait_for_reply(thread_id)
+    assert response.status_code == 201, response.text
+    assert client.wait_for_reply(response.json()['thread_id'])
     eventually(
         lambda: any(span.name == 'run.lifecycle' for span in exporter.get_finished_spans()) or None,
         what='the run to finish',
@@ -520,11 +521,10 @@ def test_client_trace_joins_server_spans(
     assert roots and all(span.parent is not None and span.parent.is_remote for span in roots)
     assert not any((span.attributes or {}).get('user_id') == 'forged' for span in spans)
 
-    # Polling without traceparent stays out of the client's trace.
+    # Polling without traceparent makes no spans at all: its database calls start no trace.
     exporter.clear()
-    client.http.get('/api/threads')
-    later = exporter.get_finished_spans()
-    assert later and not any(span.context.trace_id == int(CLIENT_TRACE_ID, 16) for span in later if span.context)
+    assert client.http.get('/api/threads').status_code == 200
+    assert exporter.get_finished_spans() == ()
 
 
 def test_client_telemetry_off_without_token(traced: tuple[InProcessApp, InMemorySpanExporter, bool]) -> None:

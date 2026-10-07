@@ -17,6 +17,8 @@ The web and Mac apps send their own telemetry through `/api/telemetry/v1/...` (`
 forwards it to Logfire with the server's token. Forwarded data is not scrubbed here, so each client keeps to the same
 lines itself (`montybot/static/telemetry.js`, `macos/Sources/MontyKit/Telemetry.swift`). A client that traces an
 action sends `traceparent`, and `ClientTraceContext` puts the server's spans for that request in the client's trace.
+A run started any other way is a trace of its own (`workflows.start`), and calls made all the time, such as the
+database calls behind polling, are recorded only inside a trace (`timing(..., only_in_trace=True)`).
 """
 
 from __future__ import annotations
@@ -97,8 +99,15 @@ def kind_of(error: BaseException) -> Literal['error', 'expected', 'cancelled']:
 
 
 @contextmanager
-def timing(name: str) -> Generator[Span, None, None]:
-    """`name` must be a literal operation label."""
+def timing(name: str, *, only_in_trace: bool = False) -> Generator[Span, None, None]:
+    """`name` must be a literal operation label.
+
+    `only_in_trace` is for what happens all the time, such as the database calls behind the apps' polling: it is
+    recorded inside a trace (a run, a client's traced action) and never starts one of its own.
+    """
+    if only_in_trace and not trace.get_current_span().get_span_context().is_valid:
+        yield trace.INVALID_SPAN
+        return
     tracer = trace.get_tracer('montybot.timings')
     with tracer.start_as_current_span(name, record_exception=False, set_status_on_exception=False) as span:
         try:
@@ -108,11 +117,13 @@ def timing(name: str) -> Generator[Span, None, None]:
             raise
 
 
-def timed(name: str) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, CoroutineType[Any, Any, T]]]:
+def timed(
+    name: str, *, only_in_trace: bool = False
+) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, CoroutineType[Any, Any, T]]]:
     def decorate(function: Callable[P, Awaitable[T]]) -> Callable[P, CoroutineType[Any, Any, T]]:
         @wraps(function)
         async def wrapped(*args: P.args, **kwargs: P.kwargs) -> T:
-            with timing(name):
+            with timing(name, only_in_trace=only_in_trace):
                 return await function(*args, **kwargs)
 
         return wrapped

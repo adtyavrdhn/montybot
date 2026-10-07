@@ -17,7 +17,7 @@ from montybot.observability import timed
 class TimedCursor(AsyncCursor[DictRow]):
     """Time queries without exporting SQL, parameters, results or exception text."""
 
-    @timed('db.query')
+    @timed('db.query', only_in_trace=True)
     async def execute(
         self,
         query: Query,
@@ -36,7 +36,7 @@ Connection = AsyncConnection[DictRow]
 
 
 class Pool(AsyncConnectionPool[Connection]):
-    @timed('db.pool.acquire')
+    @timed('db.pool.acquire', only_in_trace=True)
     async def getconn(self, timeout: float | None = None) -> Connection:
         return await super().getconn(timeout=timeout)
 
