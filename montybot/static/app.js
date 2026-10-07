@@ -20,6 +20,7 @@ const state = {
   chatLoads: 0,  // numbers each chat load, so only the latest one is drawn
   threadLoads: 0,  // the same for the chat list
   takeoverAskId: null,  // the hand-off whose live view is open
+  chatShown: false,  // the open chat has been drawn at least once
   browserClosed: false,  // the user closed the browser panel in this chat, so it does not open by itself again
   threadsShown: '',  // the chat list as last drawn, so an unchanged list is not redrawn under the user's focus
   signingUp: false,
@@ -45,7 +46,13 @@ async function api(path, { method = 'GET', body } = {}) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
-  const response = await fetch(path, init);
+  let response;
+  try {
+    response = await fetch(path, init);
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    throw new Error('Could not reach Monty. Check your connection, and try again.');  // not the browser's words
+  }
   const data = (response.headers.get('Content-Type') || '').includes('application/json') ? await response.json() : null;
   if (response.status === 401 && !['/api/signin', '/api/me'].includes(path)) signedOut();
   if (!response.ok) {
@@ -287,6 +294,7 @@ async function openChat(threadId) {
   state.draft = null;
   state.draftLost = false;
   state.browserClosed = false;
+  state.chatShown = false;
   if (threadId === null) {
     $('title').textContent = 'New chat';
     $('messages').replaceChildren(emptyChat());
@@ -307,13 +315,14 @@ async function loadChat() {
     thread = await api(`/api/threads/${state.threadId}`);
   } catch (error) {
     if (error.status === 404) { location.hash = '#/new'; return; }
-    if (load === state.chatLoads && error.name !== 'AbortError' && state.run === null) {
+    if (load === state.chatLoads && error.name !== 'AbortError' && !state.chatShown) {
       $('title').textContent = 'Could not load this chat';  // the newest load failed: say so, and let the user act
       $('send').disabled = false;
     }
     throw error;
   }
   if (load !== state.chatLoads) return;  // a later load is drawing this chat
+  state.chatShown = true;
   $('title').textContent = thread.title || 'Monty';
   const box = $('messages');
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
@@ -827,8 +836,11 @@ async function route() {
     return;
   }
   const match = hash.match(/^#\/t\/([0-9a-f-]{36})$/);
-  await openChat(match ? match[1] : null);
-  await loadThreads();
+  try {
+    await openChat(match ? match[1] : null);
+  } finally {
+    await loadThreads();  // also when the chat failed to load: the list is where the user tries again
+  }
 }
 
 async function start() {

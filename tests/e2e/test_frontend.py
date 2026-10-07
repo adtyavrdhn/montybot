@@ -763,3 +763,13 @@ def test_a_chat_that_fails_to_load_says_so_and_lets_you_act(frontend: tuple[Page
     expect(page.locator('#title')).to_have_text('Could not load this chat')
     expect(page.locator('#notice')).to_contain_text('Something went wrong (500)')
     expect(page.locator('#send')).to_be_enabled()
+    expect(page.locator('#threads button')).to_have_count(1)  # the list loads anyway, to try again from
+
+
+def test_no_connection_says_so_in_plain_words(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    workspace(page, mock)
+    page.route('**/api/threads', lambda route: route.abort())
+    page.fill('#message', 'Compare flights')
+    page.click('#send')
+    expect(page.locator('#notice-text')).to_have_text('Could not reach Monty. Check your connection, and try again.')
