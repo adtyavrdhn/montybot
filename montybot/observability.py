@@ -15,17 +15,21 @@ the agent. HTTP server requests are not traced.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Generator, Sequence
 from contextlib import contextmanager
 from functools import wraps
 from types import CoroutineType
-from typing import Any, ParamSpec, TypeVar
+from typing import Any, Literal, ParamSpec, TypeVar
 
 import logfire
+from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSWorkflowCancelledError
 from opentelemetry import trace
 from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.trace import Span, StatusCode
+from pydantic_monty import MontyError
 
+from montybot.browser.contract import BrowserError, LifecycleError
 from montybot.settings import Settings
 
 P = ParamSpec('P')
@@ -52,11 +56,35 @@ def configure_observability(settings: Settings, *, span_processors: Sequence[Spa
 
 
 def record_error(span: Span, error: BaseException) -> None:
-    """The type always; the message and traceback, which can quote pages or rows, only with content."""
-    span.set_status(StatusCode.ERROR)
+    """The type always; the message and traceback, which can quote pages or rows, only with content. Only a failure
+    of ours marks the span as an error (see `kind_of`), so error rates mean bugs."""
+    kind = kind_of(error)
     span.set_attribute('error.type', type(error).__qualname__)
-    if _include_content:
+    if kind == 'error':
+        span.set_status(StatusCode.ERROR)
+    else:
+        span.set_attribute('error.kind', kind)
+        if kind == 'expected':
+            span.set_attribute('logfire.level_num', _WARN)  # still easy to find, as a warning
+    if _include_content and kind != 'cancelled':
         span.record_exception(error, escaped=True)
+
+
+_WARN = 13
+_CANCELLED = (asyncio.CancelledError, DBOSWorkflowCancelledError, DBOSAwaitedWorkflowCancelledError)
+
+
+def kind_of(error: BaseException) -> Literal['error', 'expected', 'cancelled']:
+    """`cancelled`: the user stopped the run. `expected`: an answer the caller handles, not a failure of ours: a page
+    that did not load or a target that is not there (`ActionFailed`, `TargetNotFound`), what the browser service says
+    by design (no browser to watch or close, a hand-off already given back, the user's browser busy), an engine's
+    `NotSupported`, and errors in the agent's own code (`MontyError`), which the agent is shown. `error`: the rest,
+    a `LifecycleError` (calling a backend out of order) included."""
+    if isinstance(error, _CANCELLED):
+        return 'cancelled'
+    if isinstance(error, MontyError) or (isinstance(error, BrowserError) and not isinstance(error, LifecycleError)):
+        return 'expected'
+    return 'error'
 
 
 @contextmanager
