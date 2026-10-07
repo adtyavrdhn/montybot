@@ -32,6 +32,8 @@ _CONNECT = 1
 _IPV4, _DOMAIN, _IPV6 = 1, 3, 4
 _SUCCEEDED, _NOT_ALLOWED, _HOST_UNREACHABLE, _REFUSED, _NOT_SUPPORTED = 0, 2, 4, 5, 7
 _CONNECT_TIMEOUT = 30
+_HANDSHAKE_TIMEOUT = 10
+_MAX_CONNECTIONS = 128
 _CLOSE_GRACE = 5
 
 
@@ -60,6 +62,9 @@ class EgressProxy:
     async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         task = asyncio.current_task()
         assert task is not None
+        if len(self._connections) >= _MAX_CONNECTIONS:
+            writer.close()
+            return
         self._connections.add(task)
         try:
             await self._handle(reader, writer)
@@ -70,6 +75,19 @@ class EgressProxy:
             writer.close()
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        async with asyncio.timeout(_HANDSHAKE_TIMEOUT):
+            request = await self._handshake(reader, writer)
+        if request is None:
+            return
+        try:
+            status, upstream = await asyncio.wait_for(self._connect(*request), _CONNECT_TIMEOUT)
+        except TimeoutError:
+            status, upstream = _HOST_UNREACHABLE, None
+        _reply(writer, status)
+        if upstream is not None:
+            await self._relay(reader, writer, upstream)
+
+    async def _handshake(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> tuple[str, int] | None:
         version, count = await reader.readexactly(2)
         methods = await reader.readexactly(count)
         if version != _VERSION or _NO_AUTH not in methods:
@@ -89,11 +107,15 @@ class EgressProxy:
         (port,) = struct.unpack('>H', await reader.readexactly(2))
         if version != _VERSION or command != _CONNECT:
             _reply(writer, _NOT_SUPPORTED)
-            return
-        status, upstream = await self._connect(host, port)
-        _reply(writer, status)
-        if upstream is None:
-            return
+            return None
+        return host, port
+
+    async def _relay(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        upstream: tuple[asyncio.StreamReader, asyncio.StreamWriter],
+    ) -> None:
         up_reader, up_writer = upstream
         # When either side is done, the other gets a moment to finish, then both close: socat inside the jail never
         # keeps a half-closed connection, and a silent server must not hold sockets open until the browser closes.
@@ -112,8 +134,10 @@ class EgressProxy:
         self, host: str, port: int
     ) -> tuple[int, tuple[asyncio.StreamReader, asyncio.StreamWriter] | None]:
         try:
-            infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
-        except OSError:
+            infos = await asyncio.wait_for(
+                asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM), _CONNECT_TIMEOUT
+            )
+        except (OSError, TimeoutError):
             return _HOST_UNREACHABLE, None
         addresses = [str(info[4][0]) for info in infos]
         # Any private answer refuses the name, as `browsing.refused_url` does, so DNS cannot pick one for us.
