@@ -198,6 +198,8 @@ async def start_occurrence(resources: Resources, schedule_id: str, workflow_id: 
         except store.ActiveRun:
             logfire.info('Schedule {schedule_id} is still busy: occurrence skipped', schedule_id=schedule_id)
             return None
+        except store.ThreadGone:
+            return None  # the schedule was deleted while this occurrence started
     return run_id, schedule
 
 

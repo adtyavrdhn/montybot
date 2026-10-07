@@ -206,6 +206,8 @@ async def add_message(request: Request, user: User) -> Response:
             )
         except store.ActiveRun as error:
             return JSONResponse({'detail': str(error)}, status_code=409)
+        except store.ThreadGone:
+            return NOT_FOUND
     await workflows.start(run_id)
     return JSONResponse({'thread_id': thread.id, 'run_id': run_id}, status_code=201)
 

@@ -29,7 +29,7 @@ function renderMarkdown(text) {
       const [, hashes, title] = line.match(HEADING);
       blocks.append(node(`h${Math.min(hashes.length + 2, 6)}`, inline(title)));
       i++;
-    } else if (line.includes('|') && isDivider(lines[i + 1])) {
+    } else if (line.includes('|') && isDivider(lines[i + 1], line)) {
       const rows = [cells(line)];
       for (i += 2; i < lines.length && lines[i].includes('|'); i++) rows.push(cells(lines[i]));
       blocks.append(table(rows));
@@ -53,12 +53,15 @@ function renderMarkdown(text) {
 function startsBlock(lines, i) {
   const line = lines[i];
   return line.trimStart().startsWith('```') || HEADING.test(line) || LIST_ITEM.test(line) ||
-    (line.includes('|') && isDivider(lines[i + 1]));
+    (line.includes('|') && isDivider(lines[i + 1], line));
 }
 
-function isDivider(line) {
-  // The line under a table's header: | --- | :---: |. Checked cell by cell, as one regex would backtrack badly.
-  return line !== undefined && line.includes('-') && cells(line).every((cell) => /^:?-{3,}:?$/.test(cell));
+function isDivider(line, header) {
+  // The line under a table's header, one cell per header cell: | --- | :-: |. Cell by cell, as one regex would
+  // backtrack badly on long lines.
+  if (line === undefined || !line.includes('-')) return false;
+  const dividers = cells(line);
+  return dividers.length === cells(header).length && dividers.every((cell) => /^:?-+:?$/.test(cell));
 }
 
 function cells(line) {

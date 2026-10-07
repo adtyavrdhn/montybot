@@ -330,3 +330,19 @@ async def test_an_answered_run_shows_as_working_until_it_carries_on(pool: Pool) 
         answered = await api.run_view(connection, user, await store.load_run(connection, run_id))
         assert answered['status'] == 'running' and answered['ask'] is None
         assert await store.active_runs(connection, user.id) == {thread.id: 'running'}  # the chat list agrees
+
+
+async def test_a_run_for_a_deleted_chat_says_so(pool: Pool) -> None:
+    """A schedule deleted while its occurrence starts takes its chat; the new run must fail cleanly."""
+    async with pool.connection() as connection:
+        user = await store.create_user(connection, 'gone@example.test', 'x')
+        assert user is not None
+        with pytest.raises(store.ThreadGone):
+            await store.create_run(
+                connection,
+                run_id=str(uuid.uuid4()),
+                user_id=user.id,
+                thread_id=str(uuid.uuid4()),
+                prompt='hi',
+                trigger='schedule',
+            )

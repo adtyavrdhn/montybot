@@ -9,7 +9,7 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-from psycopg.errors import UniqueViolation
+from psycopg.errors import ForeignKeyViolation, UniqueViolation
 from psycopg.types.json import Jsonb
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
@@ -19,6 +19,10 @@ from montybot.models import FINISHED, Ask, AskKind, Run, RunStatus, Schedule, Th
 
 class ActiveRun(Exception):
     """The thread already has a run that has not finished."""
+
+
+class ThreadGone(Exception):
+    """The thread was deleted (with its schedule) while a run for it was being created."""
 
 
 USER_COLUMNS = 'id, email, name, timezone'
@@ -181,6 +185,8 @@ async def create_run(
             )
     except UniqueViolation as error:
         raise ActiveRun('this thread is still working on the last message') from error
+    except ForeignKeyViolation as error:
+        raise ThreadGone('this chat was deleted') from error
     row = await cursor.fetchone()
     assert row is not None
     return run_from(row)

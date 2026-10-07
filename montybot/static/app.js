@@ -158,25 +158,31 @@ async function loadThreads() {
   const load = ++state.threadLoads;
   const threads = await api('/api/threads');
   if (load !== state.threadLoads) return;  // a later load is drawing the list
-  const shown = JSON.stringify([state.threadId, threads]);
+  const shown = JSON.stringify([$('layout').hidden ? null : state.threadId, threads]);
   if (shown === state.threadsShown) return;
   state.threadsShown = shown;
-  const focusInList = $('threads').contains(document.activeElement);
+  const focusedId = $('threads').contains(document.activeElement) ? document.activeElement.dataset.id : null;
+  const currentId = $('layout').hidden ? null : state.threadId;  // on Files or Schedules no chat is the current page
   const badges = { waiting: 'Needs you', running: 'Working', queued: 'Working' };
   $('threads').replaceChildren(...threads.map((thread) => {
-    const open = element('button', '', thread.id === state.threadId ? 'current' : '');
+    const open = element('button', '', thread.id === currentId ? 'current' : '');
+    open.dataset.id = thread.id;
     open.title = thread.title || 'Untitled';
     open.append(element('span', thread.title || 'Untitled', 'thread-title'));
     if (badges[thread.status]) open.append(element('span', badges[thread.status], `badge ${thread.status}`));
-    if (thread.id === state.threadId) open.setAttribute('aria-current', 'page');
-    open.addEventListener('click', () => { location.hash = `#/t/${thread.id}`; closeDrawer(); });
+    if (thread.id === currentId) open.setAttribute('aria-current', 'page');
+    open.addEventListener('click', () => {
+      if (location.hash === `#/t/${thread.id}`) report(route());  // the same chat: load it again
+      else location.hash = `#/t/${thread.id}`;
+      closeDrawer();
+    });
     const item = element('li');
     item.append(open);
     return item;
   }));
   if (!threads.length) $('threads').append(element('li', 'Your next task starts with a new chat.', 'thread-empty'));
-  const current = $('threads').querySelector('.current');
-  if (focusInList && current) current.focus();  // the redraw replaced the button the user was on
+  const focused = focusedId && $('threads').querySelector(`[data-id="${focusedId}"]`);
+  if (focused) focused.focus();  // the redraw replaced the button the user was on
 }
 
 setInterval(() => {
@@ -284,7 +290,10 @@ async function openChat(threadId) {
   try {
     await loadChat();
   } catch (error) {
-    if (page === mine) $('send').disabled = false;  // let the user try again
+    if (page === mine) {
+      $('title').textContent = 'Could not load this chat';
+      $('send').disabled = false;
+    }
     throw error;
   }
 }
@@ -320,7 +329,8 @@ function renderRun(run) {
   $('send').disabled = false;
   $('stop').hidden = !active;
   $('stop').disabled = false;
-  $('message').placeholder = active ? 'Monty is on it. Stop it, or wait to send your next message.' : 'What would you like Monty to do?';
+  $('message').placeholder = !active ? 'What would you like Monty to do?'
+    : run.status === 'waiting' ? 'Monty is waiting for you: answer above.' : 'Monty is on it. Stop it, or wait to send your next message.';
   $('status').hidden = !working;
   renderStatus();
   renderAsk(run && run.status === 'waiting' ? run.ask : null);
@@ -388,11 +398,16 @@ function follow(run) {
   });
   source.onerror = () => {
     if (!live()) return;
-    // EventSource reconnects by itself. A reload of the chat tells us if the run ended or the user was signed out.
-    state.draftLost = true;
-    renderStatus();
-    renderDraft();
-    setTimeout(() => { if (live()) report(loadChat()); }, 2000);
+    // EventSource reconnects by itself, and the server ends each stream every few minutes on purpose. Only if it is
+    // still not back after a moment: warn, and reload the chat (which says whether the run ended or the user was
+    // signed out).
+    setTimeout(() => {
+      if (!live() || source.readyState === EventSource.OPEN) return;
+      state.draftLost = true;
+      renderStatus();
+      renderDraft();
+      report(loadChat());
+    }, 2000);
   };
 }
 
@@ -476,7 +491,7 @@ async function takeOver(ask) {
     link = await api(`/api/runs/${state.run.id}/live`, { method: 'POST', body: {} });
   } catch (error) {
     if (error.status !== 404) throw error;
-    await loadChat();  // the hand-off ended meanwhile: show where the run is now
+    if (page === before) await loadChat();  // the hand-off ended meanwhile: show where the run is now
     return;
   }
   if (page !== before || !state.run || !state.run.ask || state.run.ask.id !== ask.id) return;  // left, or it ended
@@ -569,6 +584,10 @@ $('close-browser').addEventListener('click', () => {
 
 $('composer').addEventListener('submit', (event) => {
   event.preventDefault();
+  if ($('send').hidden && !$('ask').hidden) {  // Monty waits for an answer: take the user there
+    $('ask').querySelector('textarea, button').focus();
+    return;
+  }
   if ($('send').disabled || $('send').hidden) return;  // Enter obeys the same guard as the button
   const text = $('message').value.trim();
   if (!text) return;

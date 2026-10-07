@@ -122,6 +122,8 @@ async def test_the_page_is_only_for_the_requester() -> None:
         assert (await get(path)).status_code == 401
         assert (await get(path, setup.bob)).status_code == 404
         assert (await get(f'{setup.base}/handoff/nope', setup.alice)).status_code == 404
+        # Still the page, so inside the web app its "Back to chat" button gets the user out.
+        assert 'id="back"' in (await get(f'{setup.base}/handoff/nope', setup.alice)).text
         page = await get(path, setup.alice)
         assert page.status_code == 200
         assert 'Give back to Monty' in page.text

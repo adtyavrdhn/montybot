@@ -131,17 +131,21 @@ def frontend() -> Iterator[tuple[Page, MockAPI]]:
         page.add_init_script("""
             window.eventSources = [];
             window.EventSource = class {
+                static CONNECTING = 0;
+                static OPEN = 1;
+                static CLOSED = 2;
                 constructor(url) {
                     this.url = url;
                     this.closed = false;
+                    this.readyState = 1;
                     this.listeners = {};
                     window.eventSources.push(this);
                 }
                 addEventListener(type, callback) { this.listeners[type] = callback; }
-                close() { this.closed = true; }
+                close() { this.closed = true; this.readyState = 2; }
                 emit(type, data) {
-                    if (type === 'error') this.onerror?.();
-                    else if (type === 'open') this.onopen?.();
+                    if (type === 'error') { this.readyState = 0; this.onerror?.(); }  // reconnecting
+                    else if (type === 'open') { this.readyState = 1; this.onopen?.(); }
                     else this.listeners[type]?.({data: JSON.stringify(data)});
                 }
             };
@@ -672,3 +676,36 @@ def test_skip_link_and_a_working_chat_say_where_you_are(frontend: tuple[Page, Mo
     page.keyboard.press('Enter')
     expect(page.locator('#message')).to_be_focused()
     expect(page).to_have_url(f'http://monty.test/#/t/{THREAD}')  # still in the chat
+
+
+def test_enter_while_monty_waits_goes_to_the_question(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    mock.messages = [{'role': 'user', 'text': 'Order eggs'}]
+    mock.run = {
+        'id': 'run',
+        'status': 'waiting',
+        'activity': [],
+        'ask': {'id': 'ask', 'kind': 'question', 'prompt': 'Brown or white?'},
+    }
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    expect(page.locator('#message')).to_have_attribute('placeholder', re.compile('waiting for you'))
+    page.fill('#message', 'brown')
+    page.press('#message', 'Enter')
+    expect(page.get_by_label('Your answer to Monty')).to_be_focused()
+    assert not any(method == 'POST' for method, _, _ in mock.calls)
+
+
+def test_the_chat_list_keeps_focus_and_marks_no_chat_on_other_pages(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.messages = [{'role': 'user', 'text': 'Order eggs'}]
+    workspace(page, mock)
+    page.locator('#threads button').first.click()
+    expect(page.locator('#threads button.current')).to_have_count(1)
+    page.locator('#threads button').first.focus()
+    mock.thread_status = 'waiting'
+    page.evaluate('loadThreads()')  # as the 15-second refresh does, with a new badge
+    expect(page.locator('#threads .badge')).to_have_text('Needs you')
+    expect(page.locator('#threads button').first).to_be_focused()
+    page.click('#open-files')
+    expect(page.locator('#threads button.current')).to_have_count(0)

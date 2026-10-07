@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, PlainTextResponse, Response
+from starlette.responses import HTMLResponse, Response
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
@@ -102,8 +102,10 @@ def live_view_app(
     async def page(request: Request) -> Response:
         handoff, error = await live.authorise(request, request.path_params['handoff_id'])
         if handoff is None:
-            text, status = ('Sign in, then open this link again.', 401) if error == CLOSE_SIGNED_OUT else ('', 404)
-            return PlainTextResponse(text or 'Not found.', status_code=status, headers=headers)
+            # The same page, with the status: its socket is refused too, and the page says why. Inside the web app
+            # it still has its "Back to chat" button, so an expired link never traps the user in the dialog.
+            status = 401 if error == CLOSE_SIGNED_OUT else 404
+            return HTMLResponse(_PAGE, status_code=status, headers=headers)
         return HTMLResponse(_PAGE, headers=headers)
 
     async def script(request: Request) -> Response:
