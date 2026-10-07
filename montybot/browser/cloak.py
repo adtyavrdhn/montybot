@@ -73,8 +73,8 @@ class Fingerprint:
             f'--fingerprint={self.seed}',
             f'--fingerprint-platform={self.platform}',
             f'--fingerprint-timezone={self.timezone}',
-            f'--fingerprint-locale={self.locale}',
-            # Chrome's own UI and Accept-Language. Without it, Chrome in the jail (LANG=C.UTF-8) reports `C`.
+            # Chrome's own locale, not the jail's (LANG=C.UTF-8), and `navigator.languages` as a stock en-US Chrome
+            # has it: ["en-US", "en"]. Not their `--fingerprint-locale`, which leaves only ["en-US"].
             f'--lang={self.locale}',
             f'--accept-lang={self.locale},{self.locale.split("-")[0]}',
         )

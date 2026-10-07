@@ -159,7 +159,6 @@ def test_command_line() -> None:
         '--fingerprint=12345',
         '--fingerprint-platform=windows',
         '--fingerprint-timezone=America/Chicago',
-        '--fingerprint-locale=en-US',
         '--lang=en-US',
         '--accept-lang=en-US,en',
         '--ignore-gpu-blocklist',
