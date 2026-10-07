@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit
 
 from dbos import DBOS
-from pydantic_ai import FunctionToolset, RunContext
+from pydantic_ai import ApprovalRequired, FunctionToolset, RunContext
 from pydantic_ai.workspaces import WorkspaceError
 
 from montybot import approvals, store
@@ -164,10 +164,15 @@ async def refused_url(url: str, *, allow_private: bool) -> str | None:
     return None
 
 
-@browser_tools.tool(requires_approval=True)
+@browser_tools.tool
 async def commit(ctx: RunContext[RunDeps], target: str, description: str) -> str:
     """Click something that cannot be undone, such as placing an order, paying, booking or sending a message as the
-    user. The user is asked first, with `description` ("Place the order for eggs, milk and bread: $12.40")."""
+    user. The user is asked first, with `description` ("Place the order for eggs, milk and bread: $12.40"), unless a
+    schedule they approved started this task."""
+    # The user approved a schedule's task when they set it up, and is not there when it runs: asking again would
+    # leave every run waiting on them.
+    if ctx.deps.schedule is None and not ctx.tool_call_approved:
+        raise ApprovalRequired
 
     async def use(session: Session) -> str:
         await session.activity(description)

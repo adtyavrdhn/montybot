@@ -152,7 +152,9 @@ def describe(tool: str, args: dict[str, Any]) -> str:
     """What the user is asked to approve."""
     if tool == 'schedule_task':
         kind = 'Watch' if args.get('watch') else 'Run'
-        return f'{kind} "{args.get("name")}" {args.get("when")} ({args.get("timezone")}): {args.get("prompt")}'
+        what = f'{kind} "{args.get("name")}" {args.get("when")} ({args.get("timezone")}): {args.get("prompt")}'
+        # What the user approves here covers every run's own steps: `commit` does not ask in a scheduled run.
+        return f'{what.rstrip(".")}. Each run does this without asking you again, orders and messages included.'
     return str(args.get('description') or tool)
 
 
