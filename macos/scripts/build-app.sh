@@ -15,6 +15,7 @@ APP=build/Monty.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$(swift build -c release --show-bin-path)/Monty" "$APP/Contents/MacOS/Monty"
+cp -R Resources/Squirrel "$APP/Contents/Resources/"  # the mascot's loops (MontySquirrel.swift); make mascot renders them
 
 ICONSET="$(mktemp -d)/AppIcon.iconset"
 swift scripts/make-icon.swift "$ICONSET"

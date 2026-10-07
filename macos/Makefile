@@ -3,8 +3,9 @@
 SERVER ?= https://35-188-200-101.sslip.io
 LOCAL ?= http://127.0.0.1:8000
 REPO := $(abspath ..)
+BLENDER ?= /Applications/Blender.app/Contents/MacOS/Blender
 
-.PHONY: help setup dev app run test journeys tour share clean
+.PHONY: help setup dev app run test journeys tour share mascot clean
 
 help:  ## What you can do
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-9s %s\n", $$1, $$2}'
@@ -35,6 +36,12 @@ tour:  ## Every screen as PNG and text in build/tour (needs 'make dev' and an un
 share: app  ## build/Monty.zip to send to someone (ad hoc signed; see README for Developer ID)
 	cd build && rm -f Monty.zip && ditto -c -k --keepParent Monty.app Monty.zip
 	@echo "build/Monty.zip: unzip, then right-click Monty.app > Open the first time (it isn't notarized)."
+
+mascot:  ## Re-render the squirrel's loops into Resources/Squirrel (needs Blender and uv; see mascot/README.md)
+	cd mascot && $(BLENDER) -b --python build_montysquirrel.py --python-expr \
+		"import bpy, os; bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath('montysquirrel.blend'))"
+	cd mascot && $(BLENDER) -b montysquirrel.blend --python render_states.py -- --frames
+	cd mascot && uv run make_loops.py frames ../Resources/Squirrel --name montysquirrel --apng-size 192 --no-gif
 
 clean:  ## Remove builds
 	rm -rf build .build

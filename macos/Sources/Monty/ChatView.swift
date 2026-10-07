@@ -131,11 +131,19 @@ struct ChatView: View {
                 .onChange(of: chat.ask?.id) { scrollToEnd(scroller) }
                 .onChange(of: chat.preview?.text) { scroller.scrollTo("end", anchor: .bottom) }
             }
-            Composer(chat: chat)
-                .frame(maxWidth: Metrics.readingWidth)
-                .padding(.horizontal, Metrics.gutter)
-                .padding(.bottom, 16)
-                .frame(maxWidth: .infinity)
+            HStack(alignment: .bottom, spacing: 2) {
+                // Monty keeps you company by the composer, reacting as the task goes. A new chat gets a fresh squirrel.
+                MontySquirrel(mood: mood, size: 112, layoutHeight: 52)
+                    .padding(.leading, -30)
+                    .padding(.trailing, -18)
+                    .padding(.bottom, -8)
+                    .id(chat.threadId)
+                Composer(chat: chat)
+            }
+            .frame(maxWidth: Metrics.readingWidth)
+            .padding(.horizontal, Metrics.gutter)
+            .padding(.bottom, 16)
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -507,7 +515,7 @@ struct NewTaskView: View {
         VStack(spacing: 0) {
             Spacer()
             VStack(alignment: .leading, spacing: 0) {
-                MontyMark(mood: .idle, size: 34).padding(.leading, -12).padding(.bottom, 6)
+                MontySquirrel(mood: .idle, size: 168, layoutHeight: 120).padding(.leading, -42).padding(.bottom, -6)
                 Text("What should Monty do?")
                     .font(.system(size: 22, weight: .semibold))
                     .accessibilityAddTraits(.isHeader)
