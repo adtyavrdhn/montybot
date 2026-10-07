@@ -8,6 +8,10 @@ factory. `LazyChromium` starts one Playwright per process on the first `open()` 
 | `montybot.engines:chromium` | a window on this machine (Mac or Linux desktop), or the server setup on Linux without one |
 | `montybot.engines:chromium_headless` | Playwright's headless shell, for CI and tests |
 | `montybot.engines:chromium_server` | the Linux server: Xvfb per browser, inside bwrap |
+| `montybot.engines:servo_server` | evaluation only: headless Servo in the same jail and egress proxy (`servo.md`) |
+
+Servo needs servoshell at `$MONTYBOT_SERVO_BINARY`, which the app image does not ship. Its sessions are not saved
+between runs on a stock build (`NotSupported('export')`), so keep `chromium_server` for real users.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from playwright.async_api import Playwright, async_playwright
 from montybot.browser.chromium import ChromiumBackend, ChromiumOptions
 from montybot.browser.contract import Action, Download, Screenshot, Snapshot
 from montybot.browser.live import FrameSource
+from montybot.browser.servo import ServoBackend, ServoOptions
 from montybot.browser.state import BrowserState
 
 _playwright: Playwright | None = None
@@ -91,9 +96,15 @@ def chromium_headless() -> LazyChromium:
     return LazyChromium(lambda: ChromiumOptions(headless=True))
 
 
-def chromium_server() -> LazyChromium:
-    def options() -> ChromiumOptions:
-        socket = os.environ.get('BROWSER_EGRESS_SOCKET')
-        return ChromiumOptions.server(egress_socket=Path(socket) if socket else None)
+def _egress_socket() -> Path | None:
+    socket = os.environ.get('BROWSER_EGRESS_SOCKET')
+    return Path(socket) if socket else None
 
-    return LazyChromium(options)
+
+def chromium_server() -> LazyChromium:
+    return LazyChromium(lambda: ChromiumOptions.server(egress_socket=_egress_socket()))
+
+
+def servo_server() -> ServoBackend:
+    """Always jailed: Servo's WebDriver listens on every interface, so it never runs on the server's own network."""
+    return ServoBackend(ServoOptions(bwrap=True, egress_socket=_egress_socket()))

@@ -1,7 +1,8 @@
 # The Servo backend
 
 `ServoBackend` in `servo.py` runs Servo behind the browser contract (`contract.py`), over servoshell's built-in W3C
-WebDriver. Issue #12. Tested with Servo 0.7.0 on macOS (Apple Silicon). Linux is code and docs only, not run.
+WebDriver. Issue #12. Tested with Servo 0.7.0 on macOS (Apple Silicon) and Ubuntu 24.04 (aarch64 locally, x86_64 in
+CI's `servo-linux` job). The engine evaluation (#18) is at the end.
 
 ```python
 from montybot.browser.servo import ServoBackend, ServoOptions
@@ -52,8 +53,9 @@ Found while building it:
   cookie again from a made-up subdomain (`montybot-probe.HOST`, on the blocked port, so no request): only a domain
   cookie shows there. See `patches/README.md`.
 - **The WebDriver server listens on `0.0.0.0`**, not loopback (`components/webdriver_server/lib.rs`). On this Mac
-  each test's Servo is reachable from the LAN while it runs. On Linux, pasta gives Servo its own network namespace and
-  forwards only the host's `127.0.0.1:PORT` (`servo_bwrap.py`). A one-line upstream change would fix it at the source.
+  each test's Servo is reachable from the LAN while it runs. In the server's jail Servo has its own network namespace,
+  and the host reaches WebDriver only through a Unix socket in the profile folder (below). A one-line upstream change
+  would fix it at the source.
 - **Export reads only hosts the backend knows**: the seeded ones and every page the tab was on. A cookie set for a
   host the tab never showed, such as one set during a sign-in redirect chain, is missed. Servo's Rust embedding API
   (`SiteDataManager`) can list every cookie; WebDriver cannot.
@@ -95,16 +97,52 @@ Screenshots are about 45 ms whatever the page, so a live view (#14) gets about 2
 is enough to sign in and tap through a check. The spike reported 22 to 55 fps; its setup is not in the repo, so the
 gap is not explained. A PNG of a plain page is 16 to 20 KiB; example.com was 153 KiB.
 
-## Linux in bwrap (not run)
+## Linux, in the server's jail
 
-`servo_bwrap.py` has `BwrapLauncher`, for `ServoOptions(launcher=BwrapLauncher())`. It runs servoshell inside bwrap
-(own user, pid, IPC and UTS namespaces, host files read-only, private `/tmp`, only the profile folder writable,
-`--die-with-parent`), inside pasta's network namespace with only the WebDriver port forwarded to the host's loopback.
-Headless Servo renders in software, so it needs no Xvfb. To check on the server from #7:
+`ServoOptions(bwrap=True)`, or `BROWSER_BACKEND=montybot.engines:servo_server`, runs servoshell in Chromium's jail
+(`chromium_linux.bwrap_command`): its own user, pid, IPC, UTS and network namespaces, host files read-only, only the
+profile folder writable, `--die-with-parent`. Two socat processes inside are its only connections to the host:
 
-- the release tarball's layout, and which `/usr` libraries (Mesa) and fonts it needs;
-- that `pasta -t 127.0.0.1/PORT` forwards to Servo's `0.0.0.0` listener, and that DNS works inside (`/etc/resolv.conf`
-  may point at a resolver pasta has to forward);
-- that SIGKILL to the process group (pasta leads it) takes bwrap and Servo down;
-- blocking private address ranges, as `DESIGN.md` asks for Chromium;
-- Ubuntu 24.04's AppArmor block on unprivileged user namespaces.
+- **Out:** Servo's HTTP proxy prefs (`network_http_proxy_uri`, `network_https_proxy_uri`) point at
+  `127.0.0.1:1080`, which socat forwards to the `EgressProxy` (`egress.py`). Servo speaks only HTTP `CONNECT`
+  (hyper-util's `Tunnel`), for `http://` too, so the proxy takes `CONNECT` as well as SOCKS5, with the same
+  public-address check. Anything that skips the proxy, such as Servo's WebSockets (a direct `TcpStream` in
+  `websocket_loader.rs`), finds no network: it fails rather than leaks.
+- **In:** WebDriver's port is published only as `webdriver.sock` in the profile folder (mode 600), so nothing listens
+  on the host's network.
+
+Headless Servo renders in software, so it needs no Xvfb. On Ubuntu 24.04 servoshell needs `libgstreamer1.0-0`,
+`libgstreamer-plugins-base1.0-0`, `libgstreamer-plugins-bad1.0-0`, `libegl1`, `libegl-mesa0`, `libgl1-mesa-dri`,
+`fontconfig` and a font (`tests/linux/Dockerfile`). The app image does not ship Servo.
+
+`tests/linux/run.sh` runs the tests in a Linux container (set `MONTYBOT_SERVO_BINARY` to an unpacked Linux release).
+Podman, as on this Mac, mounts `/etc/hosts` and `/etc/resolv.conf` with flags an unprivileged bwrap cannot remount
+read-only, so the jailed tests fail there for Chromium and Servo alike; CI's runners and the server's Docker do not.
+
+## Engine evaluation (#18)
+
+The end-to-end suite (`tests/e2e`, scripted model, fixture sites) with `--browser=servo`, on macOS:
+
+| | Chromium (`e2e-chromium` in CI) | Servo 0.7.0 |
+|---|---|---|
+| Passed | all | 83 of 94 (81 before the hand-off fix below) |
+| Sign-in hand-off | passes | fails: `autofocus` is ignored and Enter does not submit a form |
+| Sign-in saved for the next run | passes | fails: no export of HttpOnly cookies (stock build) |
+| Press-and-hold check in the live view | passes | fails when the browser is given back |
+| Downloads (`test_files`) | passes | fails: `ServoBackend` has no downloads, and a ref went stale |
+| Live view | CDP screencast | polled screenshots, about 20 fps |
+| WebSockets on the server | through the proxy | none (fail closed) |
+
+Found and fixed on the way: `hand_off` saved the browser before handing it over, and an engine that cannot export
+made the whole hand-off fail. It now skips the save, as `approvals.save_browser` already did for other waits.
+
+Servo 0.7.0 gaps that block it as the default, each needing an upstream fix or a workaround here:
+
+1. **No session export** (HttpOnly cookies): sign-ins are not saved between runs. Fix: the patch in `patches/`, which
+   means building Servo ourselves.
+2. **`autofocus` ignored**, and **Enter does not submit forms** (implicit submission) for WebDriver key input. Agents
+   and people both press Enter to search and sign in.
+3. **No downloads** and **no WebSockets** behind the proxy.
+4. **Key input with nothing focused** (typing, then Tab, then typing on a page body) made servoshell stop answering.
+
+Bot checks from the server's address are not measured here: that needs real sites from the VM (#16).

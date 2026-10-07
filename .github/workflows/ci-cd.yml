@@ -86,6 +86,37 @@ jobs:
       - run: uv run playwright install --with-deps chromium
       - run: uv run pytest -q -p no:cacheprovider -n ${{ matrix.workers }} --durations=10 ${{ matrix.args }}
 
+  # Servo is evaluated, not deployed (#18): its conformance, unjailed and in the server's jail (bwrap, no network but
+  # the egress proxy, WebDriver only on a Unix socket). Not a deploy gate. The release is pinned by its SHA-256.
+  servo-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SERVO_SHA256: 728eba1be1cc1851e05dfaa90e18f98ab8644dd2355bedb0b8a5e89795ebe333
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Allow user namespaces, install bwrap, socat and servoshell's libraries
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends bubblewrap socat \
+            libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 libgstreamer-plugins-bad1.0-0 \
+            libegl1 libegl-mesa0 libgl1-mesa-dri fontconfig fonts-dejavu-core
+      - name: Servo 0.7.0
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/servo.tar.gz" \
+            https://github.com/servo/servo/releases/download/v0.7.0/servo-x86_64-linux-gnu.tar.gz
+          echo "$SERVO_SHA256  $RUNNER_TEMP/servo.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/servo.tar.gz" -C "$RUNNER_TEMP"
+          echo "MONTYBOT_SERVO_BINARY=$RUNNER_TEMP/servo/servoshell" >> "$GITHUB_ENV"
+      - run: uv sync --locked
+      - run: uv run pytest -q -p no:cacheprovider -rs tests/browser/test_servo.py tests/browser/test_egress.py
+
   sidecar-smoke:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

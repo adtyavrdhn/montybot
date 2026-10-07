@@ -7,6 +7,9 @@ start Servo are skipped without it. Each test starts its own Servo on a free por
 from __future__ import annotations
 
 import os
+import shutil
+import socket
+import sys
 import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -15,15 +18,19 @@ from pathlib import Path
 
 import pytest
 
+from montybot.browser.chromium_linux import bwrap_command
 from montybot.browser.conformance import BrowserBackendConformance, Site, serve_site, wait_for_text
 from montybot.browser.contract import ActionFailed, BrowserBackend, Navigate, NotSupported
 from montybot.browser.servo import CHROME_USER_AGENT, ServoBackend, ServoOptions, default_binary
-from montybot.browser.servo_bwrap import BwrapLauncher
 from montybot.browser.state import BrowserState, Cookie
 
 pytestmark = pytest.mark.anyio
 
 needs_servo = pytest.mark.skipif(not default_binary().exists(), reason=f'no servoshell at {default_binary()}')
+needs_jail = pytest.mark.skipif(
+    sys.platform != 'linux' or shutil.which('bwrap') is None or shutil.which('socat') is None,
+    reason='the jail needs Linux with bwrap and socat (tests/linux/run.sh)',
+)
 
 
 @pytest.fixture
@@ -44,6 +51,38 @@ class TestServo(BrowserBackendConformance):
             yield browser
         finally:
             await browser.close()
+
+
+@needs_servo
+@needs_jail
+class TestJailedServo(BrowserBackendConformance):
+    """The server setup: the same contract from inside bwrap, every request through a private `EgressProxy`. The
+    fixture site is on loopback, so this proxy allows private addresses; the test below checks the default."""
+
+    not_supported = frozenset({'export'})
+
+    @asynccontextmanager
+    async def backend(self, site: Site) -> AsyncGenerator[BrowserBackend]:
+        browser = ServoBackend(ServoOptions(bwrap=True, allow_private_networks=True))
+        try:
+            yield browser
+        finally:
+            await browser.close()
+
+
+@needs_servo
+@needs_jail
+async def test_jailed_servo_reaches_no_private_address_and_no_host_port(site: Site) -> None:
+    async with servo(ServoOptions(bwrap=True)) as browser:
+        await browser.open(None)
+        assert browser.pid is not None
+        argv = Path(f'/proc/{browser.pid}/cmdline').read_bytes().split(b'\0')
+        (port,) = [int(arg.split(b'=')[1]) for arg in argv if arg.startswith(b'--webdriver=')]
+        with socket.socket() as probe:
+            assert probe.connect_ex(('127.0.0.1', port)) != 0  # WebDriver is only on the socket in the profile
+        with pytest.raises(ActionFailed):
+            await browser.act(Navigate(url=f'{site.origin}/probe'))
+        assert (await browser.snapshot()).url != f'{site.origin}/probe'
 
 
 # --- Servo's own behaviour ---
@@ -199,23 +238,43 @@ def test_command_line() -> None:
     ]
 
 
-def test_bwrap_launch_command() -> None:
-    """Not run on Linux here: this only checks the command line that `BwrapLauncher` builds."""
-    options = ServoOptions(binary=Path('/opt/servo/servoshell'), prefs=(), user_agent=None, launcher=BwrapLauncher())
-    argv = options.command(port=4444, config_dir=Path('/tmp/profile'))
+def test_jailed_command() -> None:
+    """The Linux server's jail: no network but the egress proxy, and WebDriver only on a socket in the profile."""
+    profile = Path('/tmp/profile')
+    options = ServoOptions(binary=Path('/opt/servo/servoshell'), prefs=(), user_agent=None, bwrap=True)
+    argv = options.command(port=4444, config_dir=profile, proxy=profile / 'egress.sock')
     servo_at = argv.index('/opt/servo/servoshell')
-    network, sandbox, servo = argv[: argv.index('bwrap')], argv[argv.index('bwrap') : servo_at], argv[servo_at:]
-    assert network[0] == 'pasta' and network[-1] == '--'
-    assert network[network.index('-t') + 1] == '127.0.0.1/4444'
-    assert '--no-map-gw' in network
-    assert sandbox[-1] == '--'
-    for flag in ('--unshare-all', '--share-net', '--die-with-parent', '--new-session'):
+    sandbox, servo = argv[:servo_at], argv[servo_at:]
+    assert sandbox[0] == 'bwrap'
+    for flag in (
+        '--unshare-user',
+        '--unshare-pid',
+        '--unshare-net',
+        '--die-with-parent',
+        '--new-session',
+        '--clearenv',
+    ):
         assert flag in sandbox
     joined = ' '.join(sandbox)
     assert '--bind /tmp/profile /tmp/profile' in joined
     assert '--ro-bind /opt/servo /opt/servo' in joined
-    assert '--ro-bind-try /usr /usr' in joined
+    script = sandbox[-1]
+    assert 'UNIX-LISTEN:/tmp/profile/webdriver.sock,mode=600' in script and 'TCP:127.0.0.1:4444' in script
+    assert 'UNIX-CONNECT:/tmp/profile/egress.sock' in script and 'TCP-LISTEN:1080,bind=127.0.0.1' in script
     assert servo[1:4] == ['--headless', '--webdriver=4444', '--config-dir=/tmp/profile']
+    assert '--pref=network_http_proxy_uri=http://127.0.0.1:1080' in servo
+    assert '--pref=network_https_proxy_uri=http://127.0.0.1:1080' in servo
+    assert servo[-1] == 'about:blank'
+    with pytest.raises(ValueError, match='egress proxy'):
+        options.command(port=4444, config_dir=profile)
 
-    without_pasta = ServoOptions(binary=Path('/opt/servo/servoshell'), launcher=BwrapLauncher(pasta=None))
-    assert without_pasta.command(port=4444, config_dir=Path('/tmp/profile'))[0] == 'bwrap'
+
+def test_expose_needs_a_network_namespace() -> None:
+    """A port inside a jail that shares the host's network is already on the host: refuse rather than mislead."""
+    with pytest.raises(ValueError, match='needs a proxy'):
+        bwrap_command(
+            chrome=Path('/opt/servo/servoshell'),
+            profile=Path('/tmp/profile'),
+            display=None,
+            expose=(4444, Path('/tmp/profile/webdriver.sock')),
+        )

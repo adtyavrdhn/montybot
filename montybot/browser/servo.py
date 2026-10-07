@@ -20,6 +20,9 @@ Servo's gaps and the numbers measured.
   and more) and sends a Chrome user agent, which got through walmart.com where Servo's Firefox one was challenged.
 - **Snapshots and refs** come from `SnapshotWalker` (#13), run with Execute Script, so the text and refs match
   Chromium's for the same page. A click on a ref is a pointer action at the element's centre.
+- **On the Linux server** (`ServoOptions(bwrap=True)`), Servo runs in the same jail as Chromium (`chromium_linux`):
+  its own network namespace, whose only way out is the `EgressProxy`, reached as Servo's HTTP proxy. Its WebDriver
+  server listens on every interface, so it is reached through a Unix socket in its profile folder, never a host port.
 """
 
 from __future__ import annotations
@@ -41,9 +44,10 @@ from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 from urllib.parse import urlsplit
 
+from montybot.browser.chromium_linux import bwrap_command
 from montybot.browser.contract import (
     Action,
     ActionFailed,
@@ -65,6 +69,7 @@ from montybot.browser.contract import (
     TargetNotFound,
     Type,
 )
+from montybot.browser.egress import PROXY_PORT, EgressProxy
 from montybot.browser.snapshot import JSON, SnapshotWalker, webdriver_script
 from montybot.browser.state import BLANK_URL, BrowserState, Cookie, SameSite, origin_of
 
@@ -145,15 +150,9 @@ def default_binary() -> Path:
     return Path.home() / '.cache/montybot/servo/servo/servoshell'
 
 
-class Launcher(Protocol):
-    """Turns servoshell's command line into the one to run, such as one wrapped in bwrap (`servo_bwrap.py`)."""
-
-    def __call__(self, argv: Sequence[str], *, config_dir: Path, port: int) -> list[str]: ...
-
-
-def run_directly(argv: Sequence[str], *, config_dir: Path, port: int) -> list[str]:
-    """No sandbox: what the tests use on macOS."""
-    return list(argv)
+def webdriver_socket(config_dir: Path) -> Path:
+    """Where a jailed Servo's WebDriver is reached from the host."""
+    return config_dir / 'webdriver.sock'
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -170,7 +169,14 @@ class ServoOptions:
     http_only_export: bool = False
     """Only for a servoshell built with `patches/servo-webdriver-httponly.patch`. If an HttpOnly cookie seeded at
     `open` cannot be read back, export stays off."""
-    launcher: Launcher = run_directly
+    bwrap: bool = False
+    """Run Servo inside bubblewrap with its own profile folder and network namespace (Linux). Its connections go out
+    through an `EgressProxy`, which refuses private addresses, and its WebDriver is reached through a Unix socket."""
+    allow_private_networks: bool = False
+    """With `bwrap`: let pages reach loopback and private addresses. Only for local fixture sites in tests."""
+    egress_socket: Path | None = None
+    """A shared egress proxy in a separate container. Unset: start a private proxy for this browser (local tests)."""
+    bwrap_path: str = 'bwrap'
     start_timeout: float = 20
     page_load_timeout: float = 30
     find_timeout: float = 3
@@ -178,7 +184,8 @@ class ServoOptions:
     settle_delay: float = 0.1
     """How long a click or key press gets to start a navigation before `act` waits for the page to load."""
 
-    def command(self, *, port: int, config_dir: Path) -> list[str]:
+    def command(self, *, port: int, config_dir: Path, proxy: Path | None = None) -> list[str]:
+        """servoshell's command line; with `bwrap`, wrapped in the jail, with `proxy` the egress proxy's socket."""
         argv = [
             str(self.binary),
             '--headless',
@@ -191,8 +198,23 @@ class ServoOptions:
             argv.append(f'--user-agent={self.user_agent}')
         if self.host_file is not None:
             argv.append(f'--host-file={self.host_file}')
-        argv.append(BLANK_URL)
-        return self.launcher(argv, config_dir=config_dir, port=port)
+        if not self.bwrap:
+            return [*argv, BLANK_URL]
+        if proxy is None:
+            raise ValueError('a jailed Servo needs its egress proxy')
+        # Every request through the proxy, loopback too: Servo tunnels http:// with CONNECT as well as https://.
+        uri = f'http://127.0.0.1:{PROXY_PORT}'
+        argv += [f'--pref=network_http_proxy_uri={uri}', f'--pref=network_https_proxy_uri={uri}', BLANK_URL]
+        jail = bwrap_command(
+            chrome=self.binary,
+            profile=config_dir,
+            display=None,
+            proxy=proxy,
+            proxy_directory=proxy.parent if self.egress_socket is not None else None,
+            expose=(port, webdriver_socket(config_dir)),
+            bwrap=self.bwrap_path,
+        )
+        return [*jail, *argv[1:]]
 
 
 class ServoBackend:
@@ -201,6 +223,8 @@ class ServoBackend:
     def __init__(self, options: ServoOptions | None = None) -> None:
         self.options = options or ServoOptions()
         self._process: asyncio.subprocess.Process | None = None
+        self._proxy: EgressProxy | None = None
+        """This browser's own egress proxy, when jailed without a shared one."""
         self._config_dir: Path | None = None
         self._driver: _WebDriver | None = None
         self._device_pixel_ratio = 1.0
@@ -213,7 +237,7 @@ class ServoBackend:
 
     @property
     def pid(self) -> int | None:
-        """The Servo process (or its launcher) while open."""
+        """The Servo process (or bwrap, which runs it) while open."""
         return self._process.pid if self._process is not None else None
 
     # --- BrowserBackend ---
@@ -334,8 +358,8 @@ class ServoBackend:
         return Screenshot(png=png, width=round(width / ratio), height=round(height / ratio))
 
     async def close(self) -> None:
-        driver, process, config_dir = self._driver, self._process, self._config_dir
-        self._driver = self._process = self._config_dir = None
+        driver, process, config_dir, proxy = self._driver, self._process, self._config_dir, self._proxy
+        self._driver = self._process = self._config_dir = self._proxy = None
         self._http_only_readable = False
         self._cookie_paths = {}
         self._local_origins = set()
@@ -347,16 +371,33 @@ class ServoBackend:
             except ProcessLookupError:
                 pass
             await process.wait()
+        if proxy is not None:
+            await proxy.stop()
         if config_dir is not None:
             shutil.rmtree(config_dir, ignore_errors=True)
 
     # --- starting ---
 
     async def _start(self) -> None:
+        options = self.options
         self._config_dir = Path(tempfile.mkdtemp(prefix='montybot-servo-'))
         port = _free_port()
-        argv = self.options.command(port=port, config_dir=self._config_dir)
         try:
+            proxy: Path | None = None
+            if options.bwrap:
+                if shutil.which(options.bwrap_path) is None:
+                    raise ActionFailed(f'could not start Servo: {options.bwrap_path} not found')
+                if options.egress_socket is not None:
+                    if options.allow_private_networks:
+                        raise ActionFailed('a shared browser proxy cannot allow private networks')
+                    proxy = options.egress_socket
+                else:
+                    self._proxy = EgressProxy(
+                        self._config_dir / 'egress.sock', allow_private=options.allow_private_networks
+                    )
+                    await self._proxy.start()
+                    proxy = self._proxy.path
+            argv = options.command(port=port, config_dir=self._config_dir, proxy=proxy)
             self._process = await asyncio.create_subprocess_exec(
                 *argv,
                 stdin=asyncio.subprocess.DEVNULL,
@@ -364,7 +405,9 @@ class ServoBackend:
                 stderr=asyncio.subprocess.DEVNULL,
                 start_new_session=True,  # its own process group, so close() kills everything it started
             )
-            self._driver = await self._new_session(port)
+            self._driver = await self._new_session(
+                port, unix_socket=webdriver_socket(self._config_dir) if options.bwrap else None
+            )
             timeouts = {'pageLoad': int(self.options.page_load_timeout * 1000), 'script': 10_000}
             await self._call('POST', '/timeouts', timeouts)
             self._device_pixel_ratio = float(await self._script('return devicePixelRatio'))
@@ -372,9 +415,10 @@ class ServoBackend:
             await self.close()
             raise
 
-    async def _new_session(self, port: int) -> _WebDriver:
+    async def _new_session(self, port: int, *, unix_socket: Path | None) -> _WebDriver:
         deadline = time.monotonic() + self.options.start_timeout
-        driver = _WebDriver(port=port, timeout=self.options.page_load_timeout + 30)
+        timeout = self.options.page_load_timeout + 30
+        driver = _WebDriver(port=port, unix_socket=unix_socket, timeout=timeout)
         while True:
             assert self._process is not None
             if self._process.returncode is not None:
@@ -573,11 +617,33 @@ class _WebDriverError(Exception):
         super().__init__(f'{error}: {message}' if message else error)
 
 
+class _UnixHTTPConnection(http.client.HTTPConnection):
+    """HTTP over a Unix socket: a jailed Servo's WebDriver (`webdriver_socket`)."""
+
+    def __init__(self, path: Path, *, timeout: float) -> None:
+        super().__init__('localhost', timeout=timeout)
+        self._path = path
+
+    def connect(self) -> None:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(self.timeout)
+        try:
+            sock.connect(str(self._path))
+        except OSError:
+            sock.close()
+            raise
+        self.sock = sock
+
+
 class _WebDriver:
     """A blocking keep-alive HTTP connection, used from a worker thread. One request at a time."""
 
-    def __init__(self, *, port: int, timeout: float) -> None:
-        self._connection = http.client.HTTPConnection('127.0.0.1', port, timeout=timeout)
+    def __init__(self, *, port: int, unix_socket: Path | None, timeout: float) -> None:
+        self._connection = (
+            http.client.HTTPConnection('127.0.0.1', port, timeout=timeout)
+            if unix_socket is None
+            else _UnixHTTPConnection(unix_socket, timeout=timeout)
+        )
         self._lock = asyncio.Lock()
         self.session = ''
 
