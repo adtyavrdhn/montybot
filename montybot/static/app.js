@@ -187,6 +187,7 @@ $('signin-form').addEventListener('submit', async (event) => {
     $('signup-button').disabled = false;
   }
   try {
+    $('password').value = '';  // not left filled in for whoever sees the sign-in screen next
     await start();
   } catch (error) {
     showError(error);  // signed in, but the first chat or list did not load: a notice on the page that opened
@@ -693,7 +694,7 @@ async function send(text) {
 }
 
 $('message').addEventListener('keydown', (event) => {
-  if (event.key === 'Enter' && !event.shiftKey && desktop.matches) {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && desktop.matches) {  // not mid-word in an IME
     event.preventDefault();
     $('composer').requestSubmit();
   }

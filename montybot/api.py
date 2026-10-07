@@ -18,7 +18,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Annotated, Any, TypeVar
 from urllib.parse import quote, urlsplit
 
-from pydantic import AfterValidator, BaseModel, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, Field, StrictBool, StringConstraints
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
@@ -65,12 +65,21 @@ class ThreadChange(BaseModel):
 class Answer(BaseModel):
     text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20_000)] | None = None
     """For a question."""
-    approved: bool | None = None
+    approved: StrictBool | None = None
     """For an approval."""
     reason: str | None = Field(default=None, max_length=2_000)
-    done: bool | None = None
+    done: StrictBool | None = None
     """For a hand-off: the user hands the browser back."""
     note: str | None = Field(default=None, max_length=2_000)
+
+
+async def hashed(secret: str) -> str:
+    """scrypt takes tens of milliseconds of CPU: off the event loop, so other requests and streams keep going."""
+    return await asyncio.to_thread(auth.hash_password, secret)
+
+
+async def password_matches(secret: str, stored: str) -> bool:
+    return await asyncio.to_thread(auth.check_password, secret, stored)
 
 
 def resources_of(request: Request) -> Resources:
@@ -86,7 +95,7 @@ async def sign_up(request: Request) -> Response:
     body = Credentials.model_validate_json(await request.body())
     async with resources_of(request).pool.connection() as connection:
         user = await store.create_user(
-            connection, body.email.strip().lower(), auth.hash_password(body.password), body.name.strip()
+            connection, body.email.strip().lower(), await hashed(body.password), body.name.strip()
         )
     if user is None:
         return JSONResponse({'detail': 'That email already has an account. Sign in instead.'}, status_code=409)
@@ -100,7 +109,7 @@ async def sign_in(request: Request) -> Response:
     body = Credentials.model_validate_json(await request.body())
     async with resources_of(request).pool.connection() as connection:
         found = await store.find_login(connection, body.email.strip().lower())
-    if found is None or not auth.check_password(body.password, found[1]):
+    if found is None or not await password_matches(body.password, found[1]):
         return JSONResponse({'detail': 'Wrong email or password.'}, status_code=401)
     auth.sign_in(request, found[0])
     return JSONResponse(user_json(found[0]))
@@ -131,7 +140,7 @@ async def request_password_reset(request: Request) -> Response:
     async with resources.pool.connection() as connection:
         found = await store.find_login(connection, body.email.strip().lower())
         if found is not None:
-            await store.start_password_reset(connection, found[0].id, auth.hash_password(code), RESET_MINUTES)
+            await store.start_password_reset(connection, found[0].id, await hashed(code), RESET_MINUTES)
     if found is not None:
         await asyncio.to_thread(
             send_email,
@@ -155,9 +164,9 @@ async def confirm_password_reset(request: Request) -> Response:
         if found is None:
             return wrong
         code_hash = await store.password_reset(connection, found[0].id, RESET_ATTEMPTS)
-        if code_hash is None or not auth.check_password(body.code.strip(), code_hash):
+        if code_hash is None or not await password_matches(body.code.strip(), code_hash):
             return wrong
-        await store.finish_password_reset(connection, found[0].id, auth.hash_password(body.password))
+        await store.finish_password_reset(connection, found[0].id, await hashed(body.password))
     auth.sign_in(request, found[0])
     return JSONResponse(user_json(found[0]))
 

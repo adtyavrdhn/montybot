@@ -70,6 +70,7 @@ function onMessage(message) {
     url.textContent = active ? active.url : '';
   } else if (message.kind === 'error') {
     status.textContent = message.message;
+    if (!finished) giveBack.disabled = false;  // a failed give-back can be tried again
   } else if (message.kind === 'ended') {
     finish(message.given_back ? 'Thanks. Monty has its browser back.'
                               : 'Monty has its browser back. Nothing more to do here.');
