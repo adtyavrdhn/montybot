@@ -290,6 +290,9 @@ async function loadChat() {
   const box = $('messages');
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
   box.replaceChildren(...thread.messages.map((m) => messageBubble(m.role, m.text)));
+  if (!thread.messages.length) {  // a scheduled task's chat, before its first run
+    box.append(element('p', 'Nothing here yet. Each time this scheduled task runs, what Monty did shows up here.', 'empty-chat'));
+  }
   renderRun(thread.run);
   renderDraft();
   if (atBottom) box.scrollTop = box.scrollHeight;

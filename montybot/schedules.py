@@ -141,7 +141,7 @@ async def set_paused(pool: Pool, user_id: str, schedule_id: str, paused: bool) -
 
 
 async def delete(pool: Pool, user_id: str, schedule_id: str) -> bool:
-    """False if the user has no such schedule. Its thread stays, with what earlier occurrences said."""
+    """False if the user has no such schedule. Its thread stays if it ran, with what earlier occurrences said."""
     if not is_uuid(schedule_id):
         return False
     async with pool.connection() as connection:

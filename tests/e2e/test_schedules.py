@@ -197,6 +197,16 @@ def test_a_slot_watch_notifies_once(
     assert client.wait_for_reply(client.ask(f'Delete the schedule {watch["id"]}')) == 'Deleted.'
     assert schedules(client) == []
     assert dbos.list_schedules() == []
+    assert reply_of(client, thread)  # it ran, so its chat stays, with what it found
+
+
+@pytest.mark.u4
+def test_deleting_a_schedule_that_never_ran_takes_its_empty_chat(client: Client, slots: Slots) -> None:
+    client.sign_up()
+    watch = set_up(client, f'Tell me when a delivery slot opens at {slots.url}')
+    assert watch['thread_id'] in [t['id'] for t in client.http.get('/api/threads').json()]
+    assert client.http.delete(f'/api/schedules/{watch["id"]}').status_code == 200
+    assert watch['thread_id'] not in [t['id'] for t in client.http.get('/api/threads').json()]
 
 
 @pytest.mark.u4

@@ -431,10 +431,19 @@ async def list_schedules(connection: Connection, user_id: str) -> list[Schedule]
 
 
 async def delete_schedule(connection: Connection, user_id: str, schedule_id: str) -> bool:
+    """Its chat goes too if the schedule never ran: with nothing in it, it would only clutter the chat list."""
     cursor = await connection.execute(
-        'DELETE FROM montybot.schedules WHERE id = %s AND user_id = %s', (schedule_id, user_id)
+        'DELETE FROM montybot.schedules WHERE id = %s AND user_id = %s RETURNING thread_id', (schedule_id, user_id)
     )
-    return cursor.rowcount == 1
+    row = await cursor.fetchone()
+    if row is None:
+        return False
+    await connection.execute(
+        'DELETE FROM montybot.threads t WHERE t.id = %s '
+        'AND NOT EXISTS (SELECT 1 FROM montybot.runs r WHERE r.thread_id = t.id)',
+        (row['thread_id'],),
+    )
+    return True
 
 
 async def load_schedule(connection: Connection, schedule_id: str) -> Schedule | None:

@@ -652,3 +652,11 @@ def test_messages_carry_the_time_zone_and_failures_show_in_the_page(frontend: tu
     expect(page.locator('#message')).to_have_value('And hotels')  # nothing typed is lost
     page.get_by_role('button', name='Dismiss').click()
     expect(page.locator('#notice')).not_to_be_visible()
+
+
+def test_a_scheduled_tasks_chat_before_its_first_run_says_so(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    expect(page.locator('#messages')).to_contain_text('Nothing here yet')
+    expect(page.locator('#send')).to_be_enabled()
