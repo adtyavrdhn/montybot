@@ -212,7 +212,7 @@ struct Sidebar: View {
                 Button(isPinned ? "Unpin" : "Pin") { app.setPinned(thread, !isPinned) }
                 if app.unseen.contains(thread.id) {
                     Button("Mark as Read") { app.markSeen(thread) }
-                } else if thread.status == nil {
+                } else if thread.status == nil, app.route != .chat(thread.id) {  // open, it would be read at once
                     Button("Mark as Unread") { app.markUnread(thread) }
                 }
                 Button("Rename…") { app.renaming = thread }

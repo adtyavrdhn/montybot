@@ -80,6 +80,8 @@ struct CommandPalette: View {
         }
         .onAppear { focused = true }
         .onChange(of: query) { selected = 0 }
+        // The list can change while open (a task finishes, a chat arrives): the choice stays on a row.
+        .onChange(of: items.map(\.id)) { _, ids in selected = min(selected, max(ids.count - 1, 0)) }
     }
 
     private func row(_ item: Item, selected: Bool) -> some View {
