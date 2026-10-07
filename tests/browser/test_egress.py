@@ -9,6 +9,7 @@ import struct
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -65,6 +66,39 @@ async def test_refuses_private_addresses_and_names(socket_dir: Path) -> None:
     finally:
         await proxy.stop()
         server.close()
+
+
+async def test_stalled_handshake_closes_and_frees_its_slot(socket_dir: Path) -> None:
+    proxy = EgressProxy(socket_dir / 'egress.sock')
+    await proxy.start()
+    try:
+        with patch('montybot.browser.egress._HANDSHAKE_TIMEOUT', 0.01):
+            reader, writer = await asyncio.open_unix_connection(str(proxy.path))
+            assert await asyncio.wait_for(reader.read(), 1) == b''
+            writer.close()
+            await writer.wait_closed()
+        assert not proxy._connections
+    finally:
+        await proxy.stop()
+
+
+async def test_too_many_connections_do_not_block_the_proxy(socket_dir: Path) -> None:
+    proxy = EgressProxy(socket_dir / 'egress.sock')
+    await proxy.start()
+    try:
+        with patch('montybot.browser.egress._MAX_CONNECTIONS', 1):
+            first, writer = await asyncio.open_unix_connection(str(proxy.path))
+            # The greeting confirms the first connection occupies the single slot.
+            writer.write(b'\x05\x01\x00')
+            assert await first.readexactly(2) == b'\x05\x00'
+            other, other_writer = await asyncio.open_unix_connection(str(proxy.path))
+            assert await asyncio.wait_for(other.read(), 1) == b''
+            other_writer.close()
+            writer.close()
+            await other_writer.wait_closed()
+            await writer.wait_closed()
+    finally:
+        await proxy.stop()
 
 
 async def test_carries_a_connection_where_allowed(socket_dir: Path) -> None:
