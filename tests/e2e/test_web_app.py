@@ -133,7 +133,8 @@ def test_files_panel_downloads_browser_and_generated_csv(app: App, person: Page,
     # Sync Playwright already owns an event loop on this thread.
     with ThreadPoolExecutor(max_workers=1) as executor:
         executor.submit(lambda: asyncio.run(prepare())).result()
-    person.click('#menu-button')
+    if person.locator('#menu-button').is_visible():
+        person.click('#menu-button')
     person.get_by_role('button', name='Files', exact=True).click()
     expect(person.locator('#files')).to_be_visible()
     expect(person.locator('#layout')).to_be_hidden()
@@ -146,5 +147,5 @@ def test_files_panel_downloads_browser_and_generated_csv(app: App, person: Page,
         assert download.suggested_filename == path.rsplit('/', 1)[-1]
         saved = download.path()
         assert saved is not None and Path(saved).read_bytes() == content
-    person.get_by_role('button', name='Back', exact=True).click()
+    person.get_by_role('button', name='Back to chat', exact=True).click()
     expect(person.locator('#layout')).to_be_visible()

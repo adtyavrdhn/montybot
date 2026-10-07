@@ -38,10 +38,22 @@ environment/detector resource metadata is discarded. HTTP/SQL auto-instrumentati
 disabled because they can expose URL, query or provider metadata. Keep operation names literal and do not add argument
 capture when extending instrumentation. `tests/e2e/test_traces.py` checks the exported privacy boundary.
 
+## Web workspace
+
+The frontend is plain HTML, CSS, and JavaScript in `montybot/static`, with no framework or build step.
+Its Pydantic-inspired purple navigation, pink actions, and light conversation surface work on desktop and mobile.
+On desktop, chats stay in a persistent sidebar; on a phone, the Chats button opens a keyboard-accessible drawer.
+
+Create an account or sign in, then describe a task in a new chat. Example prompts fill the message box for you to
+review before sending. Watch Monty's browser while it works, take over when it asks you to sign in, and answer
+questions or approve actions in the chat. Saved sign-ins and schedules are available in the sidebar, alongside
+notification opt-in. Motion respects your device's reduced-motion preference.
+
 ## Tests
 
 ```bash
 uv run pytest                                   # unit tests, and end-to-end tests with the fake browser
+uv run pytest tests/e2e/test_frontend.py          # responsive UI and local API doubles, no Postgres or model
 uv run pytest tests/e2e --browser=chromium      # the same end-to-end tests in real (headless) Chrome
 uv run pytest -m u2                             # one user path (u1 ... u6)
 MONTYBOT_TEST_MODEL=anthropic:claude-sonnet-4-5 uv run pytest tests/e2e --browser=chromium --live   # nightly
