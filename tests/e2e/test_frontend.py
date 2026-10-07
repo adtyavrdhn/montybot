@@ -608,6 +608,7 @@ def test_replies_are_formatted_and_safe(frontend: tuple[Page, MockAPI]) -> None:
     expect(reply.locator('td').first).to_have_text('One')
     expect(reply.locator('a')).to_have_count(2)
     expect(reply.locator('a').first).to_have_attribute('href', 'https://news.example.test/top')
+    expect(reply.locator('a').first).to_have_attribute('title', 'https://news.example.test/top')  # where it goes
     expect(reply.locator('a').last).to_have_attribute(
         'href', 'https://en.wikipedia.org/wiki/Python_(programming_language)'
     )
@@ -835,3 +836,12 @@ def test_being_offline_is_said_once_until_the_server_answers_again(frontend: tup
     page.evaluate('reportUnlessOffline(loadThreads())')  # the next retry, still offline
     page.wait_for_timeout(300)
     expect(page.locator('#notice')).to_be_hidden()
+
+
+def test_enter_mid_word_in_an_input_method_does_not_send(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    workspace(page, mock)
+    page.fill('#message', 'にほん')
+    page.dispatch_event('#message', 'keydown', {'key': 'Enter', 'isComposing': True})
+    assert not any(method == 'POST' for method, _, _ in mock.calls)
+    expect(page.locator('#message')).to_have_value('にほん')

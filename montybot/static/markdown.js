@@ -99,6 +99,7 @@ function inline(text) {
 function link(href, label) {
   const a = node('a', [label]);
   a.href = href;
+  a.title = href;  // the label may say anything: hovering shows where it really goes
   a.target = '_blank';
   a.rel = 'noopener noreferrer';
   return a;
