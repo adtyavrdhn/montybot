@@ -130,6 +130,8 @@ public final class AppModel {
     public var firstTaskSent: (() -> Void)?
     /// Called when the user has seen a chat: its notifications are old news.
     public var chatSeen: ((String) -> Void)?
+    /// Called when the user signs out or their session ends: every notification was theirs, and is old news.
+    public var signedOutOfNotifications: (() -> Void)?
 
     public var user: User? {
         if case .signedIn(let user) = phase { return user }
@@ -331,6 +333,7 @@ public final class AppModel {
 
     private func reset() {
         persistedUser = nil  // before clearing: what is kept for next time stays
+        signedOutOfNotifications?()
         retrying?.cancel()
         watching?.cancel()
         watching = nil
@@ -425,7 +428,7 @@ public final class AppModel {
     /// it in the answer box (or the message box, if the question closed meanwhile).
     public func answerFromNotification(_ askId: String, in threadId: String, text: String) async -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, user != nil else { return false }
+        guard !text.isEmpty, user != nil else { return false }  // the caller checks it is this user's
         do {
             try await client.answer(askId, .text(text))
             refreshThreads()

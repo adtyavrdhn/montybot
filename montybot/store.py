@@ -111,11 +111,11 @@ async def get_thread(connection: Connection, user_id: str, thread_id: str) -> Th
 
 
 async def list_threads(connection: Connection, user_id: str) -> list[Thread]:
-    """The user's threads, the one with the latest message first."""
+    """The user's threads, the one last active first (its latest run started, or it was created)."""
     cursor = await connection.execute(
         'SELECT t.id, t.user_id, t.title FROM montybot.threads t WHERE t.user_id = %s '
-        'ORDER BY (SELECT max(r.created_at) FROM montybot.runs r WHERE r.thread_id = t.id) DESC NULLS LAST, '
-        't.created_at DESC',
+        # When it was last active, as `last_active` says: a schedule's chat with no run yet counts from its creation.
+        'ORDER BY coalesce((SELECT max(r.created_at) FROM montybot.runs r WHERE r.thread_id = t.id), t.created_at) DESC',
         (user_id,),
     )
     return [thread_from(row) for row in await cursor.fetchall()]

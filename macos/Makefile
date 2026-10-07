@@ -37,8 +37,8 @@ test:  ## Unit tests, and the journeys too when 'make dev' is running (never aga
 	else echo "No dev server at $(LOCAL): unit tests only (run 'make dev' in another terminal for the journeys)"; swift test; fi
 
 tour:  ## Every screen as PNG and text in build/tour (needs 'make dev' and an unlocked Mac)
-	scripts/build-app.sh $(SERVER) && MONTY_TOUR_SERVER=$(LOCAL) scripts/tour.sh build/tour
-	rm -rf build/Monty.app  # no second Monty next to the installed one
+	@# Whether the tour works or not, no second Monty is left next to the installed one.
+	scripts/build-app.sh $(SERVER) && MONTY_TOUR_SERVER=$(LOCAL) scripts/tour.sh build/tour; status=$$?; rm -rf build/Monty.app; exit $$status
 
 share: app  ## build/Monty.zip to send to someone (ad hoc signed; see README for Developer ID)
 	cd build && rm -f Monty.zip && ditto -c -k --keepParent Monty.app Monty.zip

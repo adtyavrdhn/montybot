@@ -364,3 +364,23 @@ async def test_a_run_for_a_deleted_chat_says_so(pool: Pool) -> None:
                 prompt='hi',
                 trigger='schedule',
             )
+
+
+async def test_chats_are_listed_by_when_they_were_last_active(pool: Pool) -> None:
+    """The apps group chats by `updated_at` and show them in the list's order: the two must agree, including for a
+    schedule's chat that has no run yet."""
+    async with pool.connection() as connection:
+        user = await store.create_user(connection, 'order@example.test', 'x')
+        assert user is not None
+        older = await store.create_thread(connection, user.id, 'older')
+        await store.create_run(
+            connection, run_id=str(uuid.uuid4()), user_id=user.id, thread_id=older.id, prompt='hi', trigger='message'
+        )
+        await connection.execute(
+            "UPDATE montybot.runs SET created_at = now() - interval '2 days' WHERE thread_id = %s", (older.id,)
+        )
+        scheduled = await store.create_thread(connection, user.id, 'a schedule, not run yet')
+        listed = [thread.id for thread in await store.list_threads(connection, user.id)]
+        last_active = await store.last_active(connection, user.id)
+    assert listed == [scheduled.id, older.id]
+    assert last_active[scheduled.id] > last_active[older.id]

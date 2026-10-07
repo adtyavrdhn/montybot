@@ -67,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         app.threadsChanged = { [weak self] in self?.updateBadge() }
         app.firstTaskSent = { [weak self] in self?.requestNotifications() }
         // Seen in the app: what Notification Center says about the chat is old news.
+        app.signedOutOfNotifications = { [weak self] in self?.notifications?.removeAllDeliveredNotifications() }
         app.chatSeen = { [weak self] thread in
             self?.notifications?.removeDeliveredNotifications(withIdentifiers: [Self.identifier(thread)])
         }
@@ -136,7 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         content.body = notice.body
         content.sound = notice.kind == .finished ? nil : .default
         content.threadIdentifier = notice.threadId
-        content.userInfo = ["thread": notice.threadId, "ask": notice.askId ?? ""]
+        content.userInfo = ["thread": notice.threadId, "ask": notice.askId ?? "", "user": app.user?.id ?? ""]
         if notice.kind == .question { content.categoryIdentifier = "question" }
         if notice.kind != .finished { content.interruptionLevel = .timeSensitive }
         // One per chat: its latest news replaces what it said before, and opening the chat clears it.
@@ -147,6 +148,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         let info = response.notification.request.content.userInfo
+        // Someone else's, from before they signed out on this Mac: it says nothing about this user's chats.
+        let owner = info["user"] as? String
+        guard await MainActor.run(body: { owner == app.user?.id }) else {
+            await MainActor.run { show(thread: nil) }
+            return
+        }
         let thread = info["thread"] as? String
         if let reply = response as? UNTextInputNotificationResponse, let thread, let ask = info["ask"] as? String, !ask.isEmpty {
             let text = reply.userText
