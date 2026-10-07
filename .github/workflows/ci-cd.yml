@@ -195,7 +195,7 @@ jobs:
       - run: uv run pytest -q -p no:cacheprovider -n 4 --durations=10 tests/e2e --browser=cdp
 
   # CloakBrowser in place of Chrome under the same CDP backend is evaluated, not deployed (cloak.md): its conformance,
-  # unjailed and in the server's jail, and the end-to-end suite. Not a deploy gate. Its license forbids redistribution,
+  # unjailed and in the server's jail, its live view, and the end-to-end suite. Not a deploy gate. Its license forbids redistribution,
   # so each run downloads the free build from GitHub Releases, pinned by SHA-256 and checked against CloakHQ's signed
   # SHA256SUMS (tests/linux/fetch_cloak.sh). No license key.
   cloak-linux:
@@ -234,6 +234,7 @@ jobs:
       - name: CloakBrowser, free build, verified
         run: echo "MONTYBOT_CLOAK_BINARY=$(sh tests/linux/fetch_cloak.sh "$RUNNER_TEMP/cloak")" >> "$GITHUB_ENV"
       - run: uv run pytest -q -p no:cacheprovider -rs tests/browser/test_cloak.py
+      - run: uv run pytest -q -p no:cacheprovider -rs tests/liveview/test_liveview_engines.py -k cloak
       - run: uv run pytest -q -p no:cacheprovider -n 4 --durations=10 tests/e2e --browser=cloak
 
   sidecar-smoke:

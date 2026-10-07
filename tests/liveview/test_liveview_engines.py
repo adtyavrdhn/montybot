@@ -1,5 +1,5 @@
-"""The live view on real engines: Chromium (Playwright, headless), Chromium over our own CDP pipe (`cdp`, headless)
-and Servo (servoshell, headless WebDriver).
+"""The live view on real engines: Chromium (Playwright, headless), Chromium over our own CDP pipe (`cdp`, headless),
+CloakBrowser over the same pipe (`cloak`, headless) and Servo (servoshell, headless WebDriver).
 
 Chromium and Servo are driven directly by stand-in backends from `liveview_harness`, not by #11's or #12's backends;
 `cdp` is the real `ChromiumCDPBackend`. Servo tests skip when servoshell is not installed (set `MONTYBOT_SERVO` to its
@@ -38,7 +38,7 @@ from montybot.liveview.handoffs import InMemoryHandoffs
 from montybot.liveview.scripted_user import press_and_hold, sign_in_to_demo_shop
 from montybot.liveview.wire import ViewportSize
 
-pytestmark = [pytest.mark.anyio, pytest.mark.parametrize('engine', ['chromium', 'cdp', 'servo'])]
+pytestmark = [pytest.mark.anyio, pytest.mark.parametrize('engine', ['chromium', 'cdp', 'cloak', 'servo'])]
 
 RUN = 'run-1'
 USER = 'alice'
