@@ -155,6 +155,11 @@ async def test_one_run_at_a_time_holds_a_users_sign_ins(pool: Pool) -> None:
     assert await lease.holder(user_id=a.id) is None
     assert await lease.acquire(user_id=a.id, run_id='run-3')
 
+    # Renewing never takes a free lease: a stopped run must not lock the user's browser again.
+    await lease.release(user_id=a.id, run_id='run-3')
+    await lease.renew(user_id=a.id, run_id='run-3')
+    assert await lease.holder(user_id=a.id) is None
+
 
 async def test_user_b_cannot_reach_user_a_files(tmp_path: Path) -> None:
     workspaces = Workspaces(tmp_path)

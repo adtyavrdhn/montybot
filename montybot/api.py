@@ -177,12 +177,14 @@ async def read_thread(request: Request, user: User) -> Response:
 def chat_messages(runs: list[Run], asks: list[Ask]) -> list[dict[str, str]]:
     """The chat as the user sees it. Each run is their message, what Monty asked them and how they answered, and
     Monty's reply once the run has finished. `event` lines record approvals and hand-offs."""
+    asks_of_run: dict[str, list[Ask]] = {}
+    for ask in asks:
+        asks_of_run.setdefault(ask.run_id, []).append(ask)
     shown: list[dict[str, str]] = []
     for run in runs:
         shown.append({'role': 'user', 'text': run.prompt})
-        for ask in asks:
-            if ask.run_id == run.id:
-                shown.extend(ask_messages(ask))
+        for ask in asks_of_run.get(run.id, []):
+            shown.extend(ask_messages(ask))
         if run.output:
             shown.append({'role': 'assistant', 'text': run.output})
     return shown
@@ -191,6 +193,8 @@ def chat_messages(runs: list[Run], asks: list[Ask]) -> list[dict[str, str]]:
 def ask_messages(ask: Ask) -> list[dict[str, str]]:
     """An answered ask as chat lines."""
     answer = ask.answer or {}
+    if answer.get('closed'):
+        return []  # the run ended (it was stopped) before the user answered
     if answer.get('expired'):
         return [{'role': 'event', 'text': f'Not answered in time: {ask.prompt}'}]
     match ask.kind:

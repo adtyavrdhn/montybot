@@ -7,7 +7,9 @@ const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/;
 const NUMBERED_ITEM = /^\s*\d+[.)]\s/;
 const HEADING = /^(#{1,6})\s+(.*)$/;
 const TABLE_DIVIDER = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
-const INLINE = /\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>]+)|\*([^*\s][^*]*)\*/;
+// An address may hold one level of parentheses, as Wikipedia's do: /wiki/Python_(programming_language).
+const ADDRESS = String.raw`https?:\/\/(?:[^\s()<>]|\([^\s()<>]*\))+`;
+const INLINE = new RegExp(String.raw`\*\*([^*]+)\*\*|\x60([^\x60]+)\x60|\[([^\]]+)\]\((${ADDRESS})\)|(${ADDRESS})|\*([^*\s][^*]*)\*`);
 
 function renderMarkdown(text) {
   const blocks = document.createDocumentFragment();
@@ -32,6 +34,7 @@ function renderMarkdown(text) {
       blocks.append(table(rows));
     } else if (LIST_ITEM.test(line)) {
       const list = node(NUMBERED_ITEM.test(line) ? 'ol' : 'ul');
+      if (list.tagName === 'OL') list.start = parseInt(line, 10);
       for (; i < lines.length && LIST_ITEM.test(lines[i]); i++) list.append(node('li', inline(lines[i].match(LIST_ITEM)[1])));
       blocks.append(list);
     } else {
@@ -74,7 +77,7 @@ function inline(text) {
     else if (code !== undefined) nodes.push(node('code', [code]));
     else if (label !== undefined) nodes.push(link(href, label));
     else if (url !== undefined) {
-      used = url.replace(/[.,;:!?)]+$/, '');  // the sentence's punctuation is not part of the address
+      used = url.replace(/[.,;:!?]+$/, '');  // the sentence's punctuation is not part of the address
       nodes.push(link(used, used));
     } else nodes.push(node('em', inline(italic)));
     rest = rest.slice(match.index + used.length);

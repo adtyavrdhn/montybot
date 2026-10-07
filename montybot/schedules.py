@@ -63,7 +63,7 @@ def is_timezone(name: str) -> bool:
     """An IANA zone such as `Europe/London`."""
     try:
         ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError):
+    except (ZoneInfoNotFoundError, ValueError, OSError):  # OSError: a name such as 'America' is a directory
         return False
     return True
 

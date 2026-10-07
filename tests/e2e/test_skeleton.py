@@ -88,7 +88,7 @@ def statuses(client: Client) -> dict[str, str | None]:
 def test_stop_a_run_that_waits_for_the_user(client: Client) -> None:
     client.sign_up()
     thread = client.ask('Ask me my favourite colour and remember it.')
-    client.wait_for_ask(thread, 'question')
+    question = client.wait_for_ask(thread, 'question')
     assert statuses(client) == {thread: 'waiting'}
     run_id = client.thread(thread)['run']['id']
 
@@ -100,6 +100,7 @@ def test_stop_a_run_that_waits_for_the_user(client: Client) -> None:
     assert stopped['messages'][-1] == {'role': 'assistant', 'text': 'You stopped this.'}
     assert statuses(client) == {thread: None}
     assert client.http.post(f'/api/runs/{run_id}/stop', json={}).status_code == 409
+    assert client.http.post(f'/api/asks/{question["id"]}', json={'text': 'red'}).status_code == 409  # too late
     client.ask('Say hello.', thread)  # the thread takes a new message
     assert 'hello' in client.wait_for_reply(thread).lower()
 

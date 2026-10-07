@@ -89,7 +89,7 @@ def snapshot(run_id: str) -> Snapshot:
         _prune()
         preview = _previews.get(run_id)
         if preview is None:
-            return {'revision': 0, 'text': '', 'activity': 'Working'}
+            return {'revision': 0, 'text': '', 'activity': ''}  # the web app shows the run's activity log
         return {
             'revision': preview.revision,
             'text': '\n'.join(preview.parts[i] for i in sorted(preview.parts))[:MAX_TEXT],

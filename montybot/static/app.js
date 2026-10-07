@@ -19,6 +19,8 @@ const state = {
   draftLost: false,  // the live connection dropped, so the draft may be behind
   chatLoads: 0,  // numbers each chat load, so only the latest one is drawn
   takeoverAskId: null,  // the hand-off whose live view is open
+  browserClosed: false,  // the user closed the browser panel in this chat, so it does not open by itself again
+  threadsShown: '',  // the chat list as last drawn, so an unchanged list is not redrawn under the user's focus
   signingUp: false,
 };
 let page = new AbortController();
@@ -97,6 +99,7 @@ function signedOut() {
   newPage();
   state.threadId = null;
   state.run = null;
+  state.threadsShown = '';
   show('signin');
 }
 
@@ -129,7 +132,9 @@ $('signin-form').addEventListener('submit', async (event) => {
   }
 });
 
-$('signout').addEventListener('click', async () => {
+$('signout').addEventListener('click', () => report(signOut()));
+
+async function signOut() {
   signedOut();
   try {
     await stopNotifications();
@@ -139,12 +144,15 @@ $('signout').addEventListener('click', async () => {
   await api('/api/signout', { method: 'POST', body: {} });
   location.hash = '';
   location.reload();
-});
+}
 
 // --- the chat list ---
 
 async function loadThreads() {
   const threads = await api('/api/threads');
+  const shown = JSON.stringify([state.threadId, threads]);
+  if (shown === state.threadsShown) return;
+  state.threadsShown = shown;
   const badges = { waiting: 'Needs you', running: 'Working', queued: 'Working' };
   $('threads').replaceChildren(...threads.map((thread) => {
     const open = element('button', '', thread.id === state.threadId ? 'current' : '');
@@ -250,6 +258,7 @@ async function openChat(threadId) {
   state.threadId = threadId;
   state.draft = null;
   state.draftLost = false;
+  state.browserClosed = false;
   if (threadId === null) {
     $('title').textContent = 'New chat';
     $('messages').replaceChildren(emptyChat());
@@ -375,9 +384,10 @@ $('stop').addEventListener('click', () => {
   const run = state.run;
   if (!run) return;
   $('stop').disabled = true;
+  const before = page;
   report(api(`/api/runs/${run.id}/stop`, { method: 'POST', body: {} })
     .catch((error) => { if (error.status !== 409) throw error; })  // it finished meanwhile
-    .then(() => Promise.all([loadChat(), loadThreads()]))
+    .then(() => { if (page === before) return Promise.all([loadChat(), loadThreads()]); })
     .finally(() => { $('stop').disabled = false; }));
 });
 
@@ -417,7 +427,9 @@ function renderAsk(ask) {
 }
 
 async function answer(ask, body) {
+  const before = page;
   await api(`/api/asks/${ask.id}`, { method: 'POST', body });
+  if (page !== before) return;  // the user went elsewhere meanwhile
   if (state.run && state.run.ask && state.run.ask.id === ask.id) {
     $('ask').hidden = true;
     $('ask').dataset.id = '';
@@ -432,7 +444,14 @@ async function takeOver(ask) {
   state.takeoverAskId = ask.id;
   $('live').src = link.url;
   $('takeover').hidden = false;
+  setBehindTakeover(true);
   $('close-takeover').focus();
+}
+
+function setBehindTakeover(inert) {
+  // While the user drives the browser, the page behind it cannot be reached with Tab.
+  for (const behind of [document.querySelector('.bar'), $('drawer'), $('layout')]) behind.inert = inert;
+  if (!inert) updateBrowserButton();  // which sets the drawer's and the chat's own inert state again
 }
 
 function closeTakeover() {
@@ -441,8 +460,12 @@ function closeTakeover() {
   if ($('takeover').hidden) return;
   $('takeover').hidden = true;
   $('live').src = 'about:blank';
+  setBehindTakeover(false);
+  const takeOverButton = $('ask').querySelector('button');
+  if (takeOverButton) takeOverButton.focus(); else $('message').focus();
 }
 $('close-takeover').addEventListener('click', closeTakeover);
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !$('takeover').hidden) closeTakeover(); });
 
 // --- the bot's browser, while it works ---
 
@@ -452,7 +475,7 @@ function startWatching() {
   watching = new AbortController();
   const signal = watching.signal;
   const runId = state.run.id;
-  if (desktop.matches) showBrowser();
+  if (desktop.matches && !state.browserClosed) showBrowser();
   (async () => {
     while (!signal.aborted) {
       if (!$('browser').hidden) await showScreenshot(runId, signal).catch(() => {});
@@ -497,6 +520,7 @@ function updateBrowserButton() {
 
 $('browser-button').addEventListener('click', () => { showBrowser(); $('close-browser').focus(); });
 $('close-browser').addEventListener('click', () => {
+  state.browserClosed = true;
   $('browser').hidden = true;
   updateBrowserButton();
   if (!$('browser-button').hidden) $('browser-button').focus(); else $('message').focus();

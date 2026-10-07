@@ -113,6 +113,15 @@ class PostgresLease:
             )
             return await cursor.fetchone() is not None
 
+    async def renew(self, *, user_id: UserId, run_id: RunId) -> None:
+        """Extend the run's lease if it still holds it. Never takes a free lease: a run that was stopped meanwhile
+        must not lock the user's browser again."""
+        async with self._pool.connection() as connection:
+            await connection.execute(
+                'UPDATE montybot.jar_leases SET expires_at = now() + %s WHERE user_id = %s AND run_id = %s',
+                (self._ttl, user_id, run_id),
+            )
+
     async def holder(self, *, user_id: UserId) -> RunId | None:
         async with self._pool.connection() as connection:
             cursor = await connection.execute(

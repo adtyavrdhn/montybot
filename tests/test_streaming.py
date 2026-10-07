@@ -131,7 +131,7 @@ async def test_runs_are_isolated_and_discard_removes_preview(run_id: str) -> Non
         await streaming.handler(context(run_id), events(PartStartEvent(index=0, part=TextPart('first'))))
         await streaming.handler(context(other), events(PartStartEvent(index=0, part=TextPart('second'))))
         streaming.discard(run_id)
-        assert streaming.snapshot(run_id) == {'revision': 0, 'text': '', 'activity': 'Working'}
+        assert streaming.snapshot(run_id) == {'revision': 0, 'text': '', 'activity': ''}
         assert streaming.snapshot(other)['text'] == 'second'
         streaming.discard(run_id)  # Cleanup is safe more than once.
     finally:

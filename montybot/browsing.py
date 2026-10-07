@@ -73,7 +73,7 @@ class Session:
         started = await self.browser.start(run_id=self.run_id, user_id=self.user_id)
         self._note(started.restarted)
         # Renew the run's lease on the user's sign-ins (after `start`, which takes it on the first call).
-        await self.resources.lease.acquire(user_id=self.user_id, run_id=self.run_id)
+        await self.resources.lease.renew(user_id=self.user_id, run_id=self.run_id)
 
     async def act(self, action: Navigate | Click | Type | Press) -> None:
         await self.start()

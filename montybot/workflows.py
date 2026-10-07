@@ -38,7 +38,7 @@ from montybot import store, streaming
 from montybot.browser.contract import BrowserError
 from montybot.browser.service import UnknownRun
 from montybot.deps import RunDeps
-from montybot.models import Run, RunStatus, Schedule
+from montybot.models import FINISHED, Run, RunStatus, Schedule
 from montybot.observability import timed, timing
 from montybot.resources import Resources, current
 
@@ -57,9 +57,12 @@ async def run_thread(run_id: str) -> str:
     with timing('run.lifecycle') as lifecycle, logfire.set_baggage(run_id=run_id):
         resources = current()
         streaming.reset(run_id)
-        run, history_json, schedule, local_time = await DBOS.run_step_async(
-            {'name': 'run.start'}, start_run, resources, run_id
-        )
+        started = await DBOS.run_step_async({'name': 'run.start'}, start_run, resources, run_id)
+        # Runs recorded before the user's local time was added replay a 3-tuple.
+        run, history_json, schedule = started[:3]
+        local_time = started[3] if len(started) > 3 else ''
+        if run.status in FINISHED:
+            return run.status  # stopped before its workflow started
         lifecycle.set_attributes({'thread_id': run.thread_id, 'user_id': run.user_id, 'trigger': run.trigger})
         history = recent(ModelMessagesTypeAdapter.validate_json(history_json), resources.settings.history_limit)
         deps = RunDeps(resources=resources, run=run, schedule=schedule, local_time=local_time)
@@ -159,6 +162,7 @@ async def end_run(resources: Resources, run: Run, status: RunStatus, notice: str
             ],
         )
         await store.finish_run(connection, run.id, status, output=notice, error=error)
+        await store.close_open_asks(connection, run.id)
     return True
 
 

@@ -93,8 +93,9 @@ async def list_threads(connection: Connection, user_id: str) -> list[Thread]:
 async def active_runs(connection: Connection, user_id: str) -> dict[str, RunStatus]:
     """The status of each of the user's unfinished runs, by thread id."""
     cursor = await connection.execute(
-        'SELECT thread_id, status FROM montybot.runs WHERE user_id = %s AND NOT status = ANY(%s)',
-        (user_id, list(FINISHED)),
+        # The same condition as the index runs_active_by_user.
+        "SELECT thread_id, status FROM montybot.runs WHERE user_id = %s AND status IN ('queued', 'running', 'waiting')",
+        (user_id,),
     )
     return {str(row['thread_id']): row['status'] for row in await cursor.fetchall()}
 
@@ -249,6 +250,15 @@ async def list_answered_asks(connection: Connection, user_id: str, thread_id: st
         (thread_id, user_id),
     )
     return [ask_from(row) for row in await cursor.fetchall()]
+
+
+async def close_open_asks(connection: Connection, run_id: str) -> None:
+    """Close what a finished run still asks, so a late answer (from an old notification) is refused."""
+    await connection.execute(
+        'UPDATE montybot.asks SET answer = \'{"closed": true}\', answered_at = now() '
+        'WHERE run_id = %s AND answer IS NULL',
+        (run_id,),
+    )
 
 
 async def get_ask(connection: Connection, user_id: str, ask_id: str) -> Ask | None:

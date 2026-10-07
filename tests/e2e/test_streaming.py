@@ -177,6 +177,8 @@ def test_streaming_preview_and_completed_model_step_survive_recovery(app: App, c
     assert thread['run']['status'] == 'done'
     assert thread['messages'] == [
         {'role': 'user', 'text': PROMPT},
+        {'role': 'assistant', 'text': QUESTION},  # what Monty asked, and the answer
+        {'role': 'user', 'text': 'green'},
         {'role': 'assistant', 'text': FINAL},
     ]  # The initial assistant text + tool call is not a durable chat reply.
     assert counter.read_text().splitlines() == ['1', '1', '1']
