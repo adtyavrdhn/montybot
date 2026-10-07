@@ -18,9 +18,6 @@ step returns its recorded result instead of running again.
 
 from __future__ import annotations
 
-import asyncio
-from contextvars import Context
-
 import logfire
 from dbos import DBOS, SetWorkflowID, StepOptions, WorkflowHandleAsync
 from dbos._error import DBOSException
@@ -47,34 +44,20 @@ RETRIED: StepOptions = {'retries_allowed': True, 'max_attempts': 5, 'interval_se
 FAILURE_NOTICE = 'Something went wrong while working on this, and I could not finish. Please try again.'
 
 
-@DBOS.workflow(name='montybot.run_thread')
+@DBOS.workflow(name='montybot.run_thread_stream')  # the name runs were recorded under; keep it so they resume
 async def run_thread(run_id: str) -> str:
-    """Keep the original step sequence for pre-streaming, in-flight workflows."""
-    return await _run_thread(run_id, stream=False)
-
-
-@DBOS.workflow(name='montybot.run_thread_stream')
-async def run_thread_stream(run_id: str) -> str:
-    return await _run_thread(run_id, stream=True)
-
-
-async def _run_thread(run_id: str, *, stream: bool) -> str:
     # Baggage puts run_id on every span of the run, model and browser calls included.
     with timing('run.lifecycle') as lifecycle, logfire.set_baggage(run_id=run_id):
         resources = current()
-        if stream:
-            streaming.reset(run_id)
+        streaming.reset(run_id)
         run, history_json, schedule = await DBOS.run_step_async({'name': 'run.start'}, start_run, resources, run_id)
         lifecycle.set_attributes({'thread_id': run.thread_id, 'user_id': run.user_id, 'trigger': run.trigger})
         history = recent(ModelMessagesTypeAdapter.validate_json(history_json), resources.settings.history_limit)
         deps = RunDeps(resources=resources, run=run, schedule=schedule)
         try:
             try:
-                agent = (
-                    resources.streaming_agent if stream and resources.streaming_agent is not None else resources.agent
-                )
                 with timing('run.agent'):
-                    result = await agent.run(run.prompt, deps=deps, message_history=history)
+                    result = await resources.agent.run(run.prompt, deps=deps, message_history=history)
             except Exception as error:
                 logfire.error('Run {run_id} failed: {error_type}', run_id=run_id, error_type=type(error).__qualname__)
                 await DBOS.run_step_async(
@@ -92,23 +75,13 @@ async def _run_thread(run_id: str, *, stream: bool) -> str:
             try:
                 await DBOS.run_step_async({**RETRIED, 'name': 'run.close'}, close_browser, resources, run)
             finally:
-                if stream:
-                    streaming.discard(run_id)
+                streaming.discard(run_id)
 
 
 @timed('run.dispatch')
 async def start(run_id: str) -> WorkflowHandleAsync[str]:
-    """Retain a recorded child's identity, including pre-streaming scheduled parents."""
-    # DBOS's async status API records a checkpoint inside a workflow. Inserting
-    # one here would shift a scheduled parent's recorded child-start position.
-    # This public, read-only management query runs with an explicitly empty
-    # context: identity is immutable durable metadata, not a model/tool event.
-    status = await asyncio.get_running_loop().run_in_executor(
-        None, lambda: Context().run(DBOS.get_workflow_status, run_id)
-    )
-    workflow = run_thread if status is not None and status.name == 'montybot.run_thread' else run_thread_stream
     with SetWorkflowID(run_id):
-        return await DBOS.start_workflow_async(workflow, run_id)
+        return await DBOS.start_workflow_async(run_thread, run_id)
 
 
 async def start_run(resources: Resources, run_id: str) -> tuple[Run, bytes, Schedule | None]:

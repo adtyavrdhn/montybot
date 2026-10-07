@@ -146,7 +146,7 @@ async def test_build_agent_streams_partial_text_before_model_completes(run_id: s
         partials.append(streaming.snapshot(run_id))
         yield ' world'
 
-    agent = agent_module.build_agent(FunctionModel(stream_function=stream), stream=True)
+    agent = agent_module.build_agent(FunctionModel(stream_function=stream))
     result = await agent.run('hello', deps=deps)
     assert partials[0]['text'] == 'Hello'
     assert result.output == 'Hello world'
@@ -161,7 +161,7 @@ async def test_build_agent_preserves_function_only_nonstreaming_model(deps: Any)
         calls += 1
         return ModelResponse(parts=[TextPart('nonstream answer')])
 
-    agent = agent_module.build_agent(FunctionModel(respond), stream=True)
+    agent = agent_module.build_agent(FunctionModel(respond))
     result = await agent.run('hello', deps=deps)
     assert result.output == 'nonstream answer'
     assert calls == 1
@@ -254,7 +254,7 @@ async def test_completed_model_step_replay_does_not_duplicate_preview(
         yield 'durable '
         yield 'answer'
 
-    agent = agent_module.build_agent(FunctionModel(stream_function=stream), stream=True)
+    agent = agent_module.build_agent(FunctionModel(stream_function=stream))
     first = await agent.run('hello', deps=deps)
     assert streaming.snapshot(run_id)['text'] == 'durable answer'
     streaming.reset(run_id)  # As at workflow entry, or after losing process-local state.
@@ -335,94 +335,6 @@ async def test_tool_activity_is_generic_and_preserves_current_text(run_id: str) 
     assert completed['activity'] == 'Step completed'
     assert completed['text'] == before['text']
     assert completed['revision'] > running['revision']
-
-
-@pytest.mark.parametrize(
-    ('recorded_name', 'expected_name'),
-    [
-        ('montybot.run_thread', 'run_thread'),
-        ('montybot.run_thread_stream', 'run_thread_stream'),
-        (None, 'run_thread_stream'),
-    ],
-)
-async def test_start_preserves_recorded_identity_without_checkpointing_parent(
-    recorded_name: str | None, expected_name: str, run_id: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The management read must not consume a scheduled parent's next operation ID."""
-    from threading import get_ident
-    from unittest.mock import AsyncMock, Mock
-
-    from dbos import DBOS
-    from dbos._context import DBOSContextEnsure, get_local_dbos_context
-
-    from montybot import workflows
-
-    parent_thread = get_ident()
-
-    def read_status(workflow_id: str) -> Any:
-        assert workflow_id == run_id
-        assert get_ident() != parent_thread
-        assert get_local_dbos_context() is None
-        assert DBOS.workflow_id is None
-        return SimpleNamespace(name=recorded_name) if recorded_name is not None else None
-
-    status = Mock(side_effect=read_status)
-    async_status = AsyncMock(side_effect=AssertionError('Async status reads checkpoint the parent'))
-    step = AsyncMock(side_effect=AssertionError('Dispatch must not introduce a recorded step'))
-    handle = object()
-
-    with DBOSContextEnsure() as parent:
-        parent.workflow_id = 'scheduled-parent'
-        parent.function_id = 7
-
-        async def start_child(workflow: Any, workflow_id: str) -> Any:
-            assert workflow is getattr(workflows, expected_name)
-            assert workflow_id == run_id
-            assert get_local_dbos_context() is parent
-            assert DBOS.workflow_id == 'scheduled-parent'
-            assert parent.id_assigned_for_next_workflow == run_id
-            assert parent.function_id == 7
-            return handle
-
-        start = AsyncMock(side_effect=start_child)
-        monkeypatch.setattr(DBOS, 'get_workflow_status', status)
-        monkeypatch.setattr(DBOS, 'get_workflow_status_async', async_status)
-        monkeypatch.setattr(DBOS, 'run_step_async', step)
-        monkeypatch.setattr(DBOS, 'start_workflow_async', start)
-
-        assert await workflows.start(run_id) is handle
-        assert get_local_dbos_context() is parent
-        assert parent.function_id == 7
-
-    status.assert_called_once_with(run_id)
-    start.assert_awaited_once_with(getattr(workflows, expected_name), run_id)
-    async_status.assert_not_awaited()
-    step.assert_not_awaited()
-
-
-async def test_legacy_build_agent_has_no_stream_handler(deps: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    original = agent_module.DBOSDurability
-    configured_handlers = []
-
-    def durability(**kwargs: Any) -> Any:
-        configured_handlers.append(kwargs.get('event_stream_handler'))
-        return original(**kwargs)
-
-    monkeypatch.setattr(agent_module, 'DBOSDurability', durability)
-
-    def respond(messages: Any, info: Any) -> ModelResponse:
-        return ModelResponse(parts=[TextPart('legacy answer')])
-
-    async def unexpected_stream(messages: Any, info: Any) -> AsyncIterator[str]:
-        raise AssertionError('Legacy agent must not request a stream')
-        yield ''  # Keep the model callback an async generator.
-
-    before = streaming.snapshot(deps.run_id)
-    agent = agent_module.build_agent(FunctionModel(respond, stream_function=unexpected_stream))
-    assert configured_handlers == [None]
-    result = await agent.run('hello', deps=deps)
-    assert result.output == 'legacy answer'
-    assert streaming.snapshot(deps.run_id) == before
 
 
 def test_concurrent_producer_and_snapshot_readers(run_id: str) -> None:
