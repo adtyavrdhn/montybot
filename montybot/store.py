@@ -27,7 +27,7 @@ class ThreadGone(Exception):
 
 
 USER_COLUMNS = 'id, email, name, timezone'
-RUN_COLUMNS = 'id, user_id, thread_id, trigger, prompt, status, output, error'
+RUN_COLUMNS = 'id, user_id, thread_id, trigger, prompt, status, output, error, created_at, completed_at'
 ASK_COLUMNS = 'id, run_id, user_id, occurrence, kind, prompt, details, answer'
 SCHEDULE_COLUMNS = 'id, user_id, thread_id, name, cron, timezone, when_text, prompt, watch'
 
@@ -525,6 +525,8 @@ def run_from(row: dict[str, Any]) -> Run:
         status=row['status'],
         output=row['output'],
         error=row['error'],
+        started_at=row['created_at'],
+        completed_at=row['completed_at'],
     )
 
 

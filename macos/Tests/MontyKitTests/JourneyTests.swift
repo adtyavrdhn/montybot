@@ -651,6 +651,68 @@ struct JourneyTests {
         #expect(chat.messages.contains { $0.role == .event && $0.text.hasPrefix("You said no to") })
     }
 
+    @Test func aDeletedChatCanBeUndoneThenIsGoneForGood() async throws {
+        let app = try await person()
+        let chat = try await say("Say hello", in: app)
+        try await eventually("the reply") { chat.run?.status == .done }
+        let thread = try #require(app.openThread)
+
+        app.deleteWithUndo(thread)
+        #expect(!app.threads.contains { $0.id == thread.id } && app.route == .chat(nil))
+        await app.loadThreads()
+        #expect(!app.threads.contains { $0.id == thread.id })  // still on the server, but not shown
+        app.undoDelete()
+        #expect(app.threads.contains { $0.id == thread.id } && app.route == .chat(thread.id))
+        #expect(try await app.client.threads().contains { $0.id == thread.id })
+
+        app.undoWindow = .milliseconds(200)
+        app.deleteWithUndo(thread)
+        try await eventually("the undo to lapse") { app.recentlyDeleted == nil }
+        var onServer = true
+        for _ in 0..<50 where onServer {  // the server's delete is on its way
+            onServer = try await app.client.threads().contains { $0.id == thread.id }
+            if onServer { try await Task.sleep(for: .milliseconds(100)) }
+        }
+        #expect(!onServer)
+    }
+
+    @Test func aMessageQueuedWhileMontyWorksGoesWhenItIsDone() async throws {
+        let app = try await person()
+        let chat = try await say("Say hello", in: app)
+        try #require(chat.isActive, "the scripted run finished before the follow-up could be queued")
+        chat.draft = "Say hello again"
+        #expect(chat.canQueue && !chat.canSend)
+        chat.queue()
+        #expect(chat.queued == "Say hello again" && chat.draft.isEmpty)
+        try await eventually("the queued message to go") {
+            chat.queued == nil && chat.messages.contains { $0.role == .user && $0.text == "Say hello again" }
+        }
+        try await eventually("its reply") { chat.run?.status == .done }
+        #expect(chat.run?.started != nil && chat.run?.completed != nil)  // "Worked for …"
+    }
+
+    @Test func backAndForwardGoWhereTheUserWas() async throws {
+        let app = try await person()
+        let first = try await say("Say hello", in: app)
+        let a = try #require(first.threadId)
+        try await eventually("the first reply") { first.run?.status == .done }
+        app.open(.schedules)
+        app.open(.chat(nil))
+        let second = try await say("Say hello", in: app)
+        let b = try #require(second.threadId)
+        try await eventually("the second reply") { second.run?.status == .done }
+
+        app.goBack()
+        #expect(app.route == .schedules)  // the new task became chat b: back goes before it
+        app.goBack()
+        #expect(app.route == .chat(a))
+        app.goForward()
+        #expect(app.route == .schedules)
+        await app.delete(try #require(app.threads.first { $0.id == b }))
+        app.goForward()
+        #expect(app.route != .chat(b))  // gone: skipped
+    }
+
     @Test func signingInWithVoiceOverThroughTheOutline() async throws {
         let app = try await person()
         let chat = try await say("Order eggs from \(try site("shop"))", in: app)

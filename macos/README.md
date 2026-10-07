@@ -90,8 +90,14 @@ Decisions from review:
 - While Monty works or waits, Send becomes Stop, as in other chat apps; ⌘. stops too. A stopped or failed task can
   be tried again as it was asked (⌘R), or put back in the message box to change first. Approving has no keyboard
   shortcut: going ahead with something that costs money takes a click.
-- While Monty waits for an answer the composer is off and says why; typed answers survive the question closing,
-  switching chats, and being answered elsewhere.
+- What Monty asks (a question, an approval, a hand-off) takes the message box's place, as in T3 Code: the user
+  answers where they type, with Stop at hand. Typed answers survive the question closing, switching chats, and being
+  answered elsewhere; a question can also be answered from its notification.
+- While Monty works, ↩ queues the next message: it goes when the task is done, or comes back to the box if the task
+  failed or was stopped. ↑ in an empty box brings back the last task. "Working for 12s" ticks while Monty works;
+  "Worked for 1m 3s · 5 steps" folds its steps after.
+- Deleting a chat asks nothing: it goes at once, with Undo (⌘Z) for a few seconds; the server deletes it after that,
+  or straight away at sign-out or quitting. Back and Forward (⌘[ ⌘]) go through the chats and pages you visited.
 - Taking over fills the window, and nothing (⌘N, a menu, a notification) takes the user away mid sign-in; ⇧⌘T leaves,
   ⌘↩ hands back. Typing goes through macOS text input, so accents and input methods work; ⌘V pastes from the Mac.
   With VoiceOver, the remote page reads like a web page: the server sends its outline (headings, text, fields,

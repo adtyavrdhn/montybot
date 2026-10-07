@@ -45,6 +45,8 @@ public final class ChatModel {
     public private(set) var live: LiveSession?
     /// Shown once above the composer, then cleared by the view.
     public var notice: ChatNotice?
+    /// A message the user wrote while Monty worked: it is sent once the task is done (as T3 Code queues a follow-up).
+    public private(set) var queued: String?
     /// The user is saying why not to the open approval (from its card, or the Task menu).
     public var denying = false
     /// Answering the open question or approval failed (offline, the server's error): shown in its card.
@@ -80,6 +82,10 @@ public final class ChatModel {
     public var isActive: Bool { pendingMessage != nil || run?.status.isActive == true }
     public var canSend: Bool {
         !sending && !isActive && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    /// Monty is working (not asking): what the user writes now can wait for it, and go when it is done.
+    public var canQueue: Bool {
+        threadId != nil && isActive && ask == nil && queued == nil && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     /// There is a run on the server to stop (not just a message on its way).
     public var canStop: Bool { run?.status.isActive == true && !stopping }
@@ -227,6 +233,7 @@ public final class ChatModel {
         }
         rescueAnswers()
         if let run, run.status.isActive { follow(run.id) } else { stopFollowing() }
+        if queued != nil, !isActive { Task { await sendQueued() } }
         app?.chatChanged(self)
     }
 
@@ -390,7 +397,7 @@ public final class ChatModel {
                 app.chatCreated(self)
             }
             pendingRun = created.runId
-            run = Run(id: created.runId, threadId: created.threadId, status: .queued)
+            run = Run(id: created.runId, threadId: created.threadId, status: .queued, started: Date())
             follow(created.runId)
             await refresh()
             app.refreshThreads()
@@ -406,6 +413,40 @@ public final class ChatModel {
             pendingMessage = nil
             return false
         }
+    }
+
+    /// Keeps the message box's text to send when the task is done.
+    public func queue() {
+        guard canQueue else { return }
+        queued = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = ""
+    }
+
+    /// Takes the queued message back into the message box, to change it or send it later.
+    public func unqueue() {
+        guard let text = queued else { return }
+        queued = nil
+        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = typed.isEmpty ? text : text + "\n\n" + typed
+    }
+
+    /// The task ended: a queued message goes now if it ended well; otherwise it comes back to the box, as what it
+    /// followed up on didn't happen.
+    private func sendQueued() async {
+        guard let text = queued, !isActive, !closed else { return }
+        queued = nil
+        if run?.status == .done {
+            if await !submit(text) { unqueueAfterFailure(text) }
+        } else {
+            let why = run?.status == .stopped ? "the task was stopped" : "Monty couldn't finish the task"
+            keep(text)
+            notice = .info("Your next message wasn't sent, because \(why). It's back in the message box.")
+        }
+    }
+
+    private func unqueueAfterFailure(_ text: String) {
+        guard !draft.contains(text) else { return }  // submit puts what it couldn't send back itself
+        keep(text)
     }
 
     /// Sends the last task again, as it was.
@@ -451,7 +492,7 @@ public final class ChatModel {
             app?.answerDrafts[ask.id] = nil
             denying = false  // answered: nothing left to decline
             guard !closed else { return }
-            if let run { self.run = Run(id: run.id, threadId: run.threadId, status: .running, prompt: run.prompt, activity: run.activity) }
+            if let run { self.run = Run(id: run.id, threadId: run.threadId, status: .running, prompt: run.prompt, activity: run.activity, started: run.started) }
             app?.chatChanged(self)
             await refresh()
         } catch let error as APIError {
@@ -580,6 +621,10 @@ public final class ChatModel {
 
     /// The chat is no longer on screen: stop everything it was doing, for good.
     public func close() {
+        if let text = queued {  // not sent: it waits in the chat's message box for the user
+            queued = nil
+            app?.keepDraft(text, for: draftKey, owner: owner, signOuts: signOuts)
+        }
         closed = true
         stopFollowing()
         stopWatching()

@@ -62,6 +62,14 @@ public struct ThreadSummary: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// A length of time as a person says it at a glance: "12s", "1m 3s", "2h 5m".
+public func spoken(_ seconds: TimeInterval) -> String {
+    let total = max(0, Int(seconds.rounded(.down)))
+    if total < 60 { return "\(total)s" }
+    if total < 3600 { return "\(total / 60)m \(total % 60)s" }
+    return "\(total / 3600)h \(total % 3600 / 60)m"
+}
+
 /// A chat list grouped by when each chat was last active, newest first, as ChatGPT's sidebar is.
 public enum ChatAge: String, CaseIterable, Sendable {
     case today = "Today", yesterday = "Yesterday", week = "Previous 7 days", month = "Previous 30 days", earlier = "Earlier"
@@ -121,16 +129,26 @@ public struct Run: Codable, Equatable, Identifiable, Sendable {
     public let activity: [String]
     /// What the bot waits for, while `status` is `waiting`.
     public let ask: Ask?
+    /// When it started, and finished (ISO 8601, as the server says them); older servers don't say.
+    let startedAt: String?
+    let completedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case id, status, prompt, output, activity, ask
         case threadId = "thread_id"
+        case startedAt = "started_at"
+        case completedAt = "completed_at"
     }
+
+    public var started: Date? { startedAt.flatMap(ThreadSummary.date) }
+    public var completed: Date? { completedAt.flatMap(ThreadSummary.date) }
 
     public init(
         id: String, threadId: String, status: RunStatus, prompt: String? = nil, output: String? = nil, activity: [String] = [],
-        ask: Ask? = nil
+        ask: Ask? = nil, started: Date? = nil
     ) {
+        startedAt = started.map { ISO8601DateFormatter().string(from: $0) }
+        completedAt = nil
         self.id = id
         self.threadId = threadId
         self.status = status

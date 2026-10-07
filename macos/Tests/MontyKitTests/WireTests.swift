@@ -182,6 +182,11 @@ import Testing
         #expect(threads[1].updatedAt == nil && threads[1].outcome == nil)
     }
 
+    @Test func durationsReadAtAGlance() {
+        #expect(spoken(0) == "0s" && spoken(12.9) == "12s" && spoken(63) == "1m 3s" && spoken(7500) == "2h 5m")
+        #expect(spoken(-3) == "0s")  // a server clock a little ahead
+    }
+
     @Test func pagesOfOneSiteAreOneStep() {
         let steps = ["Opening walmart.com", "Opening walmart.com", "Opening walmart.com", "Comparing prices", "Comparing prices",
                      "Opening target.com", "Opening walmart.com"]

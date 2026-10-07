@@ -110,9 +110,6 @@ struct ChatView: View {
                             if !chat.steps.isEmpty || chat.isWorking {
                                 StepsView(chat: chat)
                             }
-                            if let ask = chat.ask {
-                                AskCard(chat: chat, ask: ask).id(ask.id).transition(.arrive)
-                            }
                             if chat.canRetry {
                                 HStack(spacing: 8) {
                                     Button { Task { await chat.retry() } } label: {
@@ -170,7 +167,21 @@ struct ChatView: View {
                 .onChange(of: chat.ask?.id) { if atBottom { scrollToEnd(scroller) } else if chat.ask != nil { missed = true } }
                 .onChange(of: chat.preview?.text) { if atBottom { scroller.scrollTo("end", anchor: .bottom) } }
             }
-            Composer(chat: chat)
+            // What Monty asks takes the message box's place, as in T3 Code: the user answers where they type.
+            Group {
+                if let ask = chat.ask {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let notice = chat.notice { NoticeBar(notice: notice) { chat.notice = nil } }
+                        AskCard(chat: chat, ask: ask)
+                            .id(ask.id)
+                            .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    Composer(chat: chat).transition(.opacity)
+                }
+            }
+            .motion(.spring(response: 0.38, dampingFraction: 0.88), value: chat.ask?.id)
                 .frame(maxWidth: Metrics.readingWidth)
                 .padding(.horizontal, Metrics.gutter)
                 .padding(.bottom, 16)
@@ -328,6 +339,14 @@ struct StepsView: View {
     let chat: ChatModel
     @State private var expanded = false
 
+    /// After the run: how long it took, when the server says, and how many steps. "Worked for 1m 3s · 5 steps".
+    private var summary: String {
+        let count = chat.steps.count
+        let steps = "\(count) step\(count == 1 ? "" : "s")"
+        guard let started = chat.run?.started, let completed = chat.run?.completed else { return steps }
+        return "Worked for \(spoken(completed.timeIntervalSince(started))) · \(steps)"
+    }
+
     var body: some View {
         let steps = chat.steps
         let working = chat.isWorking
@@ -347,10 +366,18 @@ struct StepsView: View {
                 }
                 .frame(width: 16, height: 18, alignment: .leading)  // the same slot either way, so the text never moves
                 .accessibilityHidden(true)
-                Text(working ? (chat.activity ?? "Starting…") : "\(steps.count) step\(steps.count == 1 ? "" : "s")")
+                if working, let started = chat.run?.started {
+                    // As T3 Code: how long Monty has been at it, ticking, with the steps below.
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text("Working for \(spoken(context.date.timeIntervalSince(started)))").monospacedDigit()
+                    }
                     .lineLimit(1)
-                    .contentTransition(.opacity)
-                    .motion(.easeInOut(duration: 0.25), value: chat.activity)
+                } else {
+                    Text(working ? (chat.activity ?? "Starting…") : summary)
+                        .lineLimit(1)
+                        .contentTransition(.opacity)
+                        .motion(.easeInOut(duration: 0.25), value: chat.activity)
+                }
                 if working, steps.count > 3 {
                     Text(expanded ? "  ·  Show fewer" : "  ·  Show all \(steps.count)").foregroundStyle(Palette.actionText)
                 }
@@ -363,7 +390,7 @@ struct StepsView: View {
             // A button, so the keyboard reaches it too (with keyboard navigation on), not only the pointer.
             .wrappedInButton(enabled: expandable) { withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() } }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(working ? "Monty is working: \(chat.activity ?? "starting")" : "\(steps.count) step\(steps.count == 1 ? "" : "s") Monty took")
+            .accessibilityLabel(working ? "Monty is working: \(chat.activity ?? "starting")" : "\(summary), what Monty did")
             .accessibilityAddTraits(expandable ? .isButton : [])
             .accessibilityAction { if expandable { expanded.toggle() } }
             .accessibilityValue(expandable ? (expanded ? "Shown" : "Hidden") : "")
@@ -419,10 +446,18 @@ struct AskCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(AppModel.headline(for: ask.kind))
-                .font(.system(size: 13, weight: .semibold))
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityFocused($announced)
+            HStack(spacing: 8) {
+                Text(AppModel.headline(for: ask.kind))
+                    .font(.system(size: 13, weight: .semibold))
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityFocused($announced)
+                Spacer(minLength: 8)
+                // Stop stays at hand where Send was: the box at the bottom.
+                Button { Task { await chat.stop() } } label: { Label("Stop task", systemImage: "stop.fill").font(.system(size: 11)) }
+                    .buttonStyle(.monty(.ghost, small: true))
+                    .disabled(!chat.canStop)
+                    .help("Stop this task instead of answering (⌘.)")
+            }
             MarkdownView(text: ask.prompt)
             controls.padding(.top, 2)
             if let error = chat.answerError {
@@ -520,6 +555,10 @@ struct Composer: View {
                 NoticeBar(notice: notice) { chat.notice = nil }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+            if let queued = chat.queued {
+                QueuedMessage(text: queued, edit: chat.unqueue, remove: { chat.unqueue(); chat.draft = "" })
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             HStack(alignment: .bottom, spacing: 8) {
                 TextField("Message Monty", text: $chat.draft, prompt: Text(placeholder).foregroundStyle(Palette.onSurfaceVariant), axis: .vertical)
                     .labelsHidden()
@@ -530,7 +569,15 @@ struct Composer: View {
                     .lineLimit(prominent ? 3...10 : 1...10)
                     .focused($focused)
                     .padding(.vertical, 6)
-                    .onSubmit { if chat.canSend { Task { await chat.send() } } }
+                    .onSubmit {
+                        if chat.canSend { Task { await chat.send() } } else if chat.canQueue { chat.queue() }
+                    }
+                    // ↑ in an empty box brings back the last task, to change and send again (as T3 Code's history).
+                    .onKeyPress(.upArrow) {
+                        guard chat.draft.isEmpty, let last = chat.lastTask else { return .ignored }
+                        chat.draft = last
+                        return .handled
+                    }
                     .disabled(chat.ask != nil && chat.draft.isEmpty)  // text kept here stays reachable
                 if chat.isActive {
                     // While Monty works (or waits for an answer), Send is Stop, as in other chat apps.
@@ -573,6 +620,7 @@ struct Composer: View {
             .onTapGesture { focused = true }
         }
         .animation(.easeOut(duration: 0.2), value: chat.notice)
+        .animation(.easeOut(duration: 0.2), value: chat.queued)
         .animation(.easeOut(duration: 0.15), value: chat.isActive)
         .onAppear { if chat.ask == nil { focused = true } }
         .onReceive(NotificationCenter.default.publisher(for: .montyFocusMessage)) { _ in focused = true }
@@ -587,9 +635,40 @@ struct Composer: View {
             case .handoff: return "Monty is waiting for you to take over the browser"
             }
         }
-        if chat.isActive { return "Monty is on it. Stop it, or wait to send your next message." }
+        if chat.queued != nil { return "Your next message is queued. Stop the task, or wait." }
+        if chat.isActive { return "Monty is on it. Write your next message: ↩ queues it for when it's done." }
         if chat.threadId == nil { return "Ask Monty to do something on the web…" }
         return "Reply to Monty…"
+    }
+}
+
+/// The message the user queued while Monty works: it goes when the task is done; Edit takes it back to the box.
+struct QueuedMessage: View {
+    let text: String
+    let edit: () -> Void
+    let remove: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "clock.arrow.circlepath").accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Sends when Monty is done").font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.onSurfaceVariant)
+                Text(text).lineLimit(2).foregroundStyle(Palette.onSurface)
+            }
+            Spacer(minLength: 4)
+            Button("Edit", action: edit).buttonStyle(.monty(.ghost, small: true)).help("Back to the message box")
+            Button(action: remove) { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)) }
+                .buttonStyle(IconButtonStyle(size: 24))
+                .accessibilityLabel("Don't send")
+                .help("Don't send it")
+        }
+        .font(.system(size: 12))
+        .padding(.leading, 10)
+        .padding(.vertical, 6)
+        .padding(.trailing, 4)
+        .background(RoundedRectangle(cornerRadius: Metrics.radiusMedium).fill(Palette.containerHigh))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Queued message, sends when Monty is done: \(text)")
     }
 }
 

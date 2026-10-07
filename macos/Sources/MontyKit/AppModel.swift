@@ -95,6 +95,18 @@ public final class AppModel {
     public var renaming: ThreadSummary?
     /// Something the user did to a chat (rename, delete) didn't work: the window says so.
     public var actionError: String?
+    /// A chat the user deleted a moment ago. It is gone from the list at once, but stays on the server until the
+    /// moment passes, so they can undo it, as in T3 Code and Mail; then (or at sign-out, or quitting) it is deleted.
+    public private(set) var recentlyDeleted: ThreadSummary?
+    /// How long a deletion can be undone.
+    var undoWindow: Duration = .seconds(8)
+    private var pendingDelete: Task<Void, Never>?
+    /// Where the user has been, for Back and Forward (⌘[ and ⌘]), as in a browser.
+    private var backStack: [Route] = []
+    private var forwardStack: [Route] = []
+    private var travelling = false
+    /// Where the deleted chat was in the list, and whether it was open, to put it back as it was.
+    private var deletedFrom: (index: Int, wasOpen: Bool) = (0, false)
     /// Chats the user pinned to the top of the sidebar, in the order they pinned them. Kept on this Mac, through
     /// signing out: a preference, not something they wrote.
     public private(set) var pinned: [String] = [] {
@@ -259,6 +271,7 @@ public final class AppModel {
     }
 
     public func signOut() async {
+        await finishPendingDelete()  // while the session can still delete it
         // Signing out on purpose forgets what was kept for next time; a session that ends by itself keeps it.
         signOuts += 1
         if let id = user?.id {
@@ -293,6 +306,11 @@ public final class AppModel {
     /// Talk to another server (signed out of this one).
     public func useServer(_ url: URL) {
         guard url != client.baseURL else { return }
+        if let thread = recentlyDeleted {  // on the server it was deleted from, while signed in there
+            pendingDelete?.cancel()
+            let old = client
+            Task { try? await old.delete(thread: thread.id) }
+        }
         let telemetry = telemetry
         Task { await telemetry.shutdown() }
         reset()
@@ -349,6 +367,10 @@ public final class AppModel {
         deleting = nil
         renaming = nil
         actionError = nil
+        pendingDelete?.cancel()
+        recentlyDeleted = nil
+        backStack = []
+        forwardStack = []
         unseen = []
         pinned = []
         schedules = nil
@@ -395,6 +417,11 @@ public final class AppModel {
         if isTakingOver, route != self.route {
             chat?.live?.say("Finish signing in and choose I'm done, or Not now (⇧⌘T), to go elsewhere.")
             return
+        }
+        if route != self.route, !travelling {
+            backStack.append(self.route)
+            if backStack.count > 50 { backStack.removeFirst() }
+            forwardStack.removeAll()
         }
         libraryError = nil
         if case .chat(let id) = route, let chat, chat.threadId == id, id != nil {
@@ -451,6 +478,26 @@ public final class AppModel {
     public func setPinned(_ thread: ThreadSummary, _ pin: Bool) {
         pinned.removeAll { $0 == thread.id }
         if pin { pinned.append(thread.id) }
+    }
+
+    public var canGoBack: Bool { !backStack.isEmpty }
+    public var canGoForward: Bool { !forwardStack.isEmpty }
+
+    public func goBack() { travel(from: &backStack, to: &forwardStack) }
+    public func goForward() { travel(from: &forwardStack, to: &backStack) }
+
+    /// Opens the latest place in `from` that is still there (a chat deleted since is skipped), keeping where the user
+    /// is in `to`.
+    private func travel(from: inout [Route], to: inout [Route]) {
+        guard !isTakingOver else { return }
+        while let route = from.popLast() {
+            if case .chat(let id?) = route, !threads.contains(where: { $0.id == id }) { continue }
+            to.append(self.route)
+            travelling = true
+            open(route)
+            travelling = false
+            return
+        }
     }
 
     /// Reads the open page again: on coming back to the app, and from a page that couldn't load.
@@ -536,7 +583,8 @@ public final class AppModel {
             loadAgain = false
             let changes = localChanges
             do {
-                let fresh = try await client.threads()
+                // A chat deleted a moment ago stays off the list, though the server still has it.
+                let fresh = try await client.threads().filter { $0.id != recentlyDeleted?.id }
                 guard user != nil else { return }
                 if localChanges != changes { loadAgain = true; continue }  // changed here meanwhile: read again
                 offline = false
@@ -591,8 +639,9 @@ public final class AppModel {
                 unseen.insert(thread.id)
             }
         }
-        unseen.formIntersection(fresh.map(\.id))  // deleted elsewhere
-        let ids = Set(fresh.map(\.id))
+        // Deleted elsewhere; a chat deleted here a moment ago keeps its marks until it is gone for good (undo).
+        let ids = Set(fresh.map(\.id) + [recentlyDeleted?.id].compactMap { $0 })
+        unseen.formIntersection(ids)
         if pinned.contains(where: { !ids.contains($0) }) { pinned.removeAll { !ids.contains($0) } }
         if let user = persistedUser {
             defaults.set(fresh.filter { $0.status?.isActive == true }.map(\.id), forKey: "active.\(user)")
@@ -676,6 +725,50 @@ public final class AppModel {
             localChanges += 1
             threadsChanged?()
         }
+    }
+
+    /// Deletes the chat with a moment to undo it: off the list now, from the server once the moment passes. A chat
+    /// deleted before still waiting for its moment is deleted now.
+    public func deleteWithUndo(_ thread: ThreadSummary) {
+        if let previous = recentlyDeleted {
+            pendingDelete?.cancel()
+            Task { await delete(previous) }
+        }
+        let index = threads.firstIndex { $0.id == thread.id } ?? 0
+        deletedFrom = (index, chat?.threadId == thread.id)
+        threads.removeAll { $0.id == thread.id }
+        localChanges += 1
+        threadsChanged?()
+        if deletedFrom.wasOpen { open(.chat(nil)) }
+        recentlyDeleted = thread
+        let window = undoWindow
+        pendingDelete = Task { [weak self] in
+            try? await Task.sleep(for: window)
+            guard !Task.isCancelled, let self, self.recentlyDeleted?.id == thread.id else { return }
+            self.pendingDelete = nil  // this task: cancelling it now would cancel the delete's own request
+            await self.finishPendingDelete()
+        }
+    }
+
+    /// Puts the chat deleted a moment ago back where it was.
+    public func undoDelete() {
+        guard let thread = recentlyDeleted else { return }
+        pendingDelete?.cancel()
+        recentlyDeleted = nil
+        if !threads.contains(where: { $0.id == thread.id }) {
+            threads.insert(thread, at: min(deletedFrom.index, threads.count))
+            localChanges += 1
+            threadsChanged?()
+        }
+        if deletedFrom.wasOpen { open(.chat(thread.id)) }
+    }
+
+    /// Deletes the chat waiting for its moment now: before signing out or quitting.
+    public func finishPendingDelete() async {
+        guard let thread = recentlyDeleted else { return }
+        pendingDelete?.cancel()
+        recentlyDeleted = nil
+        await delete(thread)
     }
 
     /// Deletes the chat; if it is the one on screen, a new task takes its place.
