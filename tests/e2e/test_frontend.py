@@ -172,6 +172,7 @@ def test_auth_and_signup(frontend: tuple[Page, MockAPI]) -> None:
     page.click('#signin-button')
     expect(page.locator('#composer')).to_be_visible()
     assert ('POST', '/api/signup', {'email': 'pat@example.test', 'password': 'correct horse'}) in mock.calls
+    expect(page.locator('#enable-notifications')).to_be_hidden()  # this server sends no notifications
     page.click('#signout')
     expect(page.locator('#signin-form')).to_be_visible()
 
@@ -346,7 +347,6 @@ def test_notification_opt_in_and_signout(frontend: tuple[Page, MockAPI]) -> None
             getRegistration: async () => registration,
         }});
     """)
-    workspace(page, mock)
     page.route(
         '**/api/push/key',
         lambda route: route.fulfill(
@@ -354,6 +354,7 @@ def test_notification_opt_in_and_signout(frontend: tuple[Page, MockAPI]) -> None
             body='{"public_key":"AQID"}',
         ),
     )
+    workspace(page, mock)
     page.click('#enable-notifications')
     expect(page.locator('#enable-notifications')).to_have_text('Notifications are on')
     assert page.evaluate('window.registeredWorker') == '/sw.js'

@@ -22,6 +22,7 @@ const state = {
   browserClosed: false,  // the user closed the browser panel in this chat, so it does not open by itself again
   threadsShown: '',  // the chat list as last drawn, so an unchanged list is not redrawn under the user's focus
   signingUp: false,
+  pushKey: null,  // the server's web push key, or null when it sends no notifications
 };
 let page = new AbortController();
 let events = null;  // the open run's EventSource
@@ -683,16 +684,24 @@ function base64urlBytes(text) {
   return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 }
 
+async function showNotificationButton() {
+  // Only where notifications can work: this browser can show them and this server can send them.
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  const response = await fetch('/api/push/key', { credentials: 'same-origin' });  // not tied to the page on screen
+  state.pushKey = response.ok ? (await response.json()).public_key : null;
+  $('enable-notifications').hidden = !state.pushKey;
+  const registration = state.pushKey && await navigator.serviceWorker.getRegistration('/sw.js');
+  const subscription = registration && await registration.pushManager.getSubscription();
+  if (subscription && Notification.permission === 'granted') $('enable-notifications').textContent = 'Notifications are on';
+}
+
 async function enableNotifications() {
-  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
-    throw new Error('This browser cannot show notifications.');
+  if (await Notification.requestPermission() !== 'granted') {
+    throw new Error('Notifications are blocked for this site. Allow them in your browser settings, then try again.');
   }
-  const key = await api('/api/push/key');
-  if (!key.public_key) throw new Error('Notifications are not set up on this server.');
-  if (await Notification.requestPermission() !== 'granted') return;
   const registration = await navigator.serviceWorker.register('/sw.js');
   const subscription = await registration.pushManager.subscribe({
-    userVisibleOnly: true, applicationServerKey: base64urlBytes(key.public_key),
+    userVisibleOnly: true, applicationServerKey: base64urlBytes(state.pushKey),
   });
   await api('/api/push/subscriptions', { method: 'POST', body: subscription.toJSON() });
   $('enable-notifications').textContent = 'Notifications are on';
@@ -755,6 +764,7 @@ async function start() {
     return;
   }
   show('main');
+  report(showNotificationButton());
   await route();
 }
 
