@@ -25,6 +25,7 @@ const state = {
   threadsShown: '',  // the chat list as last drawn, so an unchanged list is not redrawn under the user's focus
   signingUp: false,
   pushKey: null,  // the server's web push key, or null when it sends no notifications
+  offlineNoticed: false,  // a background refresh has told the user they are offline, since the server last answered
 };
 let page = new AbortController();
 let events = null;  // the open run's EventSource
@@ -47,15 +48,20 @@ async function api(path, { method = 'GET', body } = {}) {
     init.body = JSON.stringify(body);
   }
   let response;
-  let data;
   try {
     response = await fetch(path, init);
-    data = (response.headers.get('Content-Type') || '').includes('application/json') ? await response.json() : null;
   } catch (error) {
-    if (error.name === 'AbortError') throw error;
-    const offline = new Error('Could not reach Monty. Check your connection, and try again.');  // not the browser's
-    offline.offline = true;
-    throw offline;
+    throw offlineError(error);
+  }
+  state.offlineNoticed = false;  // the server answered: a later loss of connection is news again
+  let data = null;
+  if ((response.headers.get('Content-Type') || '').includes('application/json')) {
+    try {
+      data = await response.json();
+    } catch (error) {
+      if (error.name !== 'SyntaxError') throw offlineError(error);  // the connection dropped mid-reply
+      if (response.ok) throw new Error('Monty sent a reply this page could not read. Please try again.');
+    }
   }
   if (response.status === 401 && !['/api/signin', '/api/me'].includes(path)) signedOut();
   if (!response.ok) {
@@ -64,6 +70,14 @@ async function api(path, { method = 'GET', body } = {}) {
     throw error;
   }
   return data;
+}
+
+function offlineError(error) {
+  // The browser's own words for a failed request ("Failed to fetch", ...) mean nothing to the user.
+  if (error.name === 'AbortError') return error;
+  const offline = new Error('Could not reach Monty. Check your connection, and try again.');
+  offline.offline = true;
+  return offline;
 }
 
 function problem(status, detail) {
@@ -85,8 +99,15 @@ function report(promise) {
 }
 
 function reportUnlessOffline(promise) {
-  // For refreshes nobody asked for: offline, the page already says it is reconnecting.
-  promise.catch((error) => { if (!error.offline) showError(error); });
+  // For refreshes nobody asked for, which retry by themselves: being offline is said once (until the server is
+  // reached again), not on every retry, so a dismissed notice stays dismissed.
+  promise.catch((error) => {
+    if (!error.offline) showError(error);
+    else if (!state.offlineNoticed) {
+      state.offlineNoticed = true;
+      showError(error);
+    }
+  });
 }
 
 function showNotice(text) {
@@ -176,13 +197,13 @@ $('signin-form').addEventListener('submit', async (event) => {
 $('signout').addEventListener('click', () => report(signOut()));
 
 async function signOut() {
-  signedOut();
   try {
-    await stopNotifications();
+    await stopNotifications();  // while still signed in: removing this browser's subscription needs the session
   } catch (error) {
     console.error(error);  // signing out matters more than the push subscription
   }
-  await api('/api/signout', { method: 'POST', body: {} });
+  await api('/api/signout', { method: 'POST', body: {} });  // first: a failed sign-out must not look like one
+  signedOut();
   location.hash = '';
   location.reload();
 }

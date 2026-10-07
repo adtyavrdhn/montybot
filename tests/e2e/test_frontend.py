@@ -795,13 +795,9 @@ def test_offline_at_start_says_so_instead_of_looking_signed_out(frontend: tuple[
     expect(page.locator('#signin-error')).to_have_text('Could not reach Monty. Check your connection, and try again.')
 
 
-def test_background_refreshes_stay_quiet_offline(frontend: tuple[Page, MockAPI]) -> None:
+def test_background_refreshes_report_bugs_even_though_offline_is_quiet(frontend: tuple[Page, MockAPI]) -> None:
     page, mock = frontend
     workspace(page, mock)
-    page.route('**/api/threads', lambda route: route.abort())
-    page.evaluate('reportUnlessOffline(loadThreads())')  # as the 15-second refresh does
-    page.wait_for_timeout(300)
-    expect(page.locator('#notice')).to_be_hidden()
     page.evaluate("reportUnlessOffline(Promise.reject(new TypeError('a bug, not the network')))")
     expect(page.locator('#notice-text')).to_have_text('a bug, not the network')  # only offline is quiet
 
@@ -818,3 +814,24 @@ def test_a_sign_in_the_browser_does_not_keep_is_explained(frontend: tuple[Page, 
     page.click('#signin-button')
     expect(page.locator('#signin-error')).to_contain_text('Allow cookies for this site, then sign in.')
     expect(page.locator('#signin-button')).to_have_text('Sign in')  # the account exists now: back to signing in
+
+
+def test_a_failed_sign_out_does_not_look_like_one(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    workspace(page, mock)
+    page.route('**/api/signout', lambda route: route.abort())
+    page.click('#signout')
+    expect(page.locator('#notice-text')).to_have_text('Could not reach Monty. Check your connection, and try again.')
+    expect(page.locator('#composer')).to_be_visible()  # still signed in, and it shows
+
+
+def test_being_offline_is_said_once_until_the_server_answers_again(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    workspace(page, mock)
+    page.route('**/api/threads', lambda route: route.abort())
+    page.evaluate('reportUnlessOffline(loadThreads())')
+    expect(page.locator('#notice-text')).to_have_text('Could not reach Monty. Check your connection, and try again.')
+    page.get_by_role('button', name='Dismiss').click()
+    page.evaluate('reportUnlessOffline(loadThreads())')  # the next retry, still offline
+    page.wait_for_timeout(300)
+    expect(page.locator('#notice')).to_be_hidden()
