@@ -28,7 +28,6 @@ montybot = "montybot.cli:main"
 [dependency-groups]
 dev = [
     "anyio>=4.4",
-    "e2b-desktop>=2.6.1",
     "pillow>=11",
     "playwright>=1.63",
     "pyright>=1.1.400",

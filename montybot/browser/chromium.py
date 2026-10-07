@@ -410,7 +410,12 @@ class ChromiumBackend:
     async def screenshot(self) -> Screenshot:
         chrome = self._require_open()
         try:
-            png = await chrome.page.screenshot(type='png')
+            try:
+                png = await chrome.page.screenshot(type='png')
+            except PlaywrightError:
+                # A just-opened visible window may not have drawn its first frame yet.
+                await asyncio.sleep(0.5)
+                png = await chrome.page.screenshot(type='png')
             width, height = cast(tuple[int, int], await self._evaluate(_VIEWPORT))
         except PlaywrightError as error:
             raise ActionFailed(f'could not take a screenshot: {_first_line(error)}') from error
