@@ -111,6 +111,9 @@ Decisions from review:
   opening it clears its notification; each chat has at most one notification, its latest news.
 - The sidebar is laid out as Codex's: the window's buttons alone at the top, New task as the first row, the chats,
   and the library pinned at the bottom. Hovering a chat shows a button to delete it.
+- ⌘K opens a command palette (chats and actions, as T3 Code's); ⌘1…⌘9 go to the chats in the sidebar's order (the
+  Go to Chat menu lists them), ⇧⌘1…4 to the library. A chat that needs you says what, in a word: Question, Approval
+  or Browser. Chats can be marked unread.
 - Reading further up a chat, it stays put while Monty writes, with a button back to the latest. Monty's browser
   beside the chat widens a narrow window to fit (or fills the window on a small screen) rather than squeeze both.
 - Monty's steps stay under its reply, folded; approvals and takeovers stay in the chat as one quiet line each.

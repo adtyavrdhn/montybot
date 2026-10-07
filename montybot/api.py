@@ -229,12 +229,14 @@ async def add_message(request: Request, user: User) -> Response:
 async def list_threads(request: Request, user: User) -> Response:
     """Each thread with the status of its unfinished run, if it has one: `running`, `waiting` (for the user) or
     `queued`; and otherwise how its latest run ended (`outcome`: `done`, `failed` or `stopped`); and when it last had
-    something happen (`updated_at`, ISO 8601), which is also the order of the list."""
+    something happen (`updated_at`, ISO 8601), which is also the order of the list; and for a waiting thread, what
+    it waits for (`waiting_for`: `question`, `approval` or `handoff`)."""
     async with resources_of(request).pool.connection() as connection:
         threads = await store.list_threads(connection, user.id)
         active = await store.active_runs(connection, user.id)
         outcomes = await store.latest_outcomes(connection, user.id)
         last_active = await store.last_active(connection, user.id)
+        waiting = await store.waiting_for(connection, user.id)
     return JSONResponse(
         [
             {
@@ -243,6 +245,7 @@ async def list_threads(request: Request, user: User) -> Response:
                 'status': active.get(t.id),
                 'outcome': outcomes.get(t.id),
                 'updated_at': at.isoformat() if (at := last_active.get(t.id)) else None,
+                'waiting_for': waiting.get(t.id) if active.get(t.id) == 'waiting' else None,
             }
             for t in threads
         ]

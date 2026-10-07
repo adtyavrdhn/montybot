@@ -182,6 +182,12 @@ import Testing
         #expect(threads[1].updatedAt == nil && threads[1].outcome == nil)
     }
 
+    @Test func whatAWaitingChatWaitsFor() throws {
+        let json = #"[{"id": "a", "title": "Eggs", "status": "waiting", "waiting_for": "approval"}, {"id": "b", "title": "Hi", "status": "waiting", "waiting_for": "something-new"}]"#
+        let threads = try JSONDecoder().decode([ThreadSummary].self, from: Data(json.utf8))
+        #expect(threads.map(\.waitingFor) == [.approval, nil])  // a kind not known yet is left unsaid, not an error
+    }
+
     @Test func durationsReadAtAGlance() {
         #expect(spoken(0) == "0s" && spoken(12.9) == "12s" && spoken(63) == "1m 3s" && spoken(7500) == "2h 5m")
         #expect(spoken(-3) == "0s")  // a server clock a little ahead

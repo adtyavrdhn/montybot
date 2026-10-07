@@ -26,18 +26,25 @@ public struct ThreadSummary: Codable, Equatable, Identifiable, Sendable {
     public let outcome: RunStatus?
     /// When something last happened in the chat (its latest task started); older servers don't say.
     public let updatedAt: Date?
+    /// What a waiting chat waits for: a question, an approval or a sign-in; older servers don't say.
+    public let waitingFor: AskKind?
 
     enum CodingKeys: String, CodingKey {
         case id, title, status, outcome
         case updatedAt = "updated_at"
+        case waitingFor = "waiting_for"
     }
 
-    public init(id: String, title: String, status: RunStatus? = nil, outcome: RunStatus? = nil, updatedAt: Date? = nil) {
+    public init(
+        id: String, title: String, status: RunStatus? = nil, outcome: RunStatus? = nil, updatedAt: Date? = nil,
+        waitingFor: AskKind? = nil
+    ) {
         self.id = id
         self.title = title
         self.status = status
         self.outcome = outcome
         self.updatedAt = updatedAt
+        self.waitingFor = waitingFor
     }
 
     public init(from decoder: Decoder) throws {
@@ -47,6 +54,7 @@ public struct ThreadSummary: Codable, Equatable, Identifiable, Sendable {
         status = try container.decodeIfPresent(RunStatus.self, forKey: .status)
         outcome = try container.decodeIfPresent(RunStatus.self, forKey: .outcome)
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt).flatMap(Self.date)
+        waitingFor = try? container.decodeIfPresent(AskKind.self, forKey: .waitingFor)  // a kind not known yet: unsaid
     }
 
     /// Python's `isoformat()`: "2026-10-07T15:58:18.123456+00:00", the fraction only when there is one.
@@ -57,8 +65,11 @@ public struct ThreadSummary: Codable, Equatable, Identifiable, Sendable {
     }
 
     /// The same chat with another status, outcome or title, keeping when it was last active.
-    func with(title: String? = nil, status: RunStatus?, outcome: RunStatus?) -> ThreadSummary {
-        ThreadSummary(id: id, title: title ?? self.title, status: status, outcome: outcome, updatedAt: updatedAt)
+    func with(title: String? = nil, status: RunStatus?, outcome: RunStatus?, waitingFor: AskKind? = nil) -> ThreadSummary {
+        ThreadSummary(
+            id: id, title: title ?? self.title, status: status, outcome: outcome, updatedAt: updatedAt,
+            waitingFor: status == .waiting ? waitingFor ?? self.waitingFor : nil
+        )
     }
 }
 

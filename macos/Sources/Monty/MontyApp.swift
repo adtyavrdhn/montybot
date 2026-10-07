@@ -281,18 +281,29 @@ struct MontyCommands: Commands {
                 .keyboardShortcut("]")
                 .disabled(!app.canGoForward || app.isTakingOver)
             Divider()
-            Button("Find Chats") { show(app.route); NotificationCenter.default.post(name: .montyFindChats, object: nil) }
+            Button("Find Chats") { openWindow(id: "main"); NotificationCenter.default.post(name: .montyFindChats, object: nil) }
                 .keyboardShortcut("f")
                 .disabled(app.user == nil || app.isTakingOver)
             Button("Message Box") { NotificationCenter.default.post(name: .montyFocusMessage, object: nil) }
                 .keyboardShortcut("l")
                 .disabled(app.user == nil || app.isTakingOver || app.chat == nil)
             Divider()
+            Button("Command Palette…") { openWindow(id: "main"); NotificationCenter.default.post(name: .montyCommandPalette, object: nil) }
+                .keyboardShortcut("k")
+                .disabled(app.user == nil || app.isTakingOver)
+            // ⌘1…⌘9: the chats in the sidebar's order, as T3 Code's threads; their titles say which is which.
+            Menu("Go to Chat") {
+                ForEach(Array(app.sidebarOrder.prefix(9).enumerated()), id: \.element.id) { index, thread in
+                    Button(thread.title.readableTitle) { show(.chat(thread.id)) }
+                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")))
+                }
+            }
+            .disabled(app.user == nil || app.isTakingOver || app.threads.isEmpty)
             Group {
-                Button("Schedules") { show(.schedules) }.keyboardShortcut("1")
-                Button("Files") { show(.files) }.keyboardShortcut("2")
-                Button("Saved Sign-ins") { show(.signIns) }.keyboardShortcut("3")
-                Button("Memory") { show(.memory) }.keyboardShortcut("4")
+                Button("Schedules") { show(.schedules) }.keyboardShortcut("1", modifiers: [.command, .shift])
+                Button("Files") { show(.files) }.keyboardShortcut("2", modifiers: [.command, .shift])
+                Button("Saved Sign-ins") { show(.signIns) }.keyboardShortcut("3", modifiers: [.command, .shift])
+                Button("Memory") { show(.memory) }.keyboardShortcut("4", modifiers: [.command, .shift])
             }
             .disabled(app.user == nil || app.isTakingOver)
             Divider()

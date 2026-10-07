@@ -732,6 +732,26 @@ struct JourneyTests {
         #expect(app.route != .chat(b))  // gone: skipped
     }
 
+    @Test func theChatListSaysWhatAChatWaitsFor() async throws {
+        let app = try await person()
+        let chat = try await say("Tell me when a delivery slot opens at \(try site("slots"))", in: app)
+        let id = try #require(chat.threadId)
+        try await eventually("the approval") { chat.ask?.kind == .approval }
+        #expect(app.threads.first { $0.id == id }?.waitingFor == .approval)  // at once, from the open chat
+        await app.loadThreads()
+        #expect(app.threads.first { $0.id == id }?.waitingFor == .approval)  // and as the server says
+        await chat.answer(.approve())
+        try await eventually("the reply") { chat.run?.status == .done }
+        await app.loadThreads()
+        let done = try #require(app.threads.first { $0.id == id })
+        #expect(done.waitingFor == nil)
+
+        app.markUnread(done)
+        #expect(app.unseen.contains(id))
+        app.markSeen(done)
+        #expect(!app.unseen.contains(id))
+    }
+
     @Test func signingInWithVoiceOverThroughTheOutline() async throws {
         let app = try await person()
         let chat = try await say("Order eggs from \(try site("shop"))", in: app)
