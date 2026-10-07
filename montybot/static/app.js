@@ -53,14 +53,19 @@ async function api(path, { method = 'GET', body } = {}) {
   } catch (error) {
     throw offlineError(error);
   }
-  state.offlineNoticed = false;  // the server answered: a later loss of connection is news again
+  // A proxy in front of a server that is down or restarting answers for it: that is not reaching Monty either.
+  if ([502, 503, 504].includes(response.status)) throw offlineError(new Error('gateway'));
+  if (state.offlineNoticed) {  // the server answers again: take back the offline notice, and say it again next time
+    state.offlineNoticed = false;
+    if ($('notice-text').textContent === offlineError(new Error()).message) hideNotice();
+  }
   let data = null;
   if ((response.headers.get('Content-Type') || '').includes('application/json')) {
     try {
       data = await response.json();
     } catch (error) {
       if (error.name !== 'SyntaxError') throw offlineError(error);  // the connection dropped mid-reply
-      if (response.ok) throw new Error('Monty sent a reply this page could not read. Please try again.');
+      if (response.ok) throw new Error('Monty sent a reply this page could not read. Reload to see where things stand.');
     }
   }
   if (response.status === 401 && !['/api/signin', '/api/me'].includes(path)) signedOut();
@@ -202,6 +207,7 @@ async function signOut() {
   } catch (error) {
     console.error(error);  // signing out matters more than the push subscription
   }
+  $('notifications-label').textContent = 'Notify me when Monty needs me';  // this browser's subscription is gone
   await api('/api/signout', { method: 'POST', body: {} });  // first: a failed sign-out must not look like one
   signedOut();
   location.hash = '';
@@ -746,7 +752,14 @@ async function downloadFile(path) {
       'File unavailable. Refresh and try again.';
     return;
   }
-  const url = URL.createObjectURL(await response.blob());
+  let blob;
+  try {
+    blob = await response.blob();
+  } catch (error) {
+    if (error.name !== 'AbortError') $('files-status').textContent = 'Download failed. Try again.';  // dropped mid-file
+    return;
+  }
+  const url = URL.createObjectURL(blob);
   const link = element('a');
   link.href = url;
   const disposition = response.headers.get('Content-Disposition') || '';
