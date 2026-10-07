@@ -4,6 +4,9 @@
 // It aborts `page`, whose signal every read (`api()` GET) uses, and closes the run's event stream and the browser
 // screenshots, so an old chat can never draw over a new one. The user's own actions (sending, answering,
 // stopping) are not tied to it: they always finish.
+//
+// Telemetry: `telemetry` records the user's actions, and does nothing unless the server sends telemetry to Logfire.
+// Once signed in, `startTelemetry()` asks the server, and only then loads `telemetry.js`, which says what is sent.
 'use strict';
 
 const $ = (id) => document.getElementById(id);
@@ -26,6 +29,8 @@ const state = {
   signingUp: false,
   pushKey: null,  // the server's web push key, or null when it sends no notifications
   offlineNoticed: false,  // a background refresh has told the user they are offline, since the server last answered
+  takeoverEnd: null,  // ends the open live view's span
+  takeoverClosedBy: null,  // why the app closed the live view, for that span
 };
 let page = new AbortController();
 let events = null;  // the open run's EventSource
@@ -36,8 +41,55 @@ function newPage() {
   page = new AbortController();
   closeEvents();
   stopWatching();
-  closeTakeover();
+  closeTakeover('left the chat');
   hideNotice();
+}
+
+// --- telemetry ---
+
+const NO_TELEMETRY = {
+  span: async (name, attributes, action) => action(() => {}),  // traces `action(note)`; returns what it does
+  begin: () => () => {},  // starts a span; returns what ends it
+  log: () => {},
+  error: () => {},
+};
+const telemetry = { ...NO_TELEMETRY };
+let telemetryRun = null;  // once started: the started telemetry's stop function, or null when it is off
+let telemetryUser = null;  // whose telemetry is running
+let telemetryStopping = Promise.resolve();
+
+function startTelemetry(userId) {
+  // In the background, and never failing: the app works the same without it. It keeps running when a session ends
+  // (its last export would be refused, and the SDK cannot start again after that), and starts again for another user.
+  if (telemetryRun && telemetryUser === userId) return telemetryRun;
+  if (telemetryRun) stopTelemetry();  // signed in again, as someone else: the new session sends what is left
+  telemetryUser = userId;
+  telemetryRun = telemetryStopping.then(async () => {
+    const response = await fetch('/api/telemetry', { credentials: 'same-origin' });
+    const settings = response.ok ? await response.json() : null;
+    if (!settings || !settings.enabled) return null;
+    const module = await import('/static/telemetry.js');
+    const stop = module.start(settings, { id: userId });
+    Object.assign(telemetry, module.facade);
+    return stop;
+  }).catch((error) => {
+    console.warn('Telemetry is off:', error);
+    return null;
+  });
+  return telemetryRun;
+}
+
+function stopTelemetry() {
+  // Sends what is left. Resolves once done; never fails.
+  const run = telemetryRun;
+  telemetryRun = null;
+  telemetryUser = null;
+  if (!run) return telemetryStopping;
+  telemetryStopping = run.then(async (stop) => {
+    Object.assign(telemetry, NO_TELEMETRY);
+    if (stop) await stop();
+  }).catch((error) => console.warn('Telemetry did not stop cleanly:', error));
+  return telemetryStopping;
 }
 
 async function api(path, { method = 'GET', body } = {}) {
@@ -57,6 +109,7 @@ async function api(path, { method = 'GET', body } = {}) {
   if ([502, 503, 504].includes(response.status)) throw offlineError(new Error('gateway'));
   if (state.offlineNoticed) {  // the server answers again: take back the offline notice, and say it again next time
     state.offlineNoticed = false;
+    telemetry.log('back online');
     if ($('notice-text').textContent === offlineError(new Error()).message) hideNotice();
   }
   let data = null;
@@ -95,6 +148,7 @@ function problem(status, detail) {
 function showError(error) {
   if (error.name === 'AbortError') return;  // a request of a page the user has left
   console.error(error);
+  telemetry.error(error);
   showNotice(error.message);
 }
 
@@ -110,6 +164,7 @@ function reportUnlessOffline(promise) {
     if (!error.offline) showError(error);
     else if (!state.offlineNoticed) {
       state.offlineNoticed = true;
+      telemetry.log('offline notice', {}, 'warning');
       showError(error);
     }
   });
@@ -175,6 +230,8 @@ $('signin-form').addEventListener('submit', async (event) => {
   $('signin-error').textContent = '';
   $('signin-button').disabled = true;
   $('signup-button').disabled = true;
+  const signedIn = state.signingUp ? 'signed up' : 'signed in';
+  const began = performance.now();
   try {
     await api(state.signingUp ? '/api/signup' : '/api/signin', {
       method: 'POST', body: { email: $('email').value, password: $('password').value },
@@ -186,12 +243,16 @@ $('signin-form').addEventListener('submit', async (event) => {
     $('signin-button').disabled = false;
     $('signup-button').disabled = false;
   }
+  const took = performance.now() - began;
   try {
     $('password').value = '';  // not left filled in for whoever sees the sign-in screen next
     await start();
   } catch (error) {
     showError(error);  // signed in, but the first chat or list did not load: a notice on the page that opened
     return;
+  } finally {
+    // Telemetry starts once signed in, so signing in is recorded afterwards. No email, and never the password.
+    if (telemetryRun) telemetryRun.then(() => telemetry.log(signedIn, { duration_ms: Math.round(took) }));
   }
   if (!$('signin').hidden && !$('signin-error').textContent) {
     // Signed in, yet still signed out: the browser did not keep the session cookie. The account exists now either way.
@@ -203,13 +264,23 @@ $('signin-form').addEventListener('submit', async (event) => {
 $('signout').addEventListener('click', () => report(signOut()));
 
 async function signOut() {
+  await telemetry.span('sign out', {}, async () => {
+    try {
+      await stopNotifications();  // while still signed in: removing this browser's subscription needs the session
+    } catch (error) {
+      console.error(error);  // signing out matters more than the push subscription
+    }
+    $('notifications-label').textContent = 'Notify me when Monty needs me';  // this browser's subscription is gone
+  });
+  // What telemetry has left goes while the session still lets it, unless that takes long.
+  const userId = telemetryUser;
+  await Promise.race([stopTelemetry(), new Promise((resolve) => setTimeout(resolve, 2000))]);
   try {
-    await stopNotifications();  // while still signed in: removing this browser's subscription needs the session
+    await api('/api/signout', { method: 'POST', body: {} });  // first: a failed sign-out must not look like one
   } catch (error) {
-    console.error(error);  // signing out matters more than the push subscription
+    if (userId) startTelemetry(userId);  // still signed in
+    throw error;
   }
-  $('notifications-label').textContent = 'Notify me when Monty needs me';  // this browser's subscription is gone
-  await api('/api/signout', { method: 'POST', body: {} });  // first: a failed sign-out must not look like one
   signedOut();
   location.hash = '';
   location.reload();
@@ -217,9 +288,10 @@ async function signOut() {
 
 // --- the chat list ---
 
-async function loadThreads() {
+async function loadThreads({ refresh = false } = {}) {
+  // `refresh`: the background refresh, which telemetry leaves out (`telemetry.js`): it is polling, not the user.
   const load = ++state.threadLoads;
-  const threads = await api('/api/threads');
+  const threads = await api(refresh ? '/api/threads?refresh' : '/api/threads');
   if (load !== state.threadLoads) return;  // a later load is drawing the list
   // The open chat catches up when the list knows better: a run started elsewhere (a schedule, another tab), or
   // finished while the chat's event stream was down for good (an HTTP error closes it; only a reload reopens it).
@@ -256,7 +328,7 @@ async function loadThreads() {
 
 setInterval(() => {
   // Another chat may start needing the user at any time.
-  if (!$('main').hidden && document.visibilityState === 'visible') reportUnlessOffline(loadThreads());
+  if (!$('main').hidden && document.visibilityState === 'visible') reportUnlessOffline(loadThreads({ refresh: true }));
 }, 15000);
 
 // --- the drawer, on small screens ---
@@ -304,7 +376,11 @@ document.addEventListener('keydown', (event) => {
   }
 });
 syncDrawer();
-$('new-chat').addEventListener('click', () => { location.hash = '#/new'; closeDrawer(); });
+$('new-chat').addEventListener('click', () => {
+  telemetry.log('new chat');
+  location.hash = '#/new';
+  closeDrawer();
+});
 
 // --- a chat ---
 
@@ -437,8 +513,11 @@ function follow(run) {
   source.runId = run.id;
   events = source;
   const live = () => events === source;  // events may still arrive after it closed
+  const ids = { run_id: run.id, thread_id: state.threadId };
   source.onopen = () => {
     if (!live()) return;
+    telemetry.log(source.opened ? 'run events reconnected' : 'run events opened', { ...ids, after_lost: state.draftLost });
+    source.opened = true;
     state.draftLost = false;
     renderStatus();
     renderDraft();
@@ -455,9 +534,16 @@ function follow(run) {
     if (!live()) return;
     const status = JSON.parse(event.data);
     if (status.id !== run.id || status.thread_id !== state.threadId) return;
+    const before = state.run;
+    if (!before || before.status !== status.status || (before.ask && before.ask.id) !== (status.ask && status.ask.id)) {
+      telemetry.log('run status', {
+        ...ids, status: status.status, previous_status: before && before.status, ask_id: status.ask && status.ask.id,
+      });
+    }
     renderRun(status);
     report(loadThreads());
     if (!ACTIVE.includes(status.status)) {
+      telemetry.log('run events ended', { ...ids, status: status.status });
       closeEvents();  // and the draft: the saved reply replaces it
       report(loadChat());
     }
@@ -471,6 +557,7 @@ function follow(run) {
     source.lostTimer = setTimeout(() => {
       source.lostTimer = null;
       if (!live() || source.readyState === EventSource.OPEN) return;
+      telemetry.log('run events lost', ids, 'warning');
       state.draftLost = true;
       renderStatus();
       renderDraft();
@@ -494,8 +581,12 @@ $('stop').addEventListener('click', () => {
   if (!run) return;
   $('stop').disabled = true;
   const before = page;
-  report(api(`/api/runs/${run.id}/stop`, { method: 'POST', body: {} })
-    .catch((error) => { if (error.status !== 409) throw error; })  // it finished meanwhile
+  report(telemetry.span('stop run', { run_id: run.id, thread_id: state.threadId }, (note) => (
+    api(`/api/runs/${run.id}/stop`, { method: 'POST', body: {} })
+      .catch((error) => {
+        if (error.status !== 409) throw error;
+        note({ outcome: 'finished already' });  // it finished meanwhile
+      })))
     .then(() => { if (page === before) return Promise.all([loadChat(), loadThreads()]); })
     .finally(() => { $('stop').disabled = false; }));
 });
@@ -504,7 +595,7 @@ $('stop').addEventListener('click', () => {
 
 function renderAsk(ask) {
   const box = $('ask');
-  if (!ask || ask.id !== state.takeoverAskId) closeTakeover();  // that hand-off is over
+  if (!ask || ask.id !== state.takeoverAskId) closeTakeover('hand-off over');  // that hand-off is over
   if (ask === null) {
     box.hidden = true;
     box.dataset.id = '';
@@ -513,6 +604,7 @@ function renderAsk(ask) {
   if (box.dataset.id === ask.id) return;  // already shown: keep what the user is typing
   box.dataset.id = ask.id;
   box.hidden = false;
+  telemetry.log('ask shown', { ...askIds(ask), prompt: ask.prompt });
   const row = element('div', '', 'row');
   if (ask.kind === 'question') {
     const input = element('textarea');
@@ -535,12 +627,18 @@ function renderAsk(ask) {
   box.replaceChildren(element('p', ask.prompt), row);  // the server's push tells the user if they are away
 }
 
+function askIds(ask) {
+  return { ask_id: ask.id, ask_kind: ask.kind, run_id: state.run && state.run.id, thread_id: state.threadId };
+}
+
 async function answer(ask, body) {
   const before = page;
   const buttons = [...$('ask').querySelectorAll('button')];
   for (const each of buttons) each.disabled = true;  // Approve and Deny together: one answer only
+  const name = ask.kind !== 'approval' ? 'answer question' : body.approved ? 'approve' : 'deny';
   try {
-    await api(`/api/asks/${ask.id}`, { method: 'POST', body });
+    await telemetry.span(name, { ...askIds(ask), answer: body.text, reason: body.reason }, () => (
+      api(`/api/asks/${ask.id}`, { method: 'POST', body })));
   } catch (error) {
     for (const each of buttons) each.disabled = false;
     if (error.status !== 409) throw error;  // 409: answered already, or the run moved on; the reload shows it
@@ -554,33 +652,47 @@ async function answer(ask, body) {
 }
 
 async function takeOver(ask) {
-  const before = page;
-  let link;
-  try {
-    link = await api(`/api/runs/${state.run.id}/live`, { method: 'POST', body: {} });
-  } catch (error) {
-    if (error.status !== 404) throw error;
-    if (page === before) await loadChat();  // the hand-off ended meanwhile: show where the run is now
-    return;
-  }
-  if (page !== before || !state.run || !state.run.ask || state.run.ask.id !== ask.id) return;  // left, or it ended
-  state.takeoverAskId = ask.id;
-  $('live').src = link.url;
-  // A modal dialog: the page behind cannot be reached. The live view's own "Back to chat" closes it.
-  $('takeover').showModal();
-  $('live').focus();
+  // The live view's link names the hand-off: it is never recorded.
+  const ids = askIds(ask);
+  await telemetry.span('take over the browser', ids, async (note) => {
+    const before = page;
+    let link;
+    try {
+      link = await api(`/api/runs/${state.run.id}/live`, { method: 'POST', body: {} });
+    } catch (error) {
+      if (error.status !== 404) throw error;
+      note({ outcome: 'hand-off over' });
+      if (page === before) await loadChat();  // the hand-off ended meanwhile: show where the run is now
+      return;
+    }
+    if (page !== before || !state.run || !state.run.ask || state.run.ask.id !== ask.id) {  // left, or it ended
+      note({ outcome: 'moved on' });
+      return;
+    }
+    state.takeoverAskId = ask.id;
+    $('live').src = link.url;
+    // A modal dialog: the page behind cannot be reached. The live view's own "Back to chat" closes it.
+    $('takeover').showModal();
+    state.takeoverEnd = telemetry.begin('live view open', ids);
+    $('live').focus();
+  });
 }
 
-function closeTakeover() {
+function closeTakeover(reason) {
   // The hand-off goes on until the user gives the browser back; "Take over" opens it again.
-  if ($('takeover').open) $('takeover').close();
+  if (!$('takeover').open) return;
+  state.takeoverClosedBy = reason;
+  $('takeover').close();
 }
 window.addEventListener('message', (event) => {
   // The live view's own "Back to chat" button.
   if (event.source !== $('live').contentWindow || event.origin !== location.origin) return;
-  if (event.data && event.data.kind === 'close-takeover') closeTakeover();
+  if (event.data && event.data.kind === 'close-takeover') closeTakeover('back to chat');
 });
 $('takeover').addEventListener('close', () => {  // also after Escape
+  if (state.takeoverEnd) state.takeoverEnd({ closed_by: state.takeoverClosedBy || 'escape' });
+  state.takeoverEnd = null;
+  state.takeoverClosedBy = null;
   state.takeoverAskId = null;
   $('live').src = 'about:blank';
   const takeOverAgain = $('ask').hidden ? null : $('ask').querySelector('button');
@@ -665,7 +777,13 @@ $('composer').addEventListener('submit', (event) => {
   report(send(text).catch((error) => { $('send').disabled = false; throw error; }));
 });
 
-async function send(text) {
+function send(text) {
+  const threadId = state.threadId;
+  return telemetry.span('send message', { thread_id: threadId, new_chat: threadId === null, text }, (note) => (
+    sendMessage(text, note)));
+}
+
+async function sendMessage(text, note) {
   const before = page;
   const threadId = state.threadId;
   const path = threadId === null ? '/api/threads' : `/api/threads/${threadId}/messages`;
@@ -682,6 +800,7 @@ async function send(text) {
     await new Promise((resolve) => window.addEventListener('hashchange', resolve, { once: true }));
     throw new Error('That chat was deleted. Send your message again to start a new chat.');
   }
+  note({ thread_id: created.thread_id, run_id: created.run_id });
   if ($('message').value.trim() === text) $('message').value = '';
   if (page !== before) {
     await loadThreads();  // the user went elsewhere: the chat is in the list
@@ -717,7 +836,9 @@ async function openFiles() {
     (data.files.length ? '' : 'No files yet. Ask Monty to download or make a file.');
   $('file-list').replaceChildren(...data.files.map((file) => {
     const tooLarge = file.size > data.max_download_bytes;
-    const download = button('Download', 'secondary', () => downloadFile(file.path));
+    // Traced by size only: file names stay out of telemetry.
+    const download = button('Download', 'secondary', () => (
+      telemetry.span('download file', { size: file.size }, (note) => downloadFile(file.path, note))));
     download.disabled = tooLarge;
     if (tooLarge) download.title = 'Over the 20 MB download limit';
     const item = element('li');
@@ -736,7 +857,7 @@ function shownSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-async function downloadFile(path) {
+async function downloadFile(path, note = () => {}) {
   let response;
   try {
     response = await fetch('/api/files/download', {
@@ -747,6 +868,7 @@ async function downloadFile(path) {
     if (error.name !== 'AbortError') $('files-status').textContent = 'Download failed. Try again.';
     return;
   }
+  note({ 'http.response.status_code': response.status });
   if (response.status === 401) { signedOut(); return; }
   if (!response.ok) {
     $('files-status').textContent = response.status === 413 ? 'This file is over the 20 MB download limit.' :
@@ -760,6 +882,7 @@ async function downloadFile(path) {
     if (error.name !== 'AbortError') $('files-status').textContent = 'Download failed. Try again.';  // dropped mid-file
     return;
   }
+  note({ bytes: blob.size });
   const url = URL.createObjectURL(blob);
   const link = element('a');
   link.href = url;
@@ -781,7 +904,8 @@ async function openSignins() {
   $('signin-list').replaceChildren(...(sites.length ? sites.map((s) => {
     const item = element('li');
     item.append(element('span', s.site), button('Forget', 'secondary', async () => {
-      await api(`/api/sign-ins/${encodeURIComponent(s.site)}`, { method: 'DELETE' });
+      await telemetry.span('forget saved browser data', { site: s.site }, () => (
+        api(`/api/sign-ins/${encodeURIComponent(s.site)}`, { method: 'DELETE' })));
       await openSignins();
     }));
     return item;
@@ -798,12 +922,15 @@ async function openSchedules() {
     actions.append(
       button('Open chat', 'secondary', () => { location.hash = `#/t/${s.thread_id}`; }),
       button(s.paused ? 'Resume' : 'Pause', 'secondary', async () => {
-        await api(`/api/schedules/${s.id}/${s.paused ? 'resume' : 'pause'}`, { method: 'POST', body: {} });
+        const action = s.paused ? 'resume' : 'pause';
+        await telemetry.span(`${action} schedule`, { schedule_id: s.id, thread_id: s.thread_id }, () => (
+          api(`/api/schedules/${s.id}/${action}`, { method: 'POST', body: {} })));
         await openSchedules();
       }),
       button('Delete', 'bad', async () => {
         if (!confirm(`Delete "${s.name}"? Monty will stop running it.`)) return;
-        await api(`/api/schedules/${s.id}`, { method: 'DELETE' });
+        await telemetry.span('delete schedule', { schedule_id: s.id, thread_id: s.thread_id }, () => (
+          api(`/api/schedules/${s.id}`, { method: 'DELETE' })));
         await Promise.all([openSchedules(), loadThreads()]);  // its chat goes too if it never ran
       }),
     );
@@ -848,8 +975,11 @@ async function showNotificationButton() {
   }
 }
 
-async function enableNotifications() {
-  if (await Notification.requestPermission() !== 'granted') {
+async function enableNotifications(note) {
+  // Traced by the browser's answer only: the subscription's address and keys stay out of telemetry.
+  const permission = await Notification.requestPermission();
+  note({ permission });
+  if (permission !== 'granted') {
     throw new Error('Notifications are blocked for this site. Allow them in your browser settings, then try again.');
   }
   const registration = await navigator.serviceWorker.register('/sw.js');
@@ -873,7 +1003,8 @@ async function stopNotifications() {
   }
 }
 
-$('enable-notifications').addEventListener('click', () => report(enableNotifications()));
+$('enable-notifications').addEventListener('click', () => (
+  report(telemetry.span('enable notifications', {}, enableNotifications))));
 
 // --- routing ---
 
@@ -904,13 +1035,15 @@ async function route() {
 }
 
 async function start() {
+  let me;
   try {
-    await api('/api/me');
+    me = await api('/api/me');
   } catch (error) {
     if (error.status !== 401) $('signin-error').textContent = error.message;  // offline, not signed out
     show('signin');
     return;
   }
+  startTelemetry(me && me.id);  // in the background: nothing waits for it
   show('main');
   showNotificationButton().catch(console.error);  // optional: the button simply stays hidden
   await route();
