@@ -2,7 +2,7 @@
 
 Never, whatever the settings: sign-in passwords, the account password, session cookies and hand-off ids.
 Content (messages, replies, the agent's code, pages, exception messages) only with `logfire_include_content`.
-Always: span names, run ids, route templates and the deploy's commit.
+Always: span names, run ids and the deploy's commit. HTTP server requests are not traced.
 
 The app runs in this process (on a thread) with the observability setup `montybot serve` uses, plus an in-memory
 exporter, through a sign-in hand-off and an approved order. All exported span metadata, including status, events,
@@ -32,14 +32,11 @@ from pydantic import SecretStr
 from pydantic_ai import Agent
 from pydantic_ai.models.test import TestModel
 from sites.shop import Shop
-from starlette.applications import Starlette
-from starlette.responses import Response
-from starlette.routing import Mount, Route
-from starlette.types import Message, Scope
+from starlette.types import ASGIApp, Message, Scope
 
 from montybot import observability
 from montybot.app import create_app
-from montybot.observability import HTTPtimings, configure_observability, timed, timing
+from montybot.observability import configure_observability, timed, timing
 from montybot.settings import Settings
 
 
@@ -129,7 +126,6 @@ def test_traces(traced: tuple[InProcessApp, InMemorySpanExporter, bool], databas
     spans = exporter.get_finished_spans()
     names = {span.name for span in spans}
     required = {
-        'http.server',
         'db.query',
         'db.pool.acquire',
         'run.lifecycle',
@@ -154,9 +150,7 @@ def test_traces(traced: tuple[InProcessApp, InMemorySpanExporter, bool], databas
     assert (lifecycle.attributes or {})['user_id'] == str(user[0])
     model_requests = [span for span in spans if span.name == 'chat scripted']
     assert all((span.attributes or {}).get('run_id') == run_id for span in model_requests)
-    routes = {(span.attributes or {}).get('http.route') for span in spans if span.name == 'http.server'}
-    # The scripted human uses the live view's WebSocket; test_http_route_template_not_path covers the hand-off page.
-    assert {'/api/threads/{thread_id}', '/api/runs/{run_id}/live', '/api/asks/{ask_id}'} <= routes, routes
+    assert 'http.server' not in names
     assert any((span.attributes or {}).get('browser.site') == '127.0.0.1' for span in spans)
     resource = spans[0].resource.attributes
     assert (resource['service.version'], resource['deployment.environment.name']) == ('abc1234', 'test')
@@ -232,7 +226,7 @@ def test_timing_exceptions(
     assert 'function-argument' not in dump_spans(spans)
 
 
-def asgi_call(app: Starlette | HTTPtimings, path: str, secret: str, *, method: str = 'POST') -> list[Message]:
+def asgi_call(app: ASGIApp, path: str, secret: str, *, method: str = 'POST') -> list[Message]:
     scope: Scope = {
         'type': 'http',
         'method': method,
@@ -250,58 +244,23 @@ def asgi_call(app: Starlette | HTTPtimings, path: str, secret: str, *, method: s
     async def send(message: Message) -> None:
         sent.append(message)
 
-    asyncio.run(app(scope, receive, send))
+    async def call() -> None:
+        await app(scope, receive, send)
+
+    asyncio.run(call())
     return sent
 
 
-def test_http_route_template_not_path(local_traces: InMemorySpanExporter) -> None:
-    """A mounted hand-off page, as the live view's: the id in the path never reaches the span."""
-    secret = 'handoff-id-hunter2'
-
-    async def page(request: object) -> Response:
-        return Response('ok', status_code=201, headers={'set-cookie': secret})
-
-    live = Starlette(routes=[Route('/handoff/{handoff_id}', page, methods=['POST'])])
-    app = HTTPtimings(Starlette(routes=[Mount('/live', app=live)]))
-    sent = asgi_call(app, f'/live/handoff/{secret}', secret)
-    assert sent[0]['status'] == 201
-    (exported,) = local_traces.get_finished_spans()
-    assert exported.name == 'http.server'
-    assert dict(exported.attributes or {}) == {
-        'http.request.method': 'POST',
-        'http.response.status_code': 201,
-        'http.route': '/live/handoff/{handoff_id}',
-    }
-    assert secret not in dump_spans([exported])
-
-
-def test_http_unmatched_path_has_no_route(local_traces: InMemorySpanExporter) -> None:
-    secret = 'unknown-path-hunter2'
-    sent = asgi_call(HTTPtimings(Starlette(routes=[])), f'/{secret}', secret, method='GET')
-    assert sent[0]['status'] == 404
-    (exported,) = local_traces.get_finished_spans()
-    assert dict(exported.attributes or {}) == {'http.request.method': 'GET', 'http.response.status_code': 404}
-    assert secret not in dump_spans([exported])
-
-
-def test_http_timings_include_generated_500(local_traces: InMemorySpanExporter) -> None:
-    error = RuntimeError('endpoint-failure')
-
-    async def endpoint(request: object) -> Response:
-        raise error
-
-    app = HTTPtimings(Starlette(routes=[Route('/', endpoint)]))
-    with pytest.raises(RuntimeError) as caught:
-        asgi_call(app, '/', 'unused', method='GET')
-    assert caught.value is error
-    (span,) = local_traces.get_finished_spans()
-    assert dict(span.attributes or {}) == {
-        'http.request.method': 'GET',
-        'http.response.status_code': 500,
-        'http.route': '/',
-        'error.type': 'RuntimeError',
-    }
-    assert span.status.status_code == StatusCode.ERROR
+@pytest.mark.parametrize(('path', 'status'), [('/', 200), ('/static/app.css', 200), ('/missing', 404)])
+def test_http_requests_not_traced(local_traces: InMemorySpanExporter, path: str, status: int) -> None:
+    settings = Settings(
+        database_url='postgresql://unused',
+        session_secret=SecretStr('test-session-secret'),
+        encryption_key=SecretStr('unused'),
+    )
+    sent = asgi_call(create_app(settings), path, 'request-secret', method='GET')
+    assert sent[0]['status'] == status
+    assert local_traces.get_finished_spans() == ()
 
 
 def test_trace_dump_includes_metadata_surfaces() -> None:

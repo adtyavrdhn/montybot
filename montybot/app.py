@@ -18,7 +18,6 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from montybot import api, approvals, workflows
 from montybot.live import live_app
-from montybot.observability import HTTPtimings
 from montybot.resources import Resources, open_resources
 from montybot.settings import Settings
 
@@ -87,8 +86,7 @@ def create_app(settings: Settings) -> ASGIApp:
         lifespan=lifespan,
         exception_handlers={ValidationError: invalid_body},
     )
-    # Include Starlette's outer ServerErrorMiddleware: generated 500 responses count too.
-    return HTTPtimings(app)
+    return app
 
 
 STATIC = Path(__file__).parent / 'static'
