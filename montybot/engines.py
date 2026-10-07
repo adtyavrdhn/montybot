@@ -12,6 +12,8 @@ factory. `LazyChromium` starts one Playwright per process on the first `open()` 
 | `montybot.engines:chromium_cdp_server` | the server's default: the same Chrome and jail, over our own CDP pipe, no Playwright (`cdp.md`) |
 | `montybot.engines:chromium_cdp_headless` | the same in Chrome's headless mode, unjailed, for tests |
 | `montybot.engines:lightpanda_server` | evaluation only: Lightpanda in the same jail and egress proxy (`lightpanda.md`) |
+| `montybot.engines:cloak_server` | evaluation only: CloakBrowser in place of Chrome in `chromium_cdp_server` (`cloak.md`) |
+| `montybot.engines:cloak_headless` | the same in its headless mode, unjailed, for tests |
 
 Servo needs servoshell at `$MONTYBOT_SERVO_BINARY`, which the app image does not ship. Its sessions are not saved
 between runs on a stock build (`NotSupported('export')`), so not for real users.
@@ -20,6 +22,9 @@ Lightpanda needs its binary at `$MONTYBOT_LIGHTPANDA_BINARY`, which the app imag
 pixels, so it has no screenshots, no live view and no hand-off: also not for real users.
 
 The CDP backend uses the app image's Playwright Chromium, or `$MONTYBOT_CHROME_BINARY`.
+
+CloakBrowser needs its binary at `$MONTYBOT_CLOAK_BINARY`, which the app image does not ship: its license forbids
+redistribution, and giving users the browser (the hand-off) likely needs a separate license (`cloak.md`).
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ from playwright.async_api import Playwright, async_playwright
 
 from montybot.browser.cdp import CDPOptions, ChromiumCDPBackend
 from montybot.browser.chromium import ChromiumBackend, ChromiumOptions
+from montybot.browser.cloak import with_cloak
 from montybot.browser.contract import Action, Download, Screenshot, Snapshot
 from montybot.browser.lightpanda import LightpandaBackend, LightpandaOptions
 from montybot.browser.live import FrameSource
@@ -122,6 +128,15 @@ def chromium_cdp_server() -> ChromiumCDPBackend:
 
 def chromium_cdp_headless() -> ChromiumCDPBackend:
     return ChromiumCDPBackend(CDPOptions(headless=True))
+
+
+def cloak_server() -> ChromiumCDPBackend:
+    """Always jailed, headed on its own Xvfb screen, like `chromium_cdp_server`."""
+    return ChromiumCDPBackend(with_cloak(CDPOptions.server(egress_socket=_egress_socket())))
+
+
+def cloak_headless() -> ChromiumCDPBackend:
+    return ChromiumCDPBackend(with_cloak(CDPOptions(headless=True)))
 
 
 def servo_server() -> ServoBackend:

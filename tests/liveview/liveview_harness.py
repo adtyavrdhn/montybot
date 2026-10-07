@@ -37,6 +37,7 @@ from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from starlette.types import ASGIApp
 
 from montybot.browser.cdp import CDPOptions, ChromiumCDPBackend, default_executable
+from montybot.browser.cloak import cloak_executable, with_cloak
 from montybot.browser.contract import (
     Action,
     BrowserBackend,
@@ -380,8 +381,14 @@ class ServoStandIn:
 @asynccontextmanager
 async def backends(engine: str) -> AsyncIterator[Callable[[], BrowserBackend]]:
     """A factory of fresh, closed stand-in backends for `engine`, `chromium` or `servo`, or the real
-    `ChromiumCDPBackend` for `cdp`. Skips the test when servoshell or Chrome is not installed."""
-    if engine == 'cdp':
+    `ChromiumCDPBackend` for `cdp`, and with CloakBrowser for `cloak`. Skips the test when servoshell, Chrome or
+    CloakBrowser is not installed."""
+    if engine == 'cloak':
+        binary = cloak_executable()
+        if binary is None or not binary.exists():
+            pytest.skip('CloakBrowser not found; set MONTYBOT_CLOAK_BINARY')
+        yield lambda: ChromiumCDPBackend(with_cloak(CDPOptions(headless=True)))
+    elif engine == 'cdp':
         if not default_executable().exists():
             pytest.skip(f'Chrome not found at {default_executable()}')
         yield lambda: ChromiumCDPBackend(CDPOptions(headless=True))

@@ -46,6 +46,8 @@ BACKENDS = {
     'servo': 'montybot.browser.servo:ServoBackend',
     # Chrome over our own CDP pipe, no Playwright, headless and unjailed (cdp.md).
     'cdp': 'montybot.engines:chromium_cdp_headless',
+    # CloakBrowser at MONTYBOT_CLOAK_BINARY in place of Chrome, the same way (cloak.md).
+    'cloak': 'montybot.engines:cloak_headless',
     # Unjailed Lightpanda at MONTYBOT_LIGHTPANDA_BINARY, for the same evaluation.
     'lightpanda': 'montybot.browser.lightpanda:LightpandaBackend',
 }
