@@ -575,16 +575,26 @@ async function openFiles() {
     return;
   }
   $('files-status').textContent = data.truncated ? 'Showing a partial list (up to 1,000 entries, 16 folders deep).' :
-    (data.files.length ? '' : 'No files yet. Ask the bot to download or generate a file.');
+    (data.files.length ? '' : 'No files yet. Ask Monty to download or make a file.');
   $('file-list').replaceChildren(...data.files.map((file) => {
     const tooLarge = file.size > data.max_download_bytes;
     const download = button('Download', 'secondary', () => downloadFile(file.path));
     download.disabled = tooLarge;
     if (tooLarge) download.title = 'Exceeds the 20 MiB download limit';
     const item = element('li');
-    item.append(element('span', `${file.path} (${file.size.toLocaleString()} bytes)`), download);
+    item.append(element('span', `${shownPath(file.path)} (${shownSize(file.size)})`), download);
     return item;
   }));
+}
+
+function shownPath(path) {
+  return path.replace(/^\/work\//, '');  // where Monty's code sees the user's files; the user just has "their files"
+}
+
+function shownSize(bytes) {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 async function downloadFile(path) {

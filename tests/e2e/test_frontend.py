@@ -393,7 +393,7 @@ def test_files_navigation_and_download(frontend: tuple[Page, MockAPI], width: in
     page, mock = frontend
     page.set_viewport_size({'width': width, 'height': 844})
     mock.files = [
-        {'path': 'downloads/report <ready>.txt', 'size': 12},
+        {'path': '/work/downloads/report <ready>.txt', 'size': 12},
         {'path': 'large.zip', 'size': 20 * 1024 * 1024 + 1},
     ]
     workspace(page, mock)
@@ -404,14 +404,15 @@ def test_files_navigation_and_download(frontend: tuple[Page, MockAPI], width: in
     expect(page.locator('#layout')).not_to_be_visible()
     expect(page.locator('#open-files')).to_have_attribute('aria-current', 'page')
     expect(page.locator('#file-list li')).to_have_count(2)
-    expect(page.locator('#file-list li').first).to_contain_text('downloads/report <ready>.txt')
+    expect(page.locator('#file-list li').first).to_have_text('downloads/report <ready>.txt (12 bytes)Download')
+    expect(page.locator('#file-list li').last).to_contain_text('large.zip (20.0 MB)')
     expect(page.locator('#file-list ready')).to_have_count(0)
     buttons = page.locator('#file-list').get_by_role('button', name='Download', exact=True)
     expect(buttons.nth(1)).to_be_disabled()
     with page.expect_download() as downloaded:
         buttons.first.click()
     assert downloaded.value.suggested_filename == 'report ready.txt'
-    assert ('POST', '/api/files/download', {'path': 'downloads/report <ready>.txt'}) in mock.calls
+    assert ('POST', '/api/files/download', {'path': '/work/downloads/report <ready>.txt'}) in mock.calls
     expect(buttons.first).to_be_enabled()
     no_overflow(page)
     mock.files = []

@@ -69,7 +69,7 @@ function onMessage(message) {
   } else if (message.kind === 'error') {
     status.textContent = message.message;
   } else if (message.kind === 'ended') {
-    finish(message.given_back ? 'Thanks. The bot has the browser again; you can close this page.'
+    finish(message.given_back ? 'Thanks. Monty has the browser again; you can close this page.'
                               : 'This hand-off is over.');
   }
 }

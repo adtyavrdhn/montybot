@@ -180,7 +180,7 @@ def test_a_slot_watch_notifies_once(
     for _ in range(2):
         finished(fire(dbos, watch))
         assert reply_of(client, thread) == 'Not yet.'
-    assert mails(mailbox, 'monty-bot found') == 0 and mails(mailbox, 'monty-bot finished') == 0
+    assert mails(mailbox, 'Monty found') == 0 and mails(mailbox, 'Monty finished') == 0
 
     slots.open_slot = SLOT
     finished(fire(dbos, watch))
@@ -192,7 +192,7 @@ def test_a_slot_watch_notifies_once(
     # Later occurrences (one enqueued before the pause, say) do not tell the user again.
     finished(fire(dbos, watch))
     assert runs_in(database_url, thread) == 3
-    assert mails(mailbox, 'monty-bot found') == 1 and mails(mailbox, 'monty-bot finished') == 0
+    assert mails(mailbox, 'Monty found') == 1 and mails(mailbox, 'Monty finished') == 0
 
     assert client.wait_for_reply(client.ask(f'Delete the schedule {watch["id"]}')) == 'Deleted.'
     assert schedules(client) == []

@@ -179,8 +179,8 @@ def test_files_panel_downloads_browser_and_generated_csv(app: App, person: Page,
     expect(person.locator('#files')).to_be_visible()
     expect(person.locator('#layout')).to_be_hidden()
     expect(person.locator('#file-list li')).to_have_count(2)
-    for path, content in [('/work/downloads/export.csv', downloaded), ('/work/generated.csv', generated)]:
-        row = person.locator('#file-list li').filter(has_text=path)
+    for path, content in [('downloads/export.csv', downloaded), ('generated.csv', generated)]:
+        row = person.locator('#file-list li').filter(has_text=path)  # shown without /work/, where code sees them
         with person.expect_download() as pending:
             row.get_by_role('button', name='Download', exact=True).click()
         download = pending.value

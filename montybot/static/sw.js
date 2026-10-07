@@ -2,7 +2,7 @@
 'use strict';
 
 self.addEventListener('push', (event) => {
-  const data = event.data ? event.data.json() : { title: 'monty-bot', body: 'monty-bot needs you.', url: '/' };
+  const data = event.data ? event.data.json() : { title: 'Monty', body: 'Monty needs you.', url: '/' };
   event.waitUntil(self.registration.showNotification(data.title, { body: data.body, data: { url: data.url }, tag: data.tag }));
 });
 
