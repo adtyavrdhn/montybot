@@ -27,8 +27,11 @@ run: install  ## Build, install and open the app
 
 install: app  ## Put the app in /Applications, the one Monty on this Mac (no second copy left in build/)
 	@osascript -e 'quit app id "dev.pydantic.monty"' 2>/dev/null || true
+	@# Copied next to the installed app first: a copy that fails leaves the working one in place.
+	rm -rf /Applications/.Monty-new.app
+	ditto build/Monty.app /Applications/.Monty-new.app
 	rm -rf /Applications/Monty.app
-	ditto build/Monty.app /Applications/Monty.app
+	mv /Applications/.Monty-new.app /Applications/Monty.app
 	rm -rf build/Monty.app
 	@echo "Installed /Applications/Monty.app (talks to $(SERVER))"
 

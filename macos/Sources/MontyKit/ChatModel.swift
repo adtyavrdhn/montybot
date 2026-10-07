@@ -126,6 +126,8 @@ public final class ChatModel {
     private let client: APIClient
     /// The user this chat is theirs, for what they wrote to stay theirs even if the session ends meanwhile.
     private let owner: String?
+    /// The app's count of deliberate sign-outs when this chat opened (see `AppModel.keepDraft`).
+    private let signOuts: Int
     private var telemetry: Telemetry { client.telemetry }
     private var following: Task<Void, Never>?
     private var followingRun: String?
@@ -141,6 +143,7 @@ public final class ChatModel {
         self.app = app
         client = app.client
         owner = app.userId
+        signOuts = app.signOuts
         self.threadId = threadId
         self.title = title
         draft = app.drafts[threadId ?? "new"] ?? ""
@@ -352,7 +355,7 @@ public final class ChatModel {
             let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
             draft = typed.isEmpty ? text : text + "\n\n" + typed
         } else {
-            app?.keepDraft(text, for: draftKey, owner: owner)
+            app?.keepDraft(text, for: draftKey, owner: owner, signOuts: signOuts)
         }
     }
 

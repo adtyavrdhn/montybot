@@ -260,6 +260,7 @@ public final class AppModel {
 
     public func signOut() async {
         // Signing out on purpose forgets what was kept for next time; a session that ends by itself keeps it.
+        signOuts += 1
         if let id = user?.id {
             persistedUser = nil  // nothing typed or opened while signing out is kept again
             defaults.removeObject(forKey: "drafts.\(id)")
@@ -361,11 +362,15 @@ public final class AppModel {
 
     /// Who is signed in, for a chat to know whose it is.
     var userId: String? { user?.id }
+    /// Counts deliberate sign-outs: text from a chat opened before one is not kept (a session that merely ended is not
+    /// one, so what the user wrote then waits for them).
+    private(set) var signOuts = 0
 
     /// A message from a chat that closed before it could send: keep it as that chat's draft, and show it if the
     /// chat is open again. It is `owner`'s: if they are not the one signed in now (the session ended meanwhile), it
     /// waits in their saved drafts for their next sign-in.
-    func keepDraft(_ text: String, for key: String, owner: String?) {
+    func keepDraft(_ text: String, for key: String, owner: String?, signOuts: Int) {
+        guard signOuts == self.signOuts else { return }  // signed out on purpose since: forgotten, as promised
         func joined(_ current: String?) -> String {
             let current = (current ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return current.isEmpty ? text : text + "\n\n" + current
