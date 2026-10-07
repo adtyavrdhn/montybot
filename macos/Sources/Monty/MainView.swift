@@ -4,7 +4,6 @@ import SwiftUI
 struct MainView: View {
     @Environment(AppModel.self) private var app
     @State private var newTitle = ""
-    @State private var showingPalette = false
     @Environment(\.undoManager) private var undoManager
 
     var body: some View {
@@ -24,8 +23,11 @@ struct MainView: View {
                 split.frame(minWidth: app.chat?.watching == true ? Metrics.windowWithBrowserMinWidth : nil)
             }
         }
-        .overlay { if showingPalette, app.chat?.live == nil { CommandPalette(isPresented: $showingPalette) } }
-        .onReceive(NotificationCenter.default.publisher(for: .montyCommandPalette)) { _ in showingPalette.toggle() }
+        .overlay {
+            if app.showingPalette, app.chat?.live == nil {
+                CommandPalette(isPresented: Binding(get: { app.showingPalette }, set: { app.showingPalette = $0 }))
+            }
+        }
         .motion(.spring(response: 0.38, dampingFraction: 0.9), value: app.chat?.live == nil)
         .motion(.spring(response: 0.38, dampingFraction: 0.9), value: app.chat?.browserExpanded)
         .onChange(of: app.chat?.watching) { _, watching in
@@ -390,13 +392,15 @@ struct SkeletonRow: View {
 
 /// ⌘F puts the keyboard in the sidebar's search (macOS 15 can move the focus there; 14 can't, and leaves it be).
 private struct FocusedSearch: ViewModifier {
+    @Environment(AppModel.self) private var app
     @FocusState private var focused: Bool
 
     func body(content: Content) -> some View {
         if #available(macOS 15, *) {
             content
                 .searchFocused($focused)
-                .onReceive(NotificationCenter.default.publisher(for: .montyFindChats)) { _ in focused = true }
+                .onChange(of: app.wantsFindChats) { _, wants in if wants { focused = true; app.wantsFindChats = false } }
+                .onAppear { if app.wantsFindChats { focused = true; app.wantsFindChats = false } }  // asked while closed
         } else {
             content
         }

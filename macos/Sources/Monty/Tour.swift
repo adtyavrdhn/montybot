@@ -119,9 +119,9 @@ enum Tour {
         app.open(.chat(nil))
         await app.loadThreads()
         await snap("sidebar-needs-you")
-        NotificationCenter.default.post(name: .montyCommandPalette, object: nil)
+        app.showingPalette = true
         await snap("command-palette")
-        NotificationCenter.default.post(name: .montyCommandPalette, object: nil)
+        app.showingPalette = false
         if let waiting = app.needsYou.first {
             app.open(.chat(waiting.id))
             await wait { app.chat?.ask != nil }

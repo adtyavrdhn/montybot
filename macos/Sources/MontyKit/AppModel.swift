@@ -93,6 +93,10 @@ public final class AppModel {
     /// them to confirm, or for the new title.
     public var deleting: ThreadSummary?
     public var renaming: ThreadSummary?
+    /// The command palette is open (⌘K), and the sidebar's search should take the keyboard (⌘F). Kept here, not sent
+    /// as notifications: a request made while the window is closed waits for it to open.
+    public var showingPalette = false
+    public var wantsFindChats = false
     /// Something the user did to a chat (rename, delete) didn't work: the window says so.
     public var actionError: String?
     /// A chat the user deleted a moment ago. It is gone from the list at once, but stays on the server until the
@@ -371,6 +375,8 @@ public final class AppModel {
         answerDrafts = [:]
         deleting = nil
         renaming = nil
+        showingPalette = false
+        wantsFindChats = false
         actionError = nil
         pendingDelete?.cancel()
         recentlyDeleted = nil
@@ -562,7 +568,7 @@ public final class AppModel {
             if status != nil, threads[index].status == nil {
                 // A new task in an old chat: it is the latest now, at the top, as the next read will have it.
                 threads.remove(at: index)
-                threads.insert(ThreadSummary(id: id, title: title, status: status, updatedAt: Date()), at: 0)
+                threads.insert(ThreadSummary(id: id, title: title, status: status, updatedAt: Date(), waitingFor: chat.ask?.kind), at: 0)
             } else {
                 threads[index] = threads[index].with(title: title, status: status, outcome: outcome, waitingFor: chat.ask?.kind)
             }

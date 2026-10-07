@@ -212,10 +212,6 @@ private struct EndOfChat: PreferenceKey {
 }
 
 extension Notification.Name {
-    /// ⌘F: the sidebar's search takes the keyboard.
-    static let montyFindChats = Notification.Name("montyFindChats")
-    /// ⌘K: the command palette opens.
-    static let montyCommandPalette = Notification.Name("montyCommandPalette")
     /// ⌘L: the message box takes the keyboard.
     static let montyFocusMessage = Notification.Name("montyFocusMessage")
 }
