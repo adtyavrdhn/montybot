@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 from pydantic_ai.exceptions import UserError
+from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.models.anthropic import AnthropicModelSettings
 
+from montybot.agent import CACHE
 from montybot.resources import load_model
 from montybot.settings import Settings
 from montybot.vendor.claude_code import ClaudeCodeModel
@@ -27,6 +30,21 @@ def test_claude_code_model_from_token_file(token_file: Path) -> None:
     assert isinstance(model, ClaudeCodeModel)
     assert model.model_name == 'claude-opus-5-5'
     assert model.system == 'claude-code'
+
+
+def test_prompt_cache_overrides_claude_code_automatic_cache(token_file: Path) -> None:
+    """Validate the effective cache configuration without making a model request."""
+    token_file.write_text(json.dumps({'access_token': 'access', 'refresh_token': 'refresh', 'expires_at': None}))
+    model = load_model('claude-code:claude-opus-5-5')
+    assert isinstance(model, ClaudeCodeModel)
+    settings, _ = model.prepare_request(CACHE, ModelRequestParameters())
+    assert settings is not None
+    effective = AnthropicModelSettings(**settings)
+    assert effective.get('anthropic_cache') is False
+    assert effective.get('anthropic_cache_messages') is True
+    assert effective.get('anthropic_cache_instructions') is True
+    assert effective.get('anthropic_cache_tool_definitions') is True
+    assert model._build_automatic_cache_control(effective) == (None, None)
 
 
 def test_claude_code_model_without_sign_in(token_file: Path) -> None:
