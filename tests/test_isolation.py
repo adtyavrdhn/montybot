@@ -346,6 +346,7 @@ async def test_an_answered_run_shows_as_working_until_it_carries_on(pool: Pool) 
         await store.answer_ask(connection, user.id, ask_id, {'text': 'that one'})
         answered = await api.run_view(connection, user, await store.load_run(connection, run_id))
         assert answered['status'] == 'running' and answered['ask'] is None
+        assert answered['prompt'] == 'hello'  # what the apps send again to try a task again
         assert await store.active_runs(connection, user.id) == {thread.id: 'running'}  # the chat list agrees
 
 

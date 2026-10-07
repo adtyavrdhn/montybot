@@ -42,6 +42,10 @@ public final class ChatModel {
     public private(set) var live: LiveSession?
     /// Shown once above the composer, then cleared by the view.
     public var notice: ChatNotice?
+    /// The user is saying why not to the open approval (from its card, or the Task menu).
+    public var denying = false
+    /// Answering the open question or approval failed (offline, the server's error): shown in its card.
+    public var answerError: String?
 
     public var draft: String {
         didSet { if !closed { app?.drafts[draftKey] = draft } }
@@ -58,9 +62,14 @@ public final class ChatModel {
     /// user, when they most want to look), and closes when it ends.
     public var watching = false {
         didSet {
-            if watching, !isActive || closed { watching = false; return }
+            if watching, !isActive || closed { watching = false; browserExpanded = false; return }
+            if !watching { browserExpanded = false }
             watching ? startWatching() : stopWatching()
         }
+    }
+    /// Whether the bot's browser fills the window rather than sitting beside the chat. Only while watching.
+    public var browserExpanded = false {
+        didSet { if browserExpanded, !watching { watching = true } }  // which clears this again if there is nothing to watch
     }
 
     public var ask: Ask? { run?.status == .waiting ? run?.ask : nil }
@@ -81,15 +90,39 @@ public final class ChatModel {
     public var steps: [String] {
         var steps = run?.activity ?? []
         if isWorking, let live = preview?.activity, !live.isEmpty, live != steps.last { steps.append(live) }
-        return steps
+        return Self.grouped(steps)
     }
-    /// The last task failed: it can be sent again as it was.
+
+    /// Steps as a person reads them. The server records only the site of each page Monty opens ("Opening
+    /// walmart.com"), never its address, so going through a site's search, product and cart pages would read as the
+    /// same step three times, as if Monty were going round in circles: one step per visit to a site, with its pages
+    /// counted, says what happened. Other repeated lines become one.
+    nonisolated static func grouped(_ steps: [String]) -> [String] {
+        var groups: [(text: String, count: Int)] = []
+        for step in steps {
+            if let last = groups.last, last.text == step { groups[groups.count - 1].count += 1 } else { groups.append((step, 1)) }
+        }
+        return groups.map { text, count in
+            guard count > 1 else { return text }
+            guard text.hasPrefix("Opening ") else { return text }
+            return "Browsing \(text.dropFirst("Opening ".count)) · \(count) pages"
+        }
+    }
+    /// The last task failed or was stopped: it can be sent again as it was.
     public var canRetry: Bool {
-        run?.status == .failed && !isActive && messages.last(where: { $0.role == .user }) != nil
+        (run?.status == .failed || run?.status == .stopped) && !isActive && !sending && lastTask != nil
+    }
+    /// What the user asked for in the latest run. An older server doesn't say, and then the last thing the user wrote
+    /// stands in for it.
+    public var lastTask: String? {
+        if let prompt = run?.prompt, !prompt.isEmpty { return prompt }
+        return messages.last(where: { $0.role == .user })?.text
     }
 
     private weak var app: AppModel?
     private let client: APIClient
+    /// The user this chat is theirs, for what they wrote to stay theirs even if the session ends meanwhile.
+    private let owner: String?
     private var following: Task<Void, Never>?
     private var followingRun: String?
     private var watchTask: Task<Void, Never>?
@@ -103,6 +136,7 @@ public final class ChatModel {
     init(app: AppModel, threadId: String?, title: String = "") {
         self.app = app
         client = app.client
+        owner = app.userId
         self.threadId = threadId
         self.title = title
         draft = app.drafts[threadId ?? "new"] ?? ""
@@ -147,6 +181,7 @@ public final class ChatModel {
 
     private func apply(_ run: Run?) {
         guard !closed else { return }
+        if run?.ask?.id != self.run?.ask?.id { denying = false; answerError = nil }  // that ask is gone
         self.run = run
         if !isActive, watching { watching = false }
         if run?.status.isActive != true { preview = nil; screen = nil }
@@ -225,6 +260,7 @@ public final class ChatModel {
                             if await refresh() { return }
                             run = status
                             preview = nil
+                            if watching { watching = false }  // nothing more to see
                             app?.chatChanged(self)
                             await refreshUntilShown()
                             return
@@ -274,7 +310,7 @@ public final class ChatModel {
             let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
             draft = typed.isEmpty ? text : text + "\n\n" + typed
         } else {
-            app?.keepDraft(text, for: draftKey)
+            app?.keepDraft(text, for: draftKey, owner: owner)
         }
     }
 
@@ -314,9 +350,17 @@ public final class ChatModel {
         }
     }
 
+    /// Sends the last task again, as it was.
     public func retry() async {
-        guard canRetry, let last = messages.last(where: { $0.role == .user }) else { return }
-        _ = await submit(last.text)
+        guard canRetry, let task = lastTask else { return }
+        _ = await submit(task)
+    }
+
+    /// Puts the last task in the message box to change before sending it again, ahead of anything typed there.
+    public func editLastTask() {
+        guard canRetry, let task = lastTask else { return }
+        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = typed.isEmpty || typed == task ? task : task + "\n\n" + typed
     }
 
     /// The messages to show: the stored ones, then the one being sent.
@@ -330,13 +374,15 @@ public final class ChatModel {
     public func answer(_ body: AnswerBody) async {
         guard let ask, !answering, !closed else { return }
         answering = true
+        answerError = nil
         answeringAsk = ask.id
         defer { answering = false; answeringAsk = nil }
         do {
             try await client.answer(ask.id, body)
             app?.answerDrafts[ask.id] = nil
+            denying = false  // answered: nothing left to decline
             guard !closed else { return }
-            if let run { self.run = Run(id: run.id, threadId: run.threadId, status: .running, activity: run.activity) }
+            if let run { self.run = Run(id: run.id, threadId: run.threadId, status: .running, prompt: run.prompt, activity: run.activity) }
             app?.chatChanged(self)
             await refresh()
         } catch let error as APIError {
@@ -355,7 +401,7 @@ public final class ChatModel {
                 await refresh()
                 return
             }
-            notice = .error(error.localizedDescription)
+            answerError = error.localizedDescription  // in the question's card, where the user is looking
         } catch {}
     }
 

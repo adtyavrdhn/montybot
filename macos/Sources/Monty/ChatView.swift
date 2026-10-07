@@ -4,7 +4,10 @@ import SwiftUI
 struct ChatView: View {
     @Environment(AppModel.self) private var app
     @Bindable var chat: ChatModel
-    @State private var confirmingStop = false
+    /// The end of the chat is on screen: new content scrolls into view. Scrolled up to read, it stays put.
+    @State private var atBottom = true
+    /// Something arrived below while the user was reading further up.
+    @State private var missed = false
 
     var body: some View {
         Group {
@@ -31,32 +34,34 @@ struct ChatView: View {
                     }
                     .help(chat.watching ? "Hide Monty's browser (⇧⌘B)" : "Watch Monty's browser (⇧⌘B)")
                 }
-                if chat.isActive {
-                    Button { confirmingStop = true } label: { Label("Stop", systemImage: "stop.circle") }
-                        .disabled(!chat.canStop)
-                        .help("Stop this task (⌘.)")
+                if let thread = app.openThread {
+                    Menu {
+                        let isPinned = app.pinned.contains(thread.id)
+                        Button(isPinned ? "Unpin" : "Pin to Top") { app.setPinned(thread, !isPinned) }
+                        Button("Rename…") { app.renaming = thread }
+                        Button("Copy Monty's Last Reply") { copy(lastReply) }.disabled(lastReply == nil)
+                        Divider()
+                        Button("Delete Chat…", role: .destructive) { app.deleting = thread }
+                    } label: {
+                        Label("Chat", systemImage: "ellipsis.circle")
+                    }
+                    .help("Pin, rename, copy or delete this chat")
                 }
             }
         }
         .inspector(isPresented: Binding(get: { chat.watching && chat.isActive }, set: { chat.watching = $0 })) {
             BrowserPanel(chat: chat)
-                .inspectorColumnWidth(min: 280, ideal: 420, max: 720)
+                .inspectorColumnWidth(min: 280, ideal: 340, max: 720)
         }
-        .confirmationDialog("Stop this task?", isPresented: $confirmingStop) {
-            Button("Stop task", role: .destructive) { Task { await chat.stop() } }
-            Button("Keep going", role: .cancel) {}
-        } message: {
-            Text("Monty stops where it is and won't finish this task.")
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .montyStopTask)) { _ in
-            if chat.canStop { confirmingStop = true }
-        }
+        .onExitCommand { if chat.watching { chat.watching = false } }  // esc closes Monty's browser beside the chat
         .onChange(of: chat.run?.status) { old, new in
             guard old?.isActive == true, let new, !new.isActive else { return }
             let words = new == .done ? "Monty finished." : new == .failed ? "Monty couldn't finish this task." : "Task stopped."
             AccessibilityNotification.Announcement(words).post()
         }
     }
+
+    private var lastReply: String? { chat.messages.last { $0.role == .assistant }?.text }
 
     /// The mascot's mood for this chat: working, waiting for the user, or how the last task ended.
     private var mood: MontyMark.Mood {
@@ -109,13 +114,24 @@ struct ChatView: View {
                                 AskCard(chat: chat, ask: ask).id(ask.id).transition(.arrive)
                             }
                             if chat.canRetry {
-                                Button { Task { await chat.retry() } } label: {
-                                    Label("Try again", systemImage: "arrow.clockwise")
+                                HStack(spacing: 8) {
+                                    Button { Task { await chat.retry() } } label: {
+                                        Label("Try again", systemImage: "arrow.clockwise")
+                                    }
+                                    .buttonStyle(.monty(.outline, small: true))
+                                    .help("Send the same task again (⌘R)")
+                                    Button { chat.editLastTask() } label: {
+                                        Label("Edit and send again", systemImage: "pencil")
+                                    }
+                                    .buttonStyle(.monty(.ghost, small: true))
+                                    .help("Put the task in the message box to change it first")
                                 }
-                                .buttonStyle(.monty(.outline, small: true))
-                                .disabled(chat.sending)
+                                .transition(.opacity)
                             }
                             Color.clear.frame(height: 1).id("end")
+                                .background(GeometryReader { end in
+                                    Color.clear.preference(key: EndOfChat.self, value: end.frame(in: .named("chat")).minY)
+                                })
                         }
                         .motion(.spring(response: 0.42, dampingFraction: 0.86), value: chat.shownMessages.count)
                         .motion(.spring(response: 0.42, dampingFraction: 0.86), value: chat.ask?.id)
@@ -125,11 +141,34 @@ struct ChatView: View {
                         .padding(.bottom, 12)
                         .frame(maxWidth: .infinity, minHeight: geometry.size.height)
                     }
+                    .coordinateSpace(.named("chat"))
                     .defaultScrollAnchor(.bottom)
+                    .onPreferenceChange(EndOfChat.self) { end in
+                        // Within a few lines of the end counts as at the end.
+                        atBottom = end <= geometry.size.height + 60
+                        if atBottom { missed = false }
+                    }
+                    .overlay(alignment: .bottom) {
+                        if !atBottom {
+                            Button { scrollToEnd(scroller) } label: {
+                                Label(missed ? "New messages" : "Jump to latest", systemImage: "arrow.down")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .buttonStyle(.monty(missed ? .primary : .outline, small: true))
+                            .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
+                            .padding(.bottom, 10)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                            .help("Scroll to the end of the chat")
+                        }
+                    }
+                    .animation(.easeOut(duration: 0.18), value: atBottom)
                 }
-                .onChange(of: chat.shownMessages.count) { scrollToEnd(scroller) }
-                .onChange(of: chat.ask?.id) { scrollToEnd(scroller) }
-                .onChange(of: chat.preview?.text) { scroller.scrollTo("end", anchor: .bottom) }
+                .onChange(of: chat.shownMessages.count) {
+                    // What the user just sent always shows; anything else waits until they are at the end.
+                    if atBottom || chat.pendingMessage != nil { scrollToEnd(scroller) } else { missed = true }
+                }
+                .onChange(of: chat.ask?.id) { if atBottom { scrollToEnd(scroller) } else if chat.ask != nil { missed = true } }
+                .onChange(of: chat.preview?.text) { if atBottom { scroller.scrollTo("end", anchor: .bottom) } }
             }
             Composer(chat: chat)
                 .frame(maxWidth: Metrics.readingWidth)
@@ -144,9 +183,31 @@ struct ChatView: View {
     }
 }
 
+extension View {
+    /// The view as a plain button when `enabled`, otherwise as it is.
+    @ViewBuilder func wrappedInButton(enabled: Bool, action: @escaping () -> Void) -> some View {
+        if enabled { Button(action: action) { self }.buttonStyle(.plain) } else { self }
+    }
+}
+
+/// Where the end of the chat is, from the top of what is on screen.
+private struct EndOfChat: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 extension Notification.Name {
-    /// ⌘. from the Task menu: the open chat asks before stopping.
-    static let montyStopTask = Notification.Name("montyStopTask")
+    /// ⌘F: the sidebar's search takes the keyboard.
+    static let montyFindChats = Notification.Name("montyFindChats")
+    /// ⌘L: the message box takes the keyboard.
+    static let montyFocusMessage = Notification.Name("montyFocusMessage")
+}
+
+/// Puts text on the Mac's clipboard.
+func copy(_ text: String?) {
+    guard let text else { return }
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
 }
 
 /// A calm empty state, the same everywhere: an icon, a title and a sentence, centred.
@@ -185,6 +246,8 @@ struct EmptyState<Actions: View>: View {
 struct MessageView: View {
     let message: ChatMessage
     var draft = false
+    @State private var hovering = false
+    @State private var copied = false
 
     var body: some View {
         switch message.role {
@@ -198,9 +261,11 @@ struct MessageView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(RoundedRectangle(cornerRadius: Metrics.radius).fill(Palette.containerHigh))
+                    .contextMenu { Button("Copy") { copy(message.text) } }
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("You said: \(message.text)")
+            .accessibilityAction(named: "Copy") { copy(message.text) }
         case .assistant:
             VStack(alignment: .leading, spacing: 6) {
                 if draft {
@@ -210,10 +275,51 @@ struct MessageView: View {
                     .opacity(draft ? 0.7 : 1)
                     .contentTransition(.opacity)
                     .motion(.easeOut(duration: 0.2), value: message.text)
+                if !draft {
+                    // Under each reply, as in other chat apps: shown on hover, so replies stay calm to read.
+                    Button {
+                        copy(message.text)
+                        copied = true
+                    } label: {
+                        Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 11))
+                    }
+                    .buttonStyle(.monty(.ghost, small: true))
+                    .opacity(hovering || copied ? 1 : 0)
+                    .help("Copy this reply")
+                    .accessibilityHidden(true)  // the reply's own Copy action does this for VoiceOver
+                    .task(id: copied) {
+                        guard copied else { return }
+                        try? await Task.sleep(for: .seconds(1.5))
+                        copied = false
+                    }
+                }
             }
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            .contextMenu { if !draft { Button("Copy") { copy(message.text) } } }
             .accessibilityElement(children: .contain)
             .accessibilityLabel(draft ? "Monty is writing" : "Monty said")
+            .accessibilityAction(named: "Copy") { copy(message.text) }
+        case .event:
+            // What happened along the way (an approval, a takeover): a quiet line, not a message.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: Self.icon(for: message.text)).accessibilityHidden(true)
+                Text(message.text)
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(Palette.onSurfaceVariant)
+            .textSelection(.enabled)
         }
+    }
+
+    /// The server words these lines in `chat_messages` (montybot/api.py); anything else gets the plain mark.
+    private static func icon(for text: String) -> String {
+        if text.hasPrefix("You approved") { return "checkmark.circle" }
+        if text.hasPrefix("You said no") { return "xmark.circle" }
+        if text.hasPrefix("You took over") { return "hand.point.up.left" }
+        if text.hasPrefix("Not answered") { return "clock" }
+        return "smallcircle.filled.circle"
     }
 }
 
@@ -254,9 +360,10 @@ struct StepsView: View {
             .foregroundStyle(Palette.onSurfaceVariant)
             .frame(minHeight: 24)
             .contentShape(Rectangle())
-            .onTapGesture { if expandable { withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() } } }
+            // A button, so the keyboard reaches it too (with keyboard navigation on), not only the pointer.
+            .wrappedInButton(enabled: expandable) { withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() } }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(working ? "Monty is working: \(chat.activity ?? "starting")" : "\(steps.count) steps Monty took")
+            .accessibilityLabel(working ? "Monty is working: \(chat.activity ?? "starting")" : "\(steps.count) step\(steps.count == 1 ? "" : "s") Monty took")
             .accessibilityAddTraits(expandable ? .isButton : [])
             .accessibilityAction { if expandable { expanded.toggle() } }
             .accessibilityValue(expandable ? (expanded ? "Shown" : "Hidden") : "")
@@ -304,7 +411,6 @@ struct StepsView: View {
 struct AskCard: View {
     @Bindable var chat: ChatModel
     let ask: Ask
-    @State private var denying = false
     @State private var reason = ""
     @FocusState private var focus: Field?
     @AccessibilityFocusState private var announced: Bool
@@ -319,9 +425,13 @@ struct AskCard: View {
                 .accessibilityFocused($announced)
             MarkdownView(text: ask.prompt)
             controls.padding(.top, 2)
+            if let error = chat.answerError {
+                NoticeBar(notice: .error(error)) { chat.answerError = nil }
+            }
         }
         .card(padding: 16)
         .disabled(chat.answering)
+        .onChange(of: chat.denying) { _, denying in if denying { focus = .reason } }
         .onAppear {
             // Into the answer box only if the user isn't writing something else.
             if ask.kind == .question, chat.draft.isEmpty { focus = .answer }
@@ -346,7 +456,7 @@ struct AskCard: View {
                     .disabled(chat.answerDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         case .approval:
-            if denying {
+            if chat.denying {
                 HStack(spacing: 8) {
                     TextField("Why not?", text: $reason, prompt: Text("Tell Monty why not (optional)"))
                         .labelsHidden()
@@ -354,16 +464,16 @@ struct AskCard: View {
                         .focused($focus, equals: .reason)
                         .field(focused: focus == .reason)
                         .onSubmit(deny)
-                        .onExitCommand { denying = false }
+                        .onExitCommand { chat.denying = false }
                     Button("Don't do it", action: deny).buttonStyle(.destructive)
-                    Button("Back") { denying = false }.buttonStyle(.ghost)
+                    Button("Back") { chat.denying = false }.buttonStyle(.ghost)
                 }
             } else {
                 HStack(spacing: 8) {
                     // No keyboard shortcut: going ahead with something that costs money takes a deliberate click.
                     Button("Approve") { Task { await chat.answer(.approve()) } }
                         .buttonStyle(.primary)
-                    Button("Don't approve…") { denying = true; focus = .reason }
+                    Button("Don't approve…") { chat.denying = true }
                         .buttonStyle(.outline)
                 }
             }
@@ -422,18 +532,36 @@ struct Composer: View {
                     .padding(.vertical, 6)
                     .onSubmit { if chat.canSend { Task { await chat.send() } } }
                     .disabled(chat.ask != nil && chat.draft.isEmpty)  // text kept here stays reachable
-                Button { Task { await chat.send() } } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 13, weight: .bold))
-                        .frame(width: Metrics.control, height: Metrics.control)
-                        .background(RoundedRectangle(cornerRadius: Metrics.radiusMedium).fill(chat.canSend ? Palette.action : Palette.containerHigh))
-                        .foregroundStyle(chat.canSend ? Palette.onLink : Palette.onSurfaceVariant)
+                if chat.isActive {
+                    // While Monty works (or waits for an answer), Send is Stop, as in other chat apps.
+                    Button { Task { await chat.stop() } } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .frame(width: Metrics.control, height: Metrics.control)
+                            .background(RoundedRectangle(cornerRadius: Metrics.radiusMedium).fill(Palette.onSurface))
+                            .foregroundStyle(Palette.surface)
+                            .opacity(chat.canStop ? 1 : 0.45)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!chat.canStop)
+                    .help("Stop this task (⌘.)")
+                    .accessibilityLabel(chat.stopping ? "Stopping" : "Stop task")
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+                } else {
+                    Button { Task { await chat.send() } } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 13, weight: .bold))
+                            .frame(width: Metrics.control, height: Metrics.control)
+                            .background(RoundedRectangle(cornerRadius: Metrics.radiusMedium).fill(chat.canSend ? Palette.action : Palette.containerHigh))
+                            .foregroundStyle(chat.canSend ? Palette.onLink : Palette.onSurfaceVariant)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!chat.canSend)
+                    .help("Send (↩). ⌥↩ starts a new line.")
+                    .accessibilityLabel("Send")
+                    .animation(.easeOut(duration: 0.15), value: chat.canSend)
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
                 }
-                .buttonStyle(.plain)
-                .disabled(!chat.canSend)
-                .help("Send (↩). ⌥↩ starts a new line.")
-                .accessibilityLabel("Send")
-                .animation(.easeOut(duration: 0.15), value: chat.canSend)
             }
             .padding(.leading, 16)
             .padding(.trailing, 6)
@@ -445,7 +573,9 @@ struct Composer: View {
             .onTapGesture { focused = true }
         }
         .animation(.easeOut(duration: 0.2), value: chat.notice)
+        .animation(.easeOut(duration: 0.15), value: chat.isActive)
         .onAppear { if chat.ask == nil { focused = true } }
+        .onReceive(NotificationCenter.default.publisher(for: .montyFocusMessage)) { _ in focused = true }
         .onChange(of: chat.ask == nil) { _, free in if free { focused = true } }
     }
 
@@ -457,7 +587,7 @@ struct Composer: View {
             case .handoff: return "Monty is waiting for you to take over the browser"
             }
         }
-        if chat.isActive { return "Monty is working. You can reply when it's done." }
+        if chat.isActive { return "Monty is on it. Stop it, or wait to send your next message." }
         if chat.threadId == nil { return "Ask Monty to do something on the web…" }
         return "Reply to Monty…"
     }
@@ -471,8 +601,9 @@ struct NoticeBar: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: notice.isError ? "exclamationmark.circle" : "info.circle").accessibilityHidden(true)
-            Text(notice.text).fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 4)
+            // Wraps in the width it has. Not fixedSize: measured at its narrowest, a long notice made the window's
+            // content taller than the window, and pushed the message box below its edge.
+            Text(notice.text).lineLimit(4).frame(maxWidth: .infinity, alignment: .leading)
             Button(action: dismiss) { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)) }
                 .buttonStyle(IconButtonStyle(size: 24))
                 .accessibilityLabel("Dismiss")
@@ -582,28 +713,22 @@ struct BrowserPanel: View {
             HStack(spacing: 6) {
                 Text("Monty's browser").sectionLabel()
                 Spacer()
-                Text(chat.ask != nil ? "Paused: waiting for you" : "View only").font(.system(size: 12)).foregroundStyle(Palette.onSurfaceVariant)
-            }
-            ZStack {
-                RoundedRectangle(cornerRadius: Metrics.radius).fill(Palette.containerLow)
-                if let png = chat.screen, let image = NSImage(data: png) {
-                    Image(nsImage: image)
-                        .resizable()
-                        .interpolation(.high)
-                        .aspectRatio(contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: Metrics.radius))
-                        .accessibilityLabel("Monty's browser as it works")
-                } else {
-                    VStack(spacing: 8) {
-                        if chat.isWorking { MontyMark(mood: .working, size: 18) }
-                        Text(chat.isWorking ? "Waiting for Monty to open a page…" : "No picture yet")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Palette.onSurfaceVariant)
-                    }
+                Text(chat.ask != nil ? "Paused: waiting for you" : "View only")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.onSurfaceVariant)
+                    .lineLimit(1)
+                    .layoutPriority(-1)  // gives way to the expand button in a narrow panel
+                Button { chat.browserExpanded = true } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 11, weight: .semibold))
                 }
+                .buttonStyle(IconButtonStyle(size: 24))
+                .help("Make Monty's browser fill the window (⇧⌘F)")
+                .accessibilityLabel("Expand Monty's browser")
             }
-            .overlay(RoundedRectangle(cornerRadius: Metrics.radius).strokeBorder(Palette.outline))
-            .aspectRatio(16 / 10, contentMode: .fit)
+            BrowserPicture(chat: chat)
+                .aspectRatio(16 / 10, contentMode: .fit)
+                .onTapGesture(count: 2) { chat.browserExpanded = true }
+                .help("Double-click to make it fill the window")
             if let activity = chat.activity {
                 Text(activity).font(.mono(12)).foregroundStyle(Palette.onSurfaceVariant).lineLimit(2)
             }
@@ -611,5 +736,94 @@ struct BrowserPanel: View {
         }
         .padding(14)
         .background(Palette.surface)
+    }
+}
+
+/// Monty's browser as it works, as the latest picture, or what is coming.
+struct BrowserPicture: View {
+    let chat: ChatModel
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: Metrics.radius).fill(Palette.containerLow)
+            if let png = chat.screen, let image = NSImage(data: png) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: Metrics.radius))
+                    .accessibilityLabel("Monty's browser as it works")
+            } else {
+                VStack(spacing: 8) {
+                    if chat.isWorking { MontyMark(mood: .working, size: 18) }
+                    Text(chat.isWorking ? "Waiting for Monty to open a page…" : "No picture yet")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Palette.onSurfaceVariant)
+                }
+            }
+        }
+        .overlay(RoundedRectangle(cornerRadius: Metrics.radius).strokeBorder(Palette.outline))
+    }
+}
+
+/// Monty's browser filling the window, to see what it does; view only. The Mac's full screen is a click (or ⌃⌘F)
+/// away, and leaving this view leaves full screen too if this view entered it.
+struct ExpandedBrowserView: View {
+    let chat: ChatModel
+    @State private var fullScreen = false
+    @State private var enteredFullScreen = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Monty's browser").font(.system(size: 13, weight: .semibold))
+                    Text(chat.ask != nil ? "Paused: waiting for you" : chat.activity ?? "View only")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Palette.onSurfaceVariant)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 12)
+                if chat.ask?.kind == .handoff {
+                    Button("Take over") { Task { await chat.takeOver() } }
+                        .buttonStyle(.monty(.primary, small: true))
+                        .disabled(chat.takingOver)
+                }
+                Button {
+                    enteredFullScreen = !fullScreen
+                    window?.toggleFullScreen(nil)
+                } label: {
+                    Label(fullScreen ? "Exit Full Screen" : "Full Screen",
+                          systemImage: fullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                }
+                .buttonStyle(.monty(.outline, small: true))
+                .help(fullScreen ? "Leave full screen (⌃⌘F)" : "Use the whole screen (⌃⌘F)")
+                Button("Done") { chat.browserExpanded = false }
+                    .buttonStyle(.monty(.outline, small: true))
+                    .keyboardShortcut(.cancelAction)
+                    .help("Back to the chat (esc)")
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Palette.container)
+            Divider().overlay(Palette.outline)
+            BrowserPicture(chat: chat)
+                .padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(Palette.surface)
+        .onAppear { fullScreen = window?.styleMask.contains(.fullScreen) == true }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in fullScreen = true }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
+            fullScreen = false
+            enteredFullScreen = false
+        }
+        .onDisappear {
+            if enteredFullScreen, window?.styleMask.contains(.fullScreen) == true { window?.toggleFullScreen(nil) }
+        }
+    }
+
+    private var window: NSWindow? {
+        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true } ?? NSApp.keyWindow
     }
 }

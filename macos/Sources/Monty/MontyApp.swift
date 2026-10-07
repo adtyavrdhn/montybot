@@ -13,7 +13,7 @@ struct MontyApp: App {
             RootView()
                 .environment(delegate.app)
                 .preferredColorScheme(appearance.scheme)
-                .frame(minWidth: 760, minHeight: 520)
+                .frame(minWidth: Metrics.windowMinWidth, minHeight: 560)
         }
         .defaultSize(width: 1180, height: 780)
         .commands { MontyCommands(app: delegate.app) }
@@ -58,14 +58,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         notifications?.delegate = self
+        // A question can be answered from its notification, without opening the app.
+        let reply = UNTextInputNotificationAction(
+            identifier: "reply", title: "Reply", options: [], textInputButtonTitle: "Send", textInputPlaceholder: "Your answer"
+        )
+        notifications?.setNotificationCategories([UNNotificationCategory(identifier: "question", actions: [reply], intentIdentifiers: [])])
         app.notify = { [weak self] notice in self?.post(notice) }
         app.threadsChanged = { [weak self] in self?.updateBadge() }
         app.firstTaskSent = { [weak self] in self?.requestNotifications() }
+        // Seen in the app: what Notification Center says about the chat is old news.
+        app.chatSeen = { [weak self] thread in
+            self?.notifications?.removeDeliveredNotifications(withIdentifiers: [Self.identifier(thread)])
+        }
         let center = NotificationCenter.default
         center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.app.isActive = true
                 self?.app.refreshThreads()
+                self?.app.reloadPage()  // whatever changed while the user was away
             }
         }
         center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
@@ -121,14 +131,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         content.body = notice.body
         content.sound = notice.kind == .finished ? nil : .default
         content.threadIdentifier = notice.threadId
-        content.userInfo = ["thread": notice.threadId]
+        content.userInfo = ["thread": notice.threadId, "ask": notice.askId ?? ""]
+        if notice.kind == .question { content.categoryIdentifier = "question" }
         if notice.kind != .finished { content.interruptionLevel = .timeSensitive }
-        center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        // One per chat: its latest news replaces what it said before, and opening the chat clears it.
+        center.add(UNNotificationRequest(identifier: Self.identifier(notice.threadId), content: content, trigger: nil))
     }
 
+    private static func identifier(_ thread: String) -> String { "chat-\(thread)" }
+
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        let thread = response.notification.request.content.userInfo["thread"] as? String
+        let info = response.notification.request.content.userInfo
+        let thread = info["thread"] as? String
+        if let reply = response as? UNTextInputNotificationResponse, let thread, let ask = info["ask"] as? String, !ask.isEmpty {
+            let text = reply.userText
+            // Answered from the notification: the app stays where it is, unless the answer couldn't go.
+            if await app.answerFromNotification(ask, in: thread, text: text) { return }
+        }
         await MainActor.run { show(thread: thread) }
+    }
+
+    /// The Dock icon's menu: what needs the user, and a new task.
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        guard app.user != nil else { return menu }
+        for thread in app.needsYou.prefix(8) {
+            let item = NSMenuItem(title: thread.title.readableTitle, action: #selector(openFromDock(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = thread.id
+            menu.addItem(item)
+        }
+        if !app.needsYou.isEmpty { menu.addItem(.separator()) }
+        let new = NSMenuItem(title: "New Task", action: #selector(openFromDock(_:)), keyEquivalent: "")
+        new.target = self
+        menu.addItem(new)
+        return menu
+    }
+
+    @objc private func openFromDock(_ item: NSMenuItem) {
+        if let thread = item.representedObject as? String { show(thread: thread) } else { show(thread: nil); app.open(.chat(nil)) }
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
@@ -146,14 +187,38 @@ struct MontyCommands: Commands {
             Button("New Task") { show(.chat(nil)) }
                 .keyboardShortcut("n")
                 .disabled(app.user == nil || app.isTakingOver)
+            Divider()
+            // No ⌘⌫ here: in the message box it deletes the line. The sidebar takes ⌫ and ⌘⌫ on the selected chat.
+            Button("Rename Chat…") { app.renaming = app.openThread }
+                .disabled(app.openThread == nil || app.isTakingOver)
+            Button("Delete Chat…") { app.deleting = app.openThread }
+                .disabled(app.openThread == nil || app.isTakingOver)
         }
         CommandGroup(after: .appSettings) {
             SignOutCommand(app: app)
         }
         CommandMenu("Task") {
-            Button("Stop Task…") { NotificationCenter.default.post(name: .montyStopTask, object: nil) }
+            Button("Stop Task") { Task { await app.chat?.stop() } }
                 .keyboardShortcut(".")
                 .disabled(app.chat?.canStop != true || app.isTakingOver)
+            if case .chat = app.route {
+                Button("Try Again") { Task { await app.chat?.retry() } }
+                    .keyboardShortcut("r")
+                    .disabled(app.chat?.canRetry != true || app.isTakingOver)
+            } else {
+                Button("Reload") { app.libraryError = nil; app.reloadPage() }  // ⌘R, as in a browser
+                    .keyboardShortcut("r")
+                    .disabled(app.user == nil)
+            }
+            Button("Edit and Send Again") { app.chat?.editLastTask() }
+                .disabled(app.chat?.canRetry != true || app.isTakingOver)
+            Divider()
+            // No shortcuts: going ahead with something that costs money is a deliberate choice, even from a menu.
+            Button("Approve") { Task { await app.chat?.answer(.approve()) } }
+                .disabled(app.chat?.ask?.kind != .approval || app.chat?.answering == true || app.isTakingOver)
+            Button("Don't Approve…") { app.chat?.denying = true }
+                .disabled(app.chat?.ask?.kind != .approval || app.chat?.answering == true || app.isTakingOver)
+            Divider()
             if !app.isTakingOver {
                 // While taking over, the takeover screen's "Not now" has ⇧⌘T.
                 Button("Take Over Browser") { Task { await app.chat?.takeOver() } }
@@ -165,6 +230,11 @@ struct MontyCommands: Commands {
             }
             .keyboardShortcut("b", modifiers: [.command, .shift])
             .disabled(app.chat?.isActive != true || app.isTakingOver)
+            Button(app.chat?.browserExpanded == true ? "Back to the Chat" : "Expand Monty's Browser") {
+                app.chat?.browserExpanded.toggle()
+            }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .disabled(app.chat?.isActive != true || app.isTakingOver)
             Divider()
             Button("Next Chat Needing You") {
                 if let next = nextNeedingYou { show(.chat(next.id)) }
@@ -175,6 +245,13 @@ struct MontyCommands: Commands {
             Button("Next Chat") { step(1) }.keyboardShortcut("]", modifiers: [.command, .option]).disabled(app.isTakingOver)
         }
         CommandGroup(after: .sidebar) {
+            Divider()
+            Button("Find Chats") { show(app.route); NotificationCenter.default.post(name: .montyFindChats, object: nil) }
+                .keyboardShortcut("f")
+                .disabled(app.user == nil || app.isTakingOver)
+            Button("Message Box") { NotificationCenter.default.post(name: .montyFocusMessage, object: nil) }
+                .keyboardShortcut("l")
+                .disabled(app.user == nil || app.isTakingOver || app.chat == nil)
             Divider()
             Group {
                 Button("Schedules") { show(.schedules) }.keyboardShortcut("1")
@@ -194,7 +271,7 @@ struct MontyCommands: Commands {
     }
 
     private func step(_ offset: Int) {
-        let order = app.needsYou + app.threads.filter { $0.status != .waiting }
+        let order = app.sidebarOrder
         guard !order.isEmpty else { return }
         guard case .chat(let current) = app.route, let index = order.firstIndex(where: { $0.id == current }) else {
             show(.chat(order[0].id))

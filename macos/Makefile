@@ -4,7 +4,7 @@ SERVER ?= https://35-188-200-101.sslip.io
 LOCAL ?= http://127.0.0.1:8000
 REPO := $(abspath ..)
 
-.PHONY: help setup dev app run test journeys tour share clean
+.PHONY: help setup dev app run install test journeys tour share clean
 
 help:  ## What you can do
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-9s %s\n", $$1, $$2}'
@@ -22,15 +22,23 @@ dev:  ## For development only: a local montybot with a demo model (make app SERV
 app:  ## Build build/Monty.app for SERVER
 	scripts/build-app.sh $(SERVER)
 
-run: app  ## Build and open the app
-	open build/Monty.app
+run: install  ## Build, install and open the app
+	open /Applications/Monty.app
+
+install: app  ## Put the app in /Applications, the one Monty on this Mac (no second copy left in build/)
+	@osascript -e 'quit app id "dev.pydantic.monty"' 2>/dev/null || true
+	rm -rf /Applications/Monty.app
+	ditto build/Monty.app /Applications/Monty.app
+	rm -rf build/Monty.app
+	@echo "Installed /Applications/Monty.app (talks to $(SERVER))"
 
 test:  ## Unit tests, and the journeys too when 'make dev' is running (never against the real server)
 	@if curl -fs $(LOCAL)/healthz >/dev/null; then MONTY_TEST_SERVER=$(LOCAL) swift test; \
 	else echo "No dev server at $(LOCAL): unit tests only (run 'make dev' in another terminal for the journeys)"; swift test; fi
 
 tour:  ## Every screen as PNG and text in build/tour (needs 'make dev' and an unlocked Mac)
-	scripts/build-app.sh $(LOCAL) && scripts/tour.sh build/tour
+	scripts/build-app.sh $(SERVER) && MONTY_TOUR_SERVER=$(LOCAL) scripts/tour.sh build/tour
+	rm -rf build/Monty.app  # no second Monty next to the installed one
 
 share: app  ## build/Monty.zip to send to someone (ad hoc signed; see README for Developer ID)
 	cd build && rm -f Monty.zip && ditto -c -k --keepParent Monty.app Monty.zip

@@ -85,6 +85,9 @@ enum Tour {
         if let shop = site["shop"], let chat = await say("Order eggs from \(shop)") {
             await wait { chat.ask?.kind == .handoff }
             await snap("ask-handoff")
+            chat.browserExpanded = true
+            await snap("browser-expanded")
+            chat.browserExpanded = false
             await chat.takeOver()
             if let live = chat.live {
                 await wait(15) { live.frame != nil && live.activeTab?.url.hasPrefix("http") == true }
@@ -163,12 +166,18 @@ enum Tour {
         await snap("dark-schedules")
 
         NSApp.appearance = NSAppearance(named: .aqua)
-        window.setContentSize(NSSize(width: 760, height: 520))
+        window.setContentSize(NSSize(width: 760, height: 520))  // smaller than allowed: the window keeps to its minimum
         app.open(.chat(nil))
         await snap("narrow-new-task")
         if let first = app.threads.last {
             app.open(.chat(first.id))
             await snap("narrow-reply")
+        }
+        if let waiting = app.needsYou.first {  // Monty's browser opened beside a chat in a narrow window
+            app.open(.chat(waiting.id))
+            await wait { app.chat?.ask != nil }
+            app.chat?.watching = true
+            await snap("narrow-watching")
         }
         print("tour: \(step) screens in \(directory.path)")
         NSApp.terminate(nil)

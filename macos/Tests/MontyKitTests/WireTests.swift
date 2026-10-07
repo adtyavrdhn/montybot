@@ -150,6 +150,46 @@ import Testing
         #expect(threads == [ThreadSummary(id: "a", title: "Eggs", status: .waiting), ThreadSummary(id: "b", title: "Hi")])
     }
 
+    @Test func aChatWithEventsAndRolesNotKnownYetReads() throws {
+        let json = #"""
+        {"id": "t", "title": "Eggs", "messages": [
+            {"role": "user", "text": "Order eggs"}, {"role": "event", "text": "You approved: Buy eggs"},
+            {"role": "something-new", "text": "?"}, {"role": "assistant", "text": "Done"}],
+         "run": {"id": "r", "thread_id": "t", "status": "done", "output": "Done", "activity": [], "ask": null}}
+        """#
+        let thread = try JSONDecoder().decode(ThreadDetail.self, from: Data(json.utf8))
+        #expect(thread.messages.map(\.role) == [.user, .event, .event, .assistant])
+        #expect(thread.run?.prompt == nil)  // an older server, without it
+    }
+
+    @Test func chatsAreGroupedByWhenTheyWereLastActive() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Europe/London")!
+        let now = try #require(ThreadSummary.date("2026-10-07T15:00:00+00:00"))
+        func age(_ text: String) throws -> ChatAge { ChatAge.of(try #require(ThreadSummary.date(text)), now: now, calendar: calendar) }
+        #expect(try age("2026-10-07T00:30:00.123456+00:00") == .today)
+        #expect(try age("2026-10-06T08:00:00+00:00") == .yesterday)
+        #expect(try age("2026-10-01T08:00:00+00:00") == .week)
+        #expect(try age("2026-09-15T08:00:00+00:00") == .month)
+        #expect(try age("2025-01-01T08:00:00+00:00") == .earlier)
+        #expect(ChatAge.of(nil, now: now, calendar: calendar) == .today)  // just made, not read back yet
+    }
+
+    @Test func aChatListFromAnOlderServerHasNoTimes() throws {
+        let json = #"[{"id": "a", "title": "Eggs", "status": null, "outcome": "done", "updated_at": "2026-10-07T15:58:18.5+00:00"}, {"id": "b", "title": "Hi"}]"#
+        let threads = try JSONDecoder().decode([ThreadSummary].self, from: Data(json.utf8))
+        #expect(threads[0].updatedAt == ThreadSummary.date("2026-10-07T15:58:18.5+00:00") && threads[0].updatedAt != nil)
+        #expect(threads[1].updatedAt == nil && threads[1].outcome == nil)
+    }
+
+    @Test func pagesOfOneSiteAreOneStep() {
+        let steps = ["Opening walmart.com", "Opening walmart.com", "Opening walmart.com", "Comparing prices", "Comparing prices",
+                     "Opening target.com", "Opening walmart.com"]
+        #expect(ChatModel.grouped(steps) == [
+            "Browsing walmart.com · 3 pages", "Comparing prices", "Opening target.com", "Opening walmart.com",
+        ])
+    }
+
     @Test func notificationTextIsPlain() {
         #expect(AppModel.plain("**Done.** Your order is [#1](http://x). `ok`") == "Done. Your order is #1. ok")
         #expect(AppModel.plain(String(repeating: "a", count: 300)).count == 200)

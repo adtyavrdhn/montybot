@@ -82,6 +82,10 @@ enum Metrics {
     static let controlSmall: CGFloat = 28
     static let readingWidth: CGFloat = 720  // the chat's column
     static let gutter: CGFloat = 28         // the chat column's side padding
+    /// The narrowest window: the floating sidebar, and beside it a chat that still reads. With Monty's browser open
+    /// beside the chat too, the window makes room for it rather than clip them.
+    static let windowMinWidth: CGFloat = 820
+    static let windowWithBrowserMinWidth: CGFloat = 1140
 }
 
 extension Font {

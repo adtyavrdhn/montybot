@@ -226,13 +226,24 @@ async def add_message(request: Request, user: User) -> Response:
 @auth.signed_in
 async def list_threads(request: Request, user: User) -> Response:
     """Each thread with the status of its unfinished run, if it has one: `running`, `waiting` (for the user) or
-    `queued`; and otherwise how its latest run ended (`outcome`: `done`, `failed` or `stopped`)."""
+    `queued`; and otherwise how its latest run ended (`outcome`: `done`, `failed` or `stopped`); and when it last had
+    something happen (`updated_at`, ISO 8601), which is also the order of the list."""
     async with resources_of(request).pool.connection() as connection:
         threads = await store.list_threads(connection, user.id)
         active = await store.active_runs(connection, user.id)
         outcomes = await store.latest_outcomes(connection, user.id)
+        last_active = await store.last_active(connection, user.id)
     return JSONResponse(
-        [{'id': t.id, 'title': t.title, 'status': active.get(t.id), 'outcome': outcomes.get(t.id)} for t in threads]
+        [
+            {
+                'id': t.id,
+                'title': t.title,
+                'status': active.get(t.id),
+                'outcome': outcomes.get(t.id),
+                'updated_at': at.isoformat() if (at := last_active.get(t.id)) else None,
+            }
+            for t in threads
+        ]
     )
 
 
@@ -382,6 +393,7 @@ async def run_view(connection: Any, user: User, run: Run) -> dict[str, Any]:
         'id': run.id,
         'thread_id': run.thread_id,
         'status': status,
+        'prompt': run.prompt,  # what was asked, so an app can offer to try it again as it was
         'output': run.output,
         'activity': await store.list_activity(connection, user.id, run.id),
         'ask': None if ask is None else ask_json(ask),

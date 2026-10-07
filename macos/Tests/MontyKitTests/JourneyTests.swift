@@ -15,15 +15,20 @@ func site(_ name: String) throws -> String {
     return try #require(sites?[name], "no \(name) in \(file.path)")
 }
 
-/// A fresh person: their own cookies and settings, a new account.
+/// The app as launched on the Mac of the person `id`: their cookies and settings, kept between launches.
 @MainActor
-func person() async throws -> AppModel {
-    let id = UUID().uuidString
-    let app = AppModel(
+func launch(_ id: String) -> AppModel {
+    AppModel(
         serverURL: server!,
         cookies: HTTPCookieStorage.sharedCookieStorage(forGroupContainerIdentifier: "monty-test-\(id)"),
         defaults: UserDefaults(suiteName: "monty-test-\(id)")!
     )
+}
+
+/// A fresh person: their own cookies and settings, a new account.
+@MainActor
+func person(_ id: String = UUID().uuidString) async throws -> AppModel {
+    let app = launch(id)
     await app.start()
     #expect(app.phase == .signedOut)
     try await app.signUp(email: "mac-\(id.prefix(8).lowercased())@example.test", password: "correct horse")
@@ -118,6 +123,16 @@ struct JourneyTests {
         try await eventually("the order") { chat.run?.status == .done }
         // The dev server's shop numbers orders across all test runs.
         #expect(chat.messages.last?.text.range(of: #"#\d+"#, options: .regularExpression) != nil)
+
+        // Opened again later, the chat still reads, with what happened along the way.
+        let id = try #require(chat.threadId)
+        app.open(.chat(nil))
+        app.open(.chat(id))
+        let again = try #require(app.chat)
+        try await eventually("the chat again") { !again.messages.isEmpty }
+        #expect(again.loadError == nil)
+        #expect(again.messages.contains { $0.role == .event && $0.text.hasPrefix("You approved") })
+        #expect(again.messages.contains { $0.role == .event && $0.text.hasPrefix("You took over") })
 
         await app.loadSavedSites()
         #expect(app.savedSites?.contains { $0.site == "127.0.0.1" } == true)
@@ -426,6 +441,214 @@ struct JourneyTests {
         #expect(!app.threads.contains { $0.id == waiting.id } && app.needsYou.isEmpty)
         await app.loadThreads()
         #expect(app.threads.map(\.id) == [failed.id])
+    }
+
+    // The basics: trying again, and coming back to where you were.
+
+    @Test func aStoppedTaskIsTriedAgainAsItWasAsked() async throws {
+        let app = try await person()
+        let prompt = "Ask me my favourite colour and remember it."
+        let chat = try await say(prompt, in: app)
+        try await eventually("the question") { chat.ask != nil }
+        #expect(chat.canStop && !chat.canRetry)
+        await chat.stop()
+        #expect(chat.run?.status == .stopped)
+        #expect(chat.canRetry && chat.lastTask == prompt)
+
+        chat.draft = "something else"
+        chat.editLastTask()
+        #expect(chat.draft == prompt + "\n\nsomething else")
+        chat.draft = ""
+
+        await chat.retry()
+        #expect(!chat.canRetry)
+        try await eventually("the same question again") { chat.ask != nil }
+        #expect(chat.run?.prompt == prompt)
+        #expect(chat.messages.filter { $0.role == .user && $0.text == prompt }.count == 2)
+        await chat.stop()
+    }
+
+    @Test func aFailedTaskIsTriedAgain() async throws {
+        let app = try await person()
+        let chat = try await say("Fail please", in: app)
+        try await eventually("the failure") { chat.run?.status == .failed }
+        let failed = try #require(chat.run?.id)
+        #expect(chat.canRetry)
+        await chat.retry()
+        try await eventually("the new run to fail too") { chat.run?.id != failed && chat.run?.status == .failed }
+        #expect(chat.messages.filter { $0.role == .user }.map(\.text) == ["Fail please", "Fail please"])
+    }
+
+    @Test func relaunchingComesBackToTheSameChatAndDrafts() async throws {
+        let id = UUID().uuidString
+        let app = try await person(id)
+        let chat = try await say("Say hello", in: app)
+        let thread = try #require(chat.threadId)
+        try await eventually("the reply") { chat.run?.status == .done }
+        chat.draft = "half a thought"
+        app.open(.chat(nil))
+        app.chat?.draft = "a new task"
+        app.open(.chat(thread))
+        #expect(app.openThread?.id == thread)
+
+        // Quit, and open the app again: signed in, in the same chat, with what was being written.
+        let again = launch(id)
+        await again.start()
+        #expect(again.user?.email == app.user?.email)
+        #expect(again.route == .chat(thread))
+        try await eventually("the chat") { again.chat?.messages.isEmpty == false }
+        #expect(again.chat?.draft == "half a thought")
+        again.open(.chat(nil))
+        #expect(again.chat?.draft == "a new task")
+
+        // Signing out on purpose forgets them; the next sign-in starts afresh.
+        let email = try #require(again.user?.email)
+        await again.signOut()
+        try await again.signIn(email: email, password: "correct horse")
+        #expect(again.route == .chat(nil) && again.chat?.draft == "")
+        #expect(again.drafts.isEmpty)
+    }
+
+    @Test func relaunchingIntoADeletedChatStartsANewTask() async throws {
+        let id = UUID().uuidString
+        let app = try await person(id)
+        let chat = try await say("Say hello", in: app)
+        let thread = try #require(app.openThread)
+        try await eventually("the reply") { chat.run?.status == .done }
+        try await app.client.delete(thread: thread.id)  // from the web app, while this Mac's app is closed
+
+        let again = launch(id)
+        await again.start()
+        try await eventually("a new task instead") { again.route == .chat(nil) && again.chat?.threadId == nil }
+    }
+
+    @Test func aTaskThatFinishesUnseenIsMarkedUntilOpened() async throws {
+        let app = try await person()
+        var seen: [String] = []
+        app.chatSeen = { seen.append($0) }
+        let hello = try await say("Say hello", in: app)
+        let id = try #require(hello.threadId)
+        await app.loadThreads()  // seen working
+        app.open(.chat(nil))  // and the user looks elsewhere while it finishes
+        try await eventually("the unseen mark") {
+            Task { await app.loadThreads() }
+            return app.unseen.contains(id)
+        }
+        app.open(.chat(id))
+        #expect(!app.unseen.contains(id) && seen.contains(id))  // its notification goes too
+    }
+
+    @Test func aTaskThatFinishedWhileTheAppWasClosedIsMarked() async throws {
+        let id = UUID().uuidString
+        let app = try await person(id)
+        let chat = try await say("Ask me my favourite colour and remember it.", in: app)
+        let thread = try #require(chat.threadId)
+        try await eventually("the question") { chat.ask != nil }
+        let ask = try #require(chat.ask?.id)
+        await app.loadThreads()  // the app last saw it waiting
+        app.open(.chat(nil))
+        try await app.client.answer(ask, .text("green"))  // answered on the web while the Mac app is quit
+        try await eventually("the task to finish") {
+            Task { await app.loadThreads() }
+            return app.threads.first { $0.id == thread }?.status == nil
+        }
+
+        let again = launch(id)
+        again.isActive = false  // launched in the background, as at login
+        await again.start()
+        await again.loadThreads()
+        #expect(again.unseen.contains(thread))
+    }
+
+    @Test func aRenameThatFailsSaysSoAndADeleteOfAGoneChatJustWorks() async throws {
+        let app = try await person()
+        let chat = try await say("Say hello", in: app)
+        try await eventually("the reply") { chat.run?.status == .done }
+        let thread = try #require(app.openThread)
+        try await app.client.delete(thread: thread.id)  // deleted on the web meanwhile
+
+        await app.rename(thread, to: "New name")
+        #expect(app.actionError?.hasPrefix("Couldn't rename the chat.") == true)
+        app.actionError = nil
+
+        await app.delete(thread)
+        #expect(app.actionError == nil)
+        #expect(!app.threads.contains { $0.id == thread.id } && app.route == .chat(nil))
+    }
+
+    @Test func pinnedChatsStayOnTopAcrossLaunches() async throws {
+        let id = UUID().uuidString
+        let app = try await person(id)
+        let first = try await say("Say hello", in: app)
+        try await eventually("the first reply") { first.run?.status == .done }
+        let older = try #require(app.openThread)
+        app.open(.chat(nil))
+        let second = try await say("Say hello", in: app)
+        try await eventually("the second reply") { second.run?.status == .done }
+        await app.loadThreads()
+        #expect(app.sidebarOrder.map(\.id).first != older.id)  // the newest is first...
+        #expect(app.threads.allSatisfy { $0.updatedAt != nil })  // ...as the server says, with when
+
+        app.setPinned(older, true)
+        #expect(app.sidebarOrder.first?.id == older.id)  // ...unless one is pinned
+        let again = launch(id)
+        await again.start()
+        await again.loadThreads()
+        #expect(again.pinned == [older.id] && again.sidebarOrder.first?.id == older.id)
+        again.setPinned(older, false)
+        #expect(again.pinned.isEmpty)
+    }
+
+    @Test func aNewMessageInAnOldChatMovesItToTheTop() async throws {
+        let app = try await person()
+        let first = try await say("Say hello", in: app)
+        try await eventually("the first reply") { first.run?.status == .done }
+        let older = try #require(first.threadId)
+        app.open(.chat(nil))
+        let second = try await say("Say hello", in: app)
+        try await eventually("the second reply") { second.run?.status == .done }
+        await app.loadThreads()
+        #expect(app.threads.first?.id != older)
+        app.open(.chat(older))
+        try await eventually("the chat") { app.chat?.messages.isEmpty == false }
+        _ = try await say("Say hello again", in: app)
+        #expect(app.threads.first?.id == older)  // at once, before the list is read again
+        await app.loadThreads()
+        #expect(app.threads.first?.id == older)
+    }
+
+    @Test func aQuestionIsAnsweredFromItsNotification() async throws {
+        let app = try await person()
+        var notices: [Notice] = []
+        app.notify = { notices.append($0) }
+        let asking = try await say("Ask me my favourite colour and remember it.", in: app)
+        let thread = try #require(asking.threadId)
+        app.open(.chat(nil))  // looking elsewhere when it asks
+        try await eventually("the question notice", seconds: 20) {
+            Task { await app.loadThreads() }
+            return notices.contains { $0.kind == .question && $0.threadId == thread }
+        }
+        let ask = try #require(notices.first { $0.threadId == thread }?.askId)
+        #expect(await app.answerFromNotification(ask, in: thread, text: "  green  "))
+        app.open(.chat(thread))
+        try await eventually("the reply") { app.chat?.run?.status == .done }
+        #expect(app.chat?.messages.contains { $0.role == .user && $0.text == "green" } == true)
+
+        // Answered again from an old notification: not taken, and kept for the user.
+        #expect(await !app.answerFromNotification(ask, in: thread, text: "blue"))
+        try await eventually("the answer kept") { app.chat?.draft.contains("blue") == true }
+    }
+
+    @Test func anApprovalCanBeDeclinedWithAReason() async throws {
+        let app = try await person()
+        let chat = try await say("Tell me when a delivery slot opens at \(try site("slots"))", in: app)
+        try await eventually("the approval") { chat.ask?.kind == .approval }
+        chat.denying = true  // the Task menu's Don't Approve…
+        await chat.answer(.deny("Not this week"))
+        try await eventually("the run to carry on") { chat.ask == nil }
+        #expect(!chat.denying && chat.answerError == nil)
+        try await eventually("the reply") { chat.run?.status.isActive == false }
+        #expect(chat.messages.contains { $0.role == .event && $0.text.hasPrefix("You said no to") })
     }
 
     @Test func signingInWithVoiceOverThroughTheOutline() async throws {

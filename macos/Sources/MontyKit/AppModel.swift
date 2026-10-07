@@ -8,6 +8,30 @@ public enum Route: Hashable, Sendable {
     case files
     case signIns
     case memory
+
+    /// The route as kept in settings, to come back to it at the next launch.
+    var stored: String {
+        switch self {
+        case .chat(let id): "chat:" + (id ?? "")
+        case .schedules: "schedules"
+        case .files: "files"
+        case .signIns: "signIns"
+        case .memory: "memory"
+        }
+    }
+
+    init?(stored: String) {
+        switch stored {
+        case "schedules": self = .schedules
+        case "files": self = .files
+        case "signIns": self = .signIns
+        case "memory": self = .memory
+        default:
+            guard stored.hasPrefix("chat:") else { return nil }
+            let id = String(stored.dropFirst(5))
+            self = .chat(id.isEmpty ? nil : id)
+        }
+    }
 }
 
 /// An answer the user is writing, and the chat its question is in.
@@ -23,6 +47,8 @@ public struct Notice: Equatable, Sendable {
     public let threadId: String
     public let title: String
     public let body: String
+    /// The question or approval it is about, so a question can be answered from the notification.
+    public var askId: String? = nil
 }
 
 /// The whole app's state: who is signed in, their chats, the open page, and their schedules, files and so on.
@@ -43,7 +69,9 @@ public final class AppModel {
     public private(set) var client: APIClient
     public private(set) var threads: [ThreadSummary] = []
     public private(set) var threadsLoaded = false
-    public private(set) var route: Route = .chat(nil)
+    public private(set) var route: Route = .chat(nil) {
+        didSet { if let id = persistedUser { defaults.set(route.stored, forKey: "route.\(id)") } }
+    }
     public private(set) var chat: ChatModel?
     /// Why the user is looking at the sign-in screen, when it is not their first time: "Your session ended".
     public private(set) var signedOutReason: String?
@@ -56,21 +84,44 @@ public final class AppModel {
     public private(set) var memories: [Memory]?
     public var libraryError: String?
 
-    /// What the user is typing in each chat ("new" for a new one), kept while they look elsewhere.
-    public var drafts: [String: String] = [:]
+    /// What the user is typing in each chat ("new" for a new one), kept while they look elsewhere and after they quit.
+    public var drafts: [String: String] = [:] {
+        didSet { if let id = persistedUser { defaults.set(drafts.filter { !$0.value.isEmpty }, forKey: "drafts.\(id)") } }
+    }
+    /// A chat the user asked to delete or rename, from wherever they asked (sidebar, toolbar, menu): the window asks
+    /// them to confirm, or for the new title.
+    public var deleting: ThreadSummary?
+    public var renaming: ThreadSummary?
+    /// Something the user did to a chat (rename, delete) didn't work: the window says so.
+    public var actionError: String?
+    /// Chats the user pinned to the top of the sidebar, in the order they pinned them. Kept on this Mac, through
+    /// signing out: a preference, not something they wrote.
+    public private(set) var pinned: [String] = [] {
+        didSet { if let id = persistedUser { defaults.set(pinned, forKey: "pinned.\(id)") } }
+    }
+    /// Chats that finished while the user was not looking at them, until they open them.
+    public private(set) var unseen: Set<String> = [] {
+        didSet { if let id = persistedUser { defaults.set(Array(unseen), forKey: "unseen.\(id)") } }
+    }
     /// What the user is typing in answer to each open question, by question id, with the chat it is in.
     public var answerDrafts: [String: AnswerDraft] = [:]
     /// Whether the user is driving Monty's browser: until they hand it back or close it, the app stays there.
     public var isTakingOver: Bool { chat?.live.map { !$0.state.isOver } ?? false }
     /// Whether the app is in front, and its window open; notifications are for when the user is not looking.
-    public var isActive = true
-    public var isWindowVisible = true
+    public var isActive = true { didSet { if isActive { seeOpenChat() } } }
+    public var isWindowVisible = true {
+        didSet {
+            if isWindowVisible { seeOpenChat() } else { chat?.watching = false }  // no pictures for a closed window
+        }
+    }
     /// Called for each notice; the app shows it in Notification Center.
     public var notify: ((Notice) -> Void)?
     /// Called when the chat list changes (for the Dock badge), and after the user's first task (to ask for
     /// permission to notify, when it makes sense to them).
     public var threadsChanged: (() -> Void)?
     public var firstTaskSent: (() -> Void)?
+    /// Called when the user has seen a chat: its notifications are old news.
+    public var chatSeen: ((String) -> Void)?
 
     public var user: User? {
         if case .signedIn(let user) = phase { return user }
@@ -81,6 +132,11 @@ public final class AppModel {
     /// Chats waiting for the user, most recent first.
     public var needsYou: [ThreadSummary] { threads.filter { $0.status == .waiting } }
     public var working: [ThreadSummary] { threads.filter { $0.status?.isWorking == true } }
+    /// The chats in the sidebar's order: needing the user, pinned, then the rest.
+    public var sidebarOrder: [ThreadSummary] {
+        let pins = pinned.compactMap { id in threads.first { $0.id == id && $0.status != .waiting } }
+        return needsYou + pins + threads.filter { $0.status != .waiting && !pinned.contains($0.id) }
+    }
 
     private let cookies: HTTPCookieStorage
     private let defaults: UserDefaults
@@ -92,6 +148,8 @@ public final class AppModel {
     /// Counts changes made here to the chat list; a read that started before one is stale.
     private var localChanges = 0
     private var retrying: Task<Void, Never>?
+    /// Whose drafts and place in the app are kept in settings; nil while signed out.
+    private var persistedUser: String?
 
     public init(serverURL: URL? = nil, cookies: HTTPCookieStorage = .shared, defaults: UserDefaults = .standard) {
         self.cookies = cookies
@@ -183,6 +241,14 @@ public final class AppModel {
     }
 
     public func signOut() async {
+        // Signing out on purpose forgets what was kept for next time; a session that ends by itself keeps it.
+        if let id = user?.id {
+            persistedUser = nil  // nothing typed or opened while signing out is kept again
+            defaults.removeObject(forKey: "drafts.\(id)")
+            defaults.removeObject(forKey: "route.\(id)")
+            defaults.removeObject(forKey: "unseen.\(id)")
+            defaults.removeObject(forKey: "active.\(id)")
+        }
         try? await client.signOut()
         client.clearSession()
         reset()
@@ -205,7 +271,9 @@ public final class AppModel {
         reset()
         defaults.set(url.absoluteString, forKey: "serverURL")
         client = APIClient(baseURL: url, cookies: cookies, siteLogin: Self.siteLogins(defaults)[url.absoluteString])
-        phase = .signedOut
+        // As at launch: a private server asks for its site login first, and one that can't be reached says so.
+        phase = .launching
+        Task { await start() }
     }
 
     private func signedIn(_ user: User) {
@@ -213,11 +281,23 @@ public final class AppModel {
         offline = false
         signedOutReason = nil
         phase = .signedIn(user)
-        open(.chat(nil))
+        // Back where the user was, with what they were writing: a chat deleted meanwhile becomes a new task.
+        drafts = defaults.dictionary(forKey: "drafts.\(user.id)") as? [String: String] ?? [:]
+        unseen = Set(defaults.stringArray(forKey: "unseen.\(user.id)") ?? [])
+        pinned = defaults.stringArray(forKey: "pinned.\(user.id)") ?? []
+        persistedUser = user.id
+        open(defaults.string(forKey: "route.\(user.id)").flatMap(Route.init(stored:)) ?? .chat(nil))
         startWatching()
     }
 
+    /// The open chat's summary, as the chat list has it.
+    public var openThread: ThreadSummary? {
+        guard case .chat(let id?) = route else { return nil }
+        return threads.first { $0.id == id } ?? chat.flatMap { $0.threadId == id ? ThreadSummary(id: id, title: $0.title) : nil }
+    }
+
     private func reset() {
+        persistedUser = nil  // before clearing: what is kept for next time stays
         retrying?.cancel()
         watching?.cancel()
         watching = nil
@@ -229,6 +309,11 @@ public final class AppModel {
         notified = []
         drafts = [:]
         answerDrafts = [:]
+        deleting = nil
+        renaming = nil
+        actionError = nil
+        unseen = []
+        pinned = []
         schedules = nil
         files = nil
         savedSites = nil
@@ -238,11 +323,25 @@ public final class AppModel {
         threadsChanged?()
     }
 
+    /// Who is signed in, for a chat to know whose it is.
+    var userId: String? { user?.id }
+
     /// A message from a chat that closed before it could send: keep it as that chat's draft, and show it if the
-    /// chat is open again.
-    func keepDraft(_ text: String, for key: String) {
-        let current = (drafts[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let kept = current.isEmpty ? text : text + "\n\n" + current
+    /// chat is open again. It is `owner`'s: if they are not the one signed in now (the session ended meanwhile), it
+    /// waits in their saved drafts for their next sign-in.
+    func keepDraft(_ text: String, for key: String, owner: String?) {
+        func joined(_ current: String?) -> String {
+            let current = (current ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return current.isEmpty ? text : text + "\n\n" + current
+        }
+        guard let owner, owner == persistedUser else {
+            guard let owner else { return }
+            var saved = defaults.dictionary(forKey: "drafts.\(owner)") as? [String: String] ?? [:]
+            saved[key] = joined(saved[key])
+            defaults.set(saved, forKey: "drafts.\(owner)")
+            return
+        }
+        let kept = joined(drafts[key])
         drafts[key] = kept
         if let chat, (chat.threadId ?? "new") == key { chat.draft = kept }
     }
@@ -250,8 +349,12 @@ public final class AppModel {
     // MARK: navigation
 
     public func open(_ route: Route) {
-        // Mid sign-in, the browser stays on screen: a shortcut or a menu must not silently abandon it.
-        if isTakingOver, route != self.route { return }
+        // Mid sign-in, the browser stays on screen: a shortcut, a menu or a notification must not abandon it, and
+        // says why nothing happened.
+        if isTakingOver, route != self.route {
+            chat?.live?.say("Finish signing in and choose I'm done, or Not now (⇧⌘T), to go elsewhere.")
+            return
+        }
         libraryError = nil
         if case .chat(let id) = route, let chat, chat.threadId == id, id != nil {
             self.route = route
@@ -264,6 +367,7 @@ public final class AppModel {
         chat?.close()
         chat = nil
         self.route = route
+        seeOpenChat()
         switch route {
         case .chat(let id):
             let title = threads.first(where: { $0.id == id })?.title ?? ""
@@ -277,11 +381,53 @@ public final class AppModel {
         }
     }
 
+    /// The user is looking at the open chat (the app in front, its window on screen): it is seen.
+    private func seeOpenChat() {
+        guard isActive, isWindowVisible, case .chat(let id?) = route else { return }
+        unseen.remove(id)
+        chatSeen?(id)
+    }
+
+    /// An answer typed in a notification. True if Monty took it; otherwise it is kept with its chat, which opens with
+    /// it in the answer box (or the message box, if the question closed meanwhile).
+    public func answerFromNotification(_ askId: String, in threadId: String, text: String) async -> Bool {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, user != nil else { return false }
+        do {
+            try await client.answer(askId, .text(text))
+            refreshThreads()
+            if chat?.threadId == threadId { await chat?.refresh() }
+            return true
+        } catch APIError.signedOut {
+            sessionEnded()
+        } catch {
+            answerDrafts[askId] = AnswerDraft(threadId: threadId, text: text)
+            if chat?.threadId == threadId { await chat?.refresh() }  // where it can go now, with a word on why
+        }
+        return false
+    }
+
+    public func setPinned(_ thread: ThreadSummary, _ pin: Bool) {
+        pinned.removeAll { $0 == thread.id }
+        if pin { pinned.append(thread.id) }
+    }
+
+    /// Reads the open page again: on coming back to the app, and from a page that couldn't load.
+    public func reloadPage() {
+        switch route {
+        case .chat: Task { await chat?.refresh() }
+        case .schedules: Task { await loadSchedules() }
+        case .files: Task { await loadFiles() }
+        case .signIns: Task { await loadSavedSites() }
+        case .memory: Task { await loadMemories() }
+        }
+    }
+
     func chatCreated(_ chat: ChatModel) {
         guard self.chat === chat, let id = chat.threadId else { return }
         route = .chat(id)
         if !threads.contains(where: { $0.id == id }) {
-            threads.insert(ThreadSummary(id: id, title: chat.title, status: .queued), at: 0)
+            threads.insert(ThreadSummary(id: id, title: chat.title, status: .queued, updatedAt: Date()), at: 0)
             known[id] = .some(.queued)  // so its first question notifies, even before the list is read again
             localChanges += 1
             threadsChanged?()
@@ -289,6 +435,10 @@ public final class AppModel {
     }
 
     func chatVanished(_ id: String) {
+        drafts[id] = nil
+        unseen.remove(id)
+        pinned.removeAll { $0 == id }
+        chatSeen?(id)
         threads.removeAll { $0.id == id }
         localChanges += 1
         threadsChanged?()
@@ -304,7 +454,14 @@ public final class AppModel {
         if isActive, isWindowVisible, self.chat === chat { known[id] = .some(status) }
         if threads[index].status != status {
             let outcome = status == nil ? chat.run?.status : nil
-            threads[index] = ThreadSummary(id: id, title: chat.title.isEmpty ? threads[index].title : chat.title, status: status, outcome: outcome)
+            let title = chat.title.isEmpty ? threads[index].title : chat.title
+            if status != nil, threads[index].status == nil {
+                // A new task in an old chat: it is the latest now, at the top, as the next read will have it.
+                threads.remove(at: index)
+                threads.insert(ThreadSummary(id: id, title: title, status: status, updatedAt: Date()), at: 0)
+            } else {
+                threads[index] = threads[index].with(title: title, status: status, outcome: outcome)
+            }
             localChanges += 1
             threadsChanged?()
         }
@@ -379,6 +536,25 @@ public final class AppModel {
             if known[thread.id] != nil ? before != thread.status : thread.status == .waiting { changed.append((thread, before)) }
             known[thread.id] = thread.status
         }
+        // A task that ended while the user looked elsewhere is new to them, notified or not; at launch, one that was
+        // going on when the app last looked and has ended since, while it was closed.
+        let looking = { (id: String) in self.isActive && self.isWindowVisible && self.chat?.threadId == id }
+        if quietly, let user = persistedUser {
+            let wasActive = Set(defaults.stringArray(forKey: "active.\(user)") ?? [])
+            for thread in fresh where thread.status == nil && wasActive.contains(thread.id) && !looking(thread.id) {
+                unseen.insert(thread.id)
+            }
+        } else if !quietly {
+            for (thread, before) in changed where thread.status == nil && before?.isActive == true && !looking(thread.id) {
+                unseen.insert(thread.id)
+            }
+        }
+        unseen.formIntersection(fresh.map(\.id))  // deleted elsewhere
+        let ids = Set(fresh.map(\.id))
+        if pinned.contains(where: { !ids.contains($0) }) { pinned.removeAll { !ids.contains($0) } }
+        if let user = persistedUser {
+            defaults.set(fresh.filter { $0.status?.isActive == true }.map(\.id), forKey: "active.\(user)")
+        }
         // Until the user has been told, a change is not known: if telling fails (a blip reading the chat), the
         // next read of the list tries again.
         func untold(_ thread: ThreadSummary, _ before: RunStatus?) { known[thread.id] = .some(before) }
@@ -389,7 +565,7 @@ public final class AppModel {
                 guard let detail = try? await client.thread(thread.id) else { untold(thread, before); continue }
                 guard let ask = detail.run?.ask, notified.insert(ask.id).inserted else { continue }
                 let kind = Notice.Kind(rawValue: ask.kind.rawValue) ?? .question
-                notify(Notice(kind: kind, threadId: thread.id, title: Self.headline(for: ask.kind), body: ask.prompt))
+                notify(Notice(kind: kind, threadId: thread.id, title: Self.headline(for: ask.kind), body: ask.prompt, askId: ask.id))
             } else if thread.status == nil, before?.isActive == true, !looking {
                 guard let detail = try? await client.thread(thread.id) else { untold(thread, before); continue }
                 guard let run = detail.run else { continue }
@@ -430,9 +606,9 @@ public final class AppModel {
     public func rename(_ thread: ThreadSummary, to title: String) async {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, title != thread.title else { return }
-        if await library({ try await self.client.rename(thread: thread.id, to: title) }) != nil {
+        if await act("Couldn't rename the chat", { try await self.client.rename(thread: thread.id, to: title) }) != nil {
             if let index = threads.firstIndex(where: { $0.id == thread.id }) {
-                threads[index] = ThreadSummary(id: thread.id, title: title, status: threads[index].status, outcome: threads[index].outcome)
+                threads[index] = threads[index].with(title: title, status: threads[index].status, outcome: threads[index].outcome)
             }
             chat?.renamed(thread.id, to: title)
             localChanges += 1
@@ -442,8 +618,17 @@ public final class AppModel {
 
     /// Deletes the chat; if it is the one on screen, a new task takes its place.
     public func delete(_ thread: ThreadSummary) async {
-        guard await library({ try await self.client.delete(thread: thread.id) }) != nil else { return }
-        drafts[thread.id] = nil
+        do {
+            try await client.delete(thread: thread.id)
+        } catch APIError.server(status: 404, _) {
+            // Deleted elsewhere already: gone either way.
+        } catch APIError.signedOut {
+            sessionEnded()
+            return
+        } catch {
+            actionError = "Couldn't delete the chat. \(error.localizedDescription)"
+            return
+        }
         answerDrafts = answerDrafts.filter { $0.value.threadId != thread.id }
         chatVanished(thread.id)
     }
@@ -481,6 +666,18 @@ public final class AppModel {
 
     public func download(_ file: WorkspaceFile) async -> (data: Data, name: String)? {
         await library { try await self.client.download(file.path) }
+    }
+
+    /// Does something the user asked for to a chat; if it fails, says so with `what` went wrong.
+    private func act<T>(_ what: String, _ call: () async throws -> T) async -> T? {
+        do {
+            return try await call()
+        } catch APIError.signedOut {
+            sessionEnded()
+        } catch {
+            actionError = "\(what). \(error.localizedDescription)"
+        }
+        return nil
     }
 
     private func library<T>(_ call: () async throws -> T) async -> T? {
