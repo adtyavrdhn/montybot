@@ -147,16 +147,25 @@ async def test_a_phone_gets_the_page_at_its_size_until_the_give_back(engine: str
                         await user.wait_until(lambda: user.frame is not None)
                         assert user.frame is not None
                         desktop = (user.frame.frame.width, user.frame.frame.height)
-                        await user.send(ViewportSize(width=390, height=700, scale=3))
+                        await user.send(ViewportSize(width=390, height=700))
                         if engine == 'chromium':
                             await user.wait_until(lambda: user.frame is not None and user.frame.frame.width == 390)
                             assert user.frame.frame.height == 700
+                            await user.send(ViewportSize(width=1280, height=700))  # turned wide: its own size again
+                            await user.wait_until(lambda: user.frame is not None and user.frame.frame.width == 1280)
+                            await user.send(ViewportSize(width=390, height=700))
+                            await user.wait_until(lambda: user.frame is not None and user.frame.frame.width == 390)
                         else:
                             await user.send(Press(key='Tab'))  # the size was ignored, and the connection works
                             await asyncio.sleep(0.5)
                             assert (user.frame.frame.width, user.frame.frame.height) == desktop
                         assert user.errors == []
-                        await user.give_back()
+                    # The phone's connection dropped without a give-back; the user comes back on a laptop.
+                    async with LiveViewClient.connect(ws, session=auth.sign_in(USER)) as laptop:
+                        await laptop.wait_until(lambda: laptop.frame is not None)
+                        assert laptop.frame is not None
+                        assert (laptop.frame.frame.width, laptop.frame.frame.height) == desktop
+                        await laptop.give_back()
                 after = (await service.snapshot(run_id=RUN, user_id=USER)).snapshot.text
                 assert after == before
                 if engine == 'chromium':

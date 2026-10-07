@@ -44,9 +44,6 @@ ENGINE = 'chromium'
 _log = logging.getLogger(__name__)
 _BUTTON_BITS: dict[MouseButton, int] = {'left': 1, 'right': 2, 'middle': 4}
 _TEXT_SUPPRESSING = MODIFIER_BITS['Alt'] | MODIFIER_BITS['Control'] | MODIFIER_BITS['Meta']
-_MAX_SCALE = 2
-"""The most device pixels per CSS pixel a phone-sized page gets, so sites see a phone-like `devicePixelRatio` and
-pick sharp images, without rendering at 3x. The screencast sends frames in CSS pixels whatever this is."""
 
 
 async def _call(cdp: CDPSession, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -75,6 +72,10 @@ class CdpFrameSource:
         self._buttons: list[MouseButton] = []
         self._pointer = Point(x=0, y=0)
         self._viewport: Viewport | None = None
+        """The phone size the user asked for, or None for the browser's own."""
+        self._emulating = False
+        """Whether a phone size is applied to the tab now. Set only once Chromium has it, so a failed or cancelled
+        call can never leave a size applied that `_let_go` does not know to clear."""
         viewport = page.viewport_size
         self._size = (viewport['width'], viewport['height']) if viewport else (0, 0)
         self._lock = asyncio.Lock()
@@ -115,12 +116,12 @@ class CdpFrameSource:
         async with self._lock:
             if self._closed or viewport == self._viewport:
                 return
-            self._viewport = viewport
             if self._cdp is not None:
                 try:
-                    await self._emulate(self._cdp)
+                    await self._emulate(self._cdp, viewport)
                 except PlaywrightError as error:
                     raise ActionFailed(f'{ENGINE}: {error.message}') from error
+            self._viewport = viewport
 
     async def close(self) -> None:
         if self._closed:
@@ -193,36 +194,39 @@ class CdpFrameSource:
             cdp.on('Page.screencastFrame', on_frame)
             self._cdp = cdp
             if self._viewport is not None:
-                await self._emulate(cdp)
+                await self._emulate(cdp, self._viewport)
             await _call(cdp, 'Page.startScreencast', {'format': 'jpeg', 'quality': self._quality})
         await self._refresh_tabs()
 
     async def _let_go(self, cdp: CDPSession) -> None:
-        """Leave the tab as the user found it: buttons up, its own size, no screencast."""
-        if self._viewport is not None:
-            # First, and on its own: detaching alone leaves the size in place, so the agent would get phone-sized
-            # screenshots, and a failure below must not skip it.
-            with suppress(PlaywrightError):
-                await _call(cdp, 'Emulation.clearDeviceMetricsOverride')
+        """Leave the tab as the user found it: buttons up (where the user left them), no screencast, its own size.
+        Each step on its own, so a failure cannot skip the next: detaching alone would leave a phone size in place,
+        and the agent would get phone-sized screenshots."""
         with suppress(PlaywrightError):
             await self._release_buttons(cdp)
+        with suppress(PlaywrightError):
             await _call(cdp, 'Page.stopScreencast')
+        with suppress(PlaywrightError):
+            await self._emulate(cdp, None)
+        with suppress(PlaywrightError):
             await cdp.detach()
 
-    async def _emulate(self, cdp: CDPSession) -> None:
-        """Apply `self._viewport` to the tab: a phone's size and layout, or the tab's own size back."""
-        viewport = self._viewport
+    async def _emulate(self, cdp: CDPSession, viewport: Viewport | None) -> None:
+        """Give the tab a phone's size and layout, or (None) its own size back."""
         if viewport is None:
-            await _call(cdp, 'Emulation.clearDeviceMetricsOverride')
+            if self._emulating:
+                await _call(cdp, 'Emulation.clearDeviceMetricsOverride')
+                self._emulating = False
             return
         metrics = {
             'width': viewport.width,
             'height': viewport.height,
-            'deviceScaleFactor': min(viewport.scale, _MAX_SCALE),
+            # 1: the screencast sends frames in CSS pixels, so more would cost rendering and show nothing sharper.
+            'deviceScaleFactor': 1,
             'mobile': True,  # the page's meta viewport applies, so sites show their phone layout
         }
         await _call(cdp, 'Emulation.setDeviceMetricsOverride', metrics)
-        self._size = (viewport.width, viewport.height)  # until the next frame says so
+        self._emulating = True
 
     async def _refresh_tabs(self) -> None:
         for tab_id, page in list(self._tabs.items()):

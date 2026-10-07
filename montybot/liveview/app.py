@@ -57,6 +57,9 @@ CLOSE_REPLACED = 4409
 CLOSE_ENDED = 4410
 """The hand-off is over: given back, timed out, or the run closed."""
 
+PHONE_HEIGHT_LIMIT = 2_000
+"""The tallest phone layout asked of the browser, in CSS pixels, whatever a page claims to have room for."""
+
 PHONE_WIDTH = 900
 """A page narrower than this, in CSS pixels, gets the bot's browser laid out at its own size, as a phone's browser
 would: a desktop page shrunk to a phone's width is too small to read or tap. A wider page keeps the browser's own
@@ -307,7 +310,7 @@ class _Connection:
         """Lay the browser out for a phone, or give it its own size back. The source restores the size when it
         closes, so the agent never sees the phone layout."""
         small = size.width < PHONE_WIDTH
-        viewport = Viewport(width=size.width, height=size.height, scale=size.scale) if small else None
+        viewport = Viewport(width=size.width, height=min(size.height, PHONE_HEIGHT_LIMIT)) if small else None
         with suppress(NotSupported):  # Servo and polled engines: the picture is scaled to fit instead
             await self._source.set_viewport(viewport)
 

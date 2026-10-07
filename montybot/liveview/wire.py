@@ -6,7 +6,7 @@ JSON header of that length (`seq`, `width`, `height`, `mime`), then the image.
 
     page -> server   mouse_down {x, y, button}   mouse_move {x, y}   mouse_up {x, y, button}   click {x, y}
                      type {text}   press {key, modifiers}   scroll {delta_x, delta_y, x?, y?}
-                     switch_tab {tab_id}   viewport {width, height, scale}   give_back {}
+                     switch_tab {tab_id}   viewport {width, height}   give_back {}
     server -> page   hello {handoff_id, reason}   tabs {tabs: [{tab_id, url, title, active}]}   error {message}
                      ended {given_back}   and binary frames
 """
@@ -38,7 +38,6 @@ MAX_MESSAGE = 64 * 1024
 _MIMES = ('image/jpeg', 'image/png')
 _SIZES = (100, 10_000)
 """The smallest and largest `viewport` width and height, in CSS pixels."""
-_SCALES = (0.5, 8)
 
 
 class WireError(ValueError):
@@ -53,12 +52,10 @@ class SwitchTab:
 
 @dataclass(frozen=True, kw_only=True)
 class ViewportSize:
-    """The room the page has for the picture, in CSS pixels, and its `devicePixelRatio`. Sent when the page connects
-    and when it resizes."""
+    """The room the page has for the picture, in CSS pixels. Sent when the page connects and when it resizes."""
 
     width: int
     height: int
-    scale: float
     kind: Literal['viewport'] = 'viewport'
 
 
@@ -134,7 +131,6 @@ def decode_client(text: str) -> ClientMessage:
             return ViewportSize(
                 width=round(_bounded(data, 'width', _SIZES)),
                 height=round(_bounded(data, 'height', _SIZES)),
-                scale=_bounded(data, 'scale', _SCALES),
             )
         case 'give_back':
             return GiveBackRequest()
@@ -165,8 +161,8 @@ def encode_client(message: ClientMessage) -> str:
                 data |= {'x': at.x, 'y': at.y}
         case SwitchTab(tab_id=tab_id):
             data = {'kind': message.kind, 'tab_id': tab_id}
-        case ViewportSize(width=width, height=height, scale=scale):
-            data = {'kind': message.kind, 'width': width, 'height': height, 'scale': scale}
+        case ViewportSize(width=width, height=height):
+            data = {'kind': message.kind, 'width': width, 'height': height}
         case GiveBackRequest():
             data = {'kind': message.kind}
     return json.dumps(data)

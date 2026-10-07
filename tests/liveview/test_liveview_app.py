@@ -286,7 +286,7 @@ async def test_a_size_the_engine_cannot_use_is_ignored() -> None:
     """The polled `FakeBrowser` cannot resize: the page's size is dropped quietly, and the user keeps driving."""
     async with live() as setup, setup.connect() as client:
         await client.wait_until(lambda: client.hello is not None)
-        await client.send(ViewportSize(width=390, height=700, scale=3))
+        await client.send(ViewportSize(width=390, height=700))
         await client.send(Press(key='Tab'))
         await eventually(lambda: performed(setup.browser) == [Press(key='Tab')])
         assert client.errors == []

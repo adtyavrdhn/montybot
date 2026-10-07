@@ -41,8 +41,6 @@ class Viewport:
     """In CSS pixels."""
     height: int
     """In CSS pixels."""
-    scale: float
-    """The screen's device pixels per CSS pixel (`devicePixelRatio`)."""
 
 
 @dataclass(frozen=True, kw_only=True)
