@@ -43,7 +43,7 @@ from pydantic_monty import (
 from montybot.browser.contract import BrowserError, Click, Navigate, Press, Type
 from montybot.browser.service import UserBusy
 from montybot.browser.state import BLANK_URL
-from montybot.browsing import Session, host_of, refused_url, target_of
+from montybot.browsing import BROWSER_BUSY, Session, host_of, refused_url, target_of
 from montybot.deps import RunDeps
 from montybot.observability import timed, timing
 from montybot.resources import Resources, current
@@ -139,9 +139,7 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
             try:
                 page = await use()
             except UserBusy:
-                raise RuntimeError(
-                    'another of your tasks is using the browser; try again when it has finished'
-                ) from None
+                raise RuntimeError(BROWSER_BUSY) from None
             except BrowserError as error:
                 raise RuntimeError(str(error)) from None
             # A click or a redirect can land anywhere a page links to; the agent may not stay on a private address.

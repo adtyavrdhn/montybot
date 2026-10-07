@@ -25,6 +25,7 @@ class MockAPI:
     files: list[dict[str, object]] = field(default_factory=list)
     files_truncated: bool = False
     download_status: int = 200
+    thread_status: str | None = None
     calls: list[tuple[str, str, object]] = field(default_factory=list)
 
     def handle(self, route: Route) -> None:
@@ -49,7 +50,11 @@ class MockAPI:
             self.signed_in = True
             status = 201 if path == '/api/signup' else 200
         elif path == '/api/threads' and method == 'GET':
-            result = [{'id': THREAD, 'title': 'Compare flights to Lisbon'}] if self.messages else []
+            result = (
+                [{'id': THREAD, 'title': 'Compare flights to Lisbon', 'status': self.thread_status}]
+                if self.messages
+                else []
+            )
         elif path == '/api/threads' and method == 'POST':
             assert isinstance(body, dict)
             self.messages = [
@@ -83,6 +88,9 @@ class MockAPI:
                 self.schedules[0]['paused'] = path.endswith('/pause')
         elif path.startswith('/api/asks/'):
             self.run = None
+        elif path.endswith('/stop'):
+            self.messages.append({'role': 'assistant', 'text': 'You stopped this.'})
+            self.run = {'id': 'run', 'thread_id': THREAD, 'status': 'stopped', 'activity': [], 'ask': None}
         elif path.endswith('/live'):
             result = {'url': '/mock-live'}
         elif path == '/mock-live':
@@ -257,10 +265,11 @@ def test_asks(frontend: tuple[Page, MockAPI], kind: str) -> None:
     else:
         page.get_by_role('button', name='Take over the browser', exact=True).click()
         expect(page.locator('#live')).to_be_visible()
-        expect(page.locator('#browser-label')).to_contain_text('You have the browser')
+        expect(page.locator('#takeover')).to_contain_text('You are driving')
         assert ('POST', '/api/runs/run/live', {}) in mock.calls
-        page.click('#close-browser')
-        expect(page.locator('#browser')).not_to_be_visible()
+        page.get_by_role('button', name='Back to chat').click()
+        expect(page.locator('#takeover')).not_to_be_visible()
+        expect(page.locator('#ask')).to_be_visible()  # the hand-off waits until the browser is given back
 
 
 @pytest.mark.parametrize('width', [1440, 390])
@@ -367,7 +376,8 @@ def streaming_chat(page: Page, mock: MockAPI) -> None:
     mock.messages = [{'role': 'user', 'text': 'Compare flights'}]
     mock.run = {'id': 'run', 'status': 'running', 'activity': [], 'ask': None}
     page.goto(f'http://monty.test/#/t/{THREAD}')
-    expect(page.locator('#send')).to_be_disabled()
+    expect(page.locator('#stop')).to_be_visible()
+    expect(page.locator('#send')).not_to_be_visible()
     page.wait_for_function('window.eventSources.length === 1')
     assert page.evaluate('window.eventSources[0].url') == '/api/runs/run/events'
 
@@ -542,7 +552,7 @@ def test_sse_waiting_preserves_answer_and_rejects_wrong_run(frontend: tuple[Page
     }
     emit(page, 'status', wrong)
     emit(page, 'status', {**wrong, 'id': 'run', 'thread_id': 'other-thread'})
-    expect(page.locator('#send')).to_be_disabled()
+    expect(page.locator('#stop')).to_be_visible()
     assert not page.evaluate('window.eventSources[0].closed')
     waiting = {
         'id': 'run',
@@ -557,5 +567,74 @@ def test_sse_waiting_preserves_answer_and_rejects_wrong_run(frontend: tuple[Page
     emit(page, 'status', waiting)
     expect(answer).to_have_value('Lisbon')
     expect(page.locator('#status')).not_to_be_visible()
-    expect(page.locator('#send')).to_be_disabled()
+    expect(page.locator('#stop')).to_be_visible()
     assert not page.evaluate('window.eventSources[0].closed')
+
+
+def test_replies_are_formatted_and_safe(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    mock.messages = [
+        {'role': 'user', 'text': 'Top stories, **please**'},
+        {
+            'role': 'assistant',
+            'text': 'Here are the **top 2**:\n\n1. *First* story\n2. `second` story\n\n'
+            '| Title | Points |\n|---|---|\n| One | 410 |\n\n'
+            'More at https://news.example.test/top. [Bad](javascript:alert(1)) <img src=x onerror=alert(1)>',
+        },
+    ]
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    reply = page.locator('.msg.assistant')
+    expect(reply.locator('strong')).to_have_text('top 2')
+    expect(reply.locator('ol li')).to_have_count(2)
+    expect(reply.locator('em')).to_have_text('First')
+    expect(reply.locator('code')).to_have_text('second')
+    expect(reply.locator('td').first).to_have_text('One')
+    expect(reply.locator('a')).to_have_count(1)
+    expect(reply.locator('a')).to_have_attribute('href', 'https://news.example.test/top')
+    expect(reply).to_contain_text('[Bad](javascript:alert(1)) <img src=x onerror=alert(1)>')
+    expect(reply.locator('img')).to_have_count(0)
+    expect(page.locator('.msg.user')).to_have_text('Top stories, **please**')  # the user's words, as typed
+
+
+def test_stop_a_run(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    streaming_chat(page, mock)
+    page.get_by_role('button', name='Stop', exact=True).click()
+    expect(page.locator('.msg.assistant')).to_have_text('You stopped this.')
+    expect(page.locator('#send')).to_be_enabled()
+    expect(page.locator('#stop')).not_to_be_visible()
+    assert ('POST', '/api/runs/run/stop', {}) in mock.calls
+    assert page.evaluate('window.eventSources[0].closed')
+
+
+def test_chat_list_shows_which_chats_need_you(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.messages = [{'role': 'user', 'text': 'Order eggs'}]
+    mock.thread_status = 'waiting'
+    workspace(page, mock)
+    expect(page.locator('#threads .badge')).to_have_text('Needs you')
+    mock.thread_status = None
+    page.click('#open-files')  # any navigation reloads the list
+    expect(page.locator('#threads .badge')).to_have_count(0)
+
+
+def test_messages_carry_the_time_zone_and_failures_show_in_the_page(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    workspace(page, mock)
+    timezone = page.evaluate('Intl.DateTimeFormat().resolvedOptions().timeZone')
+    page.fill('#message', 'Compare flights')
+    page.click('#send')
+    expect(page.locator('.msg.assistant')).to_have_text('Here are the options.')
+    assert ('POST', '/api/threads', {'text': 'Compare flights', 'timezone': timezone}) in mock.calls
+    page.route(
+        '**/api/threads/*/messages',
+        lambda route: route.fulfill(status=409, content_type='application/json', body='{"detail":"still working"}'),
+    )
+    page.on('dialog', lambda dialog: pytest.fail(f'unexpected alert: {dialog.message}'))
+    page.fill('#message', 'And hotels')
+    page.click('#send')
+    expect(page.locator('#notice')).to_contain_text('still working')
+    expect(page.locator('#message')).to_have_value('And hotels')  # nothing typed is lost
+    page.get_by_role('button', name='Dismiss').click()
+    expect(page.locator('#notice')).not_to_be_visible()

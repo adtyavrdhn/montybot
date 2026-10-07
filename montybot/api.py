@@ -45,6 +45,15 @@ class Credentials(BaseModel):
 
 class NewMessage(BaseModel):
     text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20_000)]
+    timezone: str | None = Field(default=None, max_length=64)
+    """The IANA time zone of the user's browser, such as `Europe/London`."""
+
+
+async def remember_timezone(connection: Any, user: User, timezone: str | None) -> None:
+    """Keep the time zone the user's browser reports, if it is a real one and has changed."""
+    if timezone is None or timezone == user.timezone or not schedules.is_timezone(timezone):
+        return
+    await store.set_timezone(connection, user.id, timezone)
 
 
 class Answer(BaseModel):
@@ -112,6 +121,7 @@ async def create_thread(request: Request, user: User) -> Response:
     resources = resources_of(request)
     run_id = str(uuid.uuid4())
     async with resources.pool.connection() as connection, connection.transaction():
+        await remember_timezone(connection, user, body.timezone)
         thread = await store.create_thread(connection, user.id, body.text.splitlines()[0])
         await store.create_run(
             connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt=body.text, trigger='message'
@@ -129,6 +139,7 @@ async def add_message(request: Request, user: User) -> Response:
         thread = await store.get_thread(connection, user.id, request.path_params['thread_id'])
         if thread is None:
             return NOT_FOUND
+        await remember_timezone(connection, user, body.timezone)
         try:
             await store.create_run(
                 connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt=body.text, trigger='message'
@@ -141,9 +152,12 @@ async def add_message(request: Request, user: User) -> Response:
 
 @auth.signed_in
 async def list_threads(request: Request, user: User) -> Response:
+    """Each thread with the status of its unfinished run, if it has one: `running`, `waiting` (for the user) or
+    `queued`."""
     async with resources_of(request).pool.connection() as connection:
         threads = await store.list_threads(connection, user.id)
-    return JSONResponse([{'id': t.id, 'title': t.title} for t in threads])
+        active = await store.active_runs(connection, user.id)
+    return JSONResponse([{'id': t.id, 'title': t.title, 'status': active.get(t.id)} for t in threads])
 
 
 @auth.signed_in
@@ -232,6 +246,19 @@ async def run_view(connection: Any, user: User, run: Run) -> dict[str, Any]:
         'activity': await store.list_activity(connection, user.id, run.id),
         'ask': None if ask is None else ask_json(ask),
     }
+
+
+@auth.signed_in
+async def stop_run(request: Request, user: User) -> Response:
+    """POST. Stop the user's run, whatever it is doing or waiting for."""
+    resources = resources_of(request)
+    async with resources.pool.connection() as connection:
+        run = await store.get_run(connection, user.id, str(request.path_params['run_id']))
+    if run is None:
+        return NOT_FOUND
+    if not await workflows.stop(resources, run):
+        return JSONResponse({'detail': 'that task has finished already'}, status_code=409)
+    return JSONResponse({'ok': True})
 
 
 # --- answering the run ---

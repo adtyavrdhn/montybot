@@ -14,13 +14,14 @@ from psycopg.types.json import Jsonb
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
 from montybot.db import Connection
-from montybot.models import Ask, AskKind, Run, RunStatus, Schedule, Thread, Trigger, User
+from montybot.models import FINISHED, Ask, AskKind, Run, RunStatus, Schedule, Thread, Trigger, User
 
 
 class ActiveRun(Exception):
     """The thread already has a run that has not finished."""
 
 
+USER_COLUMNS = 'id, email, name, timezone'
 RUN_COLUMNS = 'id, user_id, thread_id, trigger, prompt, status, output, error'
 ASK_COLUMNS = 'id, run_id, user_id, occurrence, kind, prompt, details, answer'
 SCHEDULE_COLUMNS = 'id, user_id, thread_id, name, cron, timezone, when_text, prompt, watch'
@@ -32,7 +33,7 @@ async def create_user(connection: Connection, email: str, password_hash: str, na
     """None when the email is taken."""
     cursor = await connection.execute(
         'INSERT INTO montybot.users (email, password_hash, name) VALUES (%s, %s, %s) '
-        'ON CONFLICT (email) DO NOTHING RETURNING id, email, name',
+        f'ON CONFLICT (email) DO NOTHING RETURNING {USER_COLUMNS}',
         (email, password_hash, name),
     )
     row = await cursor.fetchone()
@@ -41,16 +42,20 @@ async def create_user(connection: Connection, email: str, password_hash: str, na
 
 async def find_login(connection: Connection, email: str) -> tuple[User, str] | None:
     cursor = await connection.execute(
-        'SELECT id, email, name, password_hash FROM montybot.users WHERE email = %s', (email,)
+        f'SELECT {USER_COLUMNS}, password_hash FROM montybot.users WHERE email = %s', (email,)
     )
     row = await cursor.fetchone()
     return None if row is None else (user_from(row), row['password_hash'])
 
 
 async def get_user(connection: Connection, user_id: str) -> User | None:
-    cursor = await connection.execute('SELECT id, email, name FROM montybot.users WHERE id = %s', (user_id,))
+    cursor = await connection.execute(f'SELECT {USER_COLUMNS} FROM montybot.users WHERE id = %s', (user_id,))
     row = await cursor.fetchone()
     return None if row is None else user_from(row)
+
+
+async def set_timezone(connection: Connection, user_id: str, timezone: str) -> None:
+    await connection.execute('UPDATE montybot.users SET timezone = %s WHERE id = %s', (timezone, user_id))
 
 
 # --- threads ---
@@ -75,10 +80,23 @@ async def get_thread(connection: Connection, user_id: str, thread_id: str) -> Th
 
 
 async def list_threads(connection: Connection, user_id: str) -> list[Thread]:
+    """The user's threads, the one with the latest message first."""
     cursor = await connection.execute(
-        'SELECT id, user_id, title FROM montybot.threads WHERE user_id = %s ORDER BY created_at DESC', (user_id,)
+        'SELECT t.id, t.user_id, t.title FROM montybot.threads t WHERE t.user_id = %s '
+        'ORDER BY (SELECT max(r.created_at) FROM montybot.runs r WHERE r.thread_id = t.id) DESC NULLS LAST, '
+        't.created_at DESC',
+        (user_id,),
     )
     return [thread_from(row) for row in await cursor.fetchall()]
+
+
+async def active_runs(connection: Connection, user_id: str) -> dict[str, RunStatus]:
+    """The status of each of the user's unfinished runs, by thread id."""
+    cursor = await connection.execute(
+        'SELECT thread_id, status FROM montybot.runs WHERE user_id = %s AND NOT status = ANY(%s)',
+        (user_id, list(FINISHED)),
+    )
+    return {str(row['thread_id']): row['status'] for row in await cursor.fetchall()}
 
 
 # --- runs ---
@@ -129,15 +147,15 @@ async def load_run(connection: Connection, run_id: str) -> Run:
 
 async def set_run_status(connection: Connection, run_id: str, status: RunStatus) -> None:
     await connection.execute(
-        "UPDATE montybot.runs SET status = %s WHERE id = %s AND status NOT IN ('done', 'failed')", (status, run_id)
+        'UPDATE montybot.runs SET status = %s WHERE id = %s AND NOT status = ANY(%s)', (status, run_id, list(FINISHED))
     )
 
 
 async def lock_finished(connection: Connection, run_id: str) -> bool:
-    """Lock the run's row for this transaction; True if it is done or failed already."""
+    """Lock the run's row for this transaction; True if it has finished already (done, failed or stopped)."""
     cursor = await connection.execute('SELECT status FROM montybot.runs WHERE id = %s FOR UPDATE', (run_id,))
     row = await cursor.fetchone()
-    return row is not None and row['status'] in ('done', 'failed')
+    return row is not None and row['status'] in FINISHED
 
 
 async def finish_run(
@@ -365,7 +383,7 @@ async def list_activity(connection: Connection, user_id: str, run_id: str) -> li
 
 
 def user_from(row: dict[str, Any]) -> User:
-    return User(id=str(row['id']), email=row['email'], name=row['name'])
+    return User(id=str(row['id']), email=row['email'], name=row['name'], timezone=row['timezone'])
 
 
 def thread_from(row: dict[str, Any]) -> Thread:

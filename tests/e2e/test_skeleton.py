@@ -74,6 +74,39 @@ def test_a_denied_approval_places_no_order(client: Client, shop: Shop) -> None:
     assert shop.orders == []
 
 
+def statuses(client: Client) -> dict[str, str | None]:
+    """The status the chat list shows for each thread."""
+    return {thread['id']: thread['status'] for thread in client.http.get('/api/threads').json()}
+
+
+def test_stop_a_run_that_waits_for_the_user(client: Client) -> None:
+    client.sign_up()
+    thread = client.ask('Ask me my favourite colour and remember it.')
+    client.wait_for_ask(thread, 'question')
+    assert statuses(client) == {thread: 'waiting'}
+    run_id = client.thread(thread)['run']['id']
+
+    assert client.http.post(f'/api/runs/{run_id}/stop', json={}).status_code == 200
+
+    stopped = client.thread(thread)
+    assert stopped['run']['status'] == 'stopped'
+    assert stopped['run']['ask'] is None
+    assert stopped['messages'][-1] == {'role': 'assistant', 'text': 'You stopped this.'}
+    assert statuses(client) == {thread: None}
+    assert client.http.post(f'/api/runs/{run_id}/stop', json={}).status_code == 409
+    client.ask('Say hello.', thread)  # the thread takes a new message
+    assert 'hello' in client.wait_for_reply(thread).lower()
+
+
+@pytest.mark.scripted
+def test_the_agent_knows_the_time_for_the_user(client: Client) -> None:
+    client.sign_up()
+    created = client.http.post('/api/threads', json={'text': 'What time is it for me?', 'timezone': 'Asia/Tokyo'})
+    assert '(Asia/Tokyo)' in client.wait_for_reply(created.json()['thread_id'])
+    created = client.http.post('/api/threads', json={'text': 'What time is it for me?', 'timezone': 'Mars/Base'})
+    assert '(Asia/Tokyo)' in client.wait_for_reply(created.json()['thread_id'])  # not a real zone: the last one
+
+
 def test_users_cannot_see_each_other(app: App, client: Client) -> None:
     client.sign_up()
     thread = client.ask('Ask me my favourite colour and remember it.')
@@ -89,6 +122,7 @@ def test_users_cannot_see_each_other(app: App, client: Client) -> None:
         assert other.post(f'/api/runs/{run_id}/live', json={}).status_code == 404
         assert other.post(f'/api/asks/{question["id"]}', json={'text': 'red'}).status_code == 404
         assert other.post(f'/api/threads/{thread}/messages', json={'text': 'hi'}).status_code == 404
+        assert other.post(f'/api/runs/{run_id}/stop', json={}).status_code == 404
         assert other.get('/api/threads').json() == []
     assert client.http.post(f'/api/asks/{question["id"]}', json={'text': '  '}).status_code == 422
     client.answer(question, text='blue')

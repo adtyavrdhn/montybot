@@ -18,6 +18,10 @@ step returns its recorded result instead of running again.
 
 from __future__ import annotations
 
+import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import logfire
 from dbos import DBOS, SetWorkflowID, StepOptions, WorkflowHandleAsync
 from dbos._error import DBOSException
@@ -34,14 +38,17 @@ from montybot import store, streaming
 from montybot.browser.contract import BrowserError
 from montybot.browser.service import UnknownRun
 from montybot.deps import RunDeps
-from montybot.models import Run, Schedule
+from montybot.models import Run, RunStatus, Schedule
 from montybot.observability import timed, timing
 from montybot.resources import Resources, current
 
 RETRIED: StepOptions = {'retries_allowed': True, 'max_attempts': 5, 'interval_seconds': 1.0}
 """For the steps that end a run: a passing database error must not leave a run unfinished and the browser open."""
 
+logger = logging.getLogger(__name__)
+
 FAILURE_NOTICE = 'Something went wrong while working on this, and I could not finish. Please try again.'
+STOPPED_NOTICE = 'You stopped this.'
 
 
 @DBOS.workflow(name='montybot.run_thread_stream')  # the name runs were recorded under; keep it so they resume
@@ -50,16 +57,21 @@ async def run_thread(run_id: str) -> str:
     with timing('run.lifecycle') as lifecycle, logfire.set_baggage(run_id=run_id):
         resources = current()
         streaming.reset(run_id)
-        run, history_json, schedule = await DBOS.run_step_async({'name': 'run.start'}, start_run, resources, run_id)
+        run, history_json, schedule, local_time = await DBOS.run_step_async(
+            {'name': 'run.start'}, start_run, resources, run_id
+        )
         lifecycle.set_attributes({'thread_id': run.thread_id, 'user_id': run.user_id, 'trigger': run.trigger})
         history = recent(ModelMessagesTypeAdapter.validate_json(history_json), resources.settings.history_limit)
-        deps = RunDeps(resources=resources, run=run, schedule=schedule)
+        deps = RunDeps(resources=resources, run=run, schedule=schedule, local_time=local_time)
         try:
             try:
                 with timing('run.agent'):
                     result = await resources.agent.run(run.prompt, deps=deps, message_history=history)
             except Exception as error:
                 logfire.error('Run {run_id} failed: {error_type}', run_id=run_id, error_type=type(error).__qualname__)
+                # Also in this process's own log, for running without Logfire. The type only: an error's text can
+                # quote the user's content.
+                logger.warning('Run %s failed: %s', run_id, type(error).__qualname__)
                 await DBOS.run_step_async(
                     {**RETRIED, 'name': 'run.failed'}, fail_run, resources, run, type(error).__name__
                 )
@@ -84,14 +96,22 @@ async def start(run_id: str) -> WorkflowHandleAsync[str]:
         return await DBOS.start_workflow_async(run_thread, run_id)
 
 
-async def start_run(resources: Resources, run_id: str) -> tuple[Run, bytes, Schedule | None]:
+async def start_run(resources: Resources, run_id: str) -> tuple[Run, bytes, Schedule | None, str]:
     with timing('run.start'):
         async with resources.pool.connection() as connection, connection.transaction():
             run = await store.load_run(connection, run_id)
             await store.set_run_status(connection, run_id, 'running')
             history = await store.load_history(connection, run.thread_id)
             schedule = await store.schedule_of_thread(connection, run.thread_id) if run.trigger == 'schedule' else None
-        return run, ModelMessagesTypeAdapter.dump_json(history), schedule
+            user = await store.get_user(connection, run.user_id)
+        timezone = user.timezone if user is not None else 'UTC'
+        return run, ModelMessagesTypeAdapter.dump_json(history), schedule, local_time_in(timezone)
+
+
+def local_time_in(timezone: str) -> str:
+    """The time now in `timezone`, in words: "Tuesday 6 October 2026, 21:40 (Europe/London)"."""
+    now = datetime.now(ZoneInfo(timezone))
+    return f'{now:%A} {now.day} {now:%B %Y, %H:%M} ({timezone})'
 
 
 async def finish_run(resources: Resources, run: Run, new_messages: bytes, output: str) -> None:
@@ -109,18 +129,37 @@ async def finish_run(resources: Resources, run: Run, new_messages: bytes, output
 async def fail_run(resources: Resources, run: Run, error_type: str) -> None:
     await close_browser(resources, run)
     with timing('run.fail'):
-        async with resources.pool.connection() as connection, connection.transaction():
-            if await store.lock_finished(connection, run.id):
-                return
-            await store.append_history(
-                connection,
-                run.thread_id,
-                [
-                    ModelRequest(parts=[UserPromptPart(content=run.prompt)]),
-                    ModelResponse(parts=[TextPart(content=FAILURE_NOTICE)]),
-                ],
-            )
-            await store.finish_run(connection, run.id, 'failed', output=FAILURE_NOTICE, error=error_type)
+        await end_run(resources, run, 'failed', FAILURE_NOTICE, error=error_type)
+
+
+async def stop(resources: Resources, run: Run) -> bool:
+    """The user stops their run, whatever it is doing or waiting for. False if it had finished already.
+
+    DBOS cancels the workflow at its next step, so it makes no more model calls or browser actions; a workflow that
+    wakes up later finds the run finished and changes nothing. The browser is saved and closed here, which frees it
+    for the user's other chats."""
+    await DBOS.cancel_workflow_async(run.id)
+    stopped = await end_run(resources, run, 'stopped', STOPPED_NOTICE)
+    await close_browser(resources, run)
+    return stopped
+
+
+async def end_run(resources: Resources, run: Run, status: RunStatus, notice: str, error: str | None = None) -> bool:
+    """Finish a run that has no reply of its own: the thread gets its prompt and `notice` as the reply. False if the
+    run had finished already."""
+    async with resources.pool.connection() as connection, connection.transaction():
+        if await store.lock_finished(connection, run.id):
+            return False
+        await store.append_history(
+            connection,
+            run.thread_id,
+            [
+                ModelRequest(parts=[UserPromptPart(content=run.prompt)]),
+                ModelResponse(parts=[TextPart(content=notice)]),
+            ],
+        )
+        await store.finish_run(connection, run.id, status, output=notice, error=error)
+    return True
 
 
 async def close_browser(resources: Resources, run: Run) -> None:

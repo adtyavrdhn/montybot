@@ -50,6 +50,7 @@ def create_app(settings: Settings) -> ASGIApp:
             Route('/api/threads/{thread_id:uuid}/messages', api.add_message, methods=['POST']),
             Route('/api/runs/{run_id:uuid}', api.read_run),
             Route('/api/runs/{run_id:uuid}/events', api.run_events),
+            Route('/api/runs/{run_id:uuid}/stop', api.stop_run, methods=['POST']),
             Route('/api/asks/{ask_id:uuid}', api.answer_ask, methods=['POST']),
             Route('/api/runs/{run_id:uuid}/live', api.live_link, methods=['POST']),
             Route('/api/runs/{run_id:uuid}/screen', api.watch_screen),
