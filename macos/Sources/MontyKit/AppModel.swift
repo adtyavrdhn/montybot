@@ -97,7 +97,13 @@ public final class AppModel {
         self.cookies = cookies
         self.defaults = defaults
         let url = serverURL ?? defaults.string(forKey: "serverURL").flatMap(URL.init(string:)) ?? Self.defaultServer
-        client = APIClient(baseURL: url, cookies: cookies)
+        client = APIClient(baseURL: url, cookies: cookies, siteLogin: Self.siteLogins(defaults)[url.absoluteString])
+    }
+
+    /// Each private server's site login, as its `Authorization` header, by server URL. Kept in the app's settings
+    /// rather than the keychain, which would ask the user for access at each launch of a rebuilt (ad-hoc-signed) app.
+    private static func siteLogins(_ defaults: UserDefaults) -> [String: String] {
+        defaults.dictionary(forKey: "siteLogins") as? [String: String] ?? [:]
     }
 
     /// The server this build talks to unless the user picks another: `MontyServerURL` in Info.plist.
@@ -134,12 +140,23 @@ public final class AppModel {
         }
     }
 
-    /// The private server's site login, entered once and kept in the keychain.
+    /// The private server's site login, entered once and kept in the app's settings.
     public func useSiteLogin(user: String, password: String) async throws {
-        guard case .siteLogin(let realm) = phase else { return }
-        client.saveSiteLogin(user: user, password: password, realm: realm)
+        guard case .siteLogin = phase else { return }
+        let url = client.baseURL
+        let login = APIClient.basicAuthorization(user: user, password: password)
+        let candidate = APIClient(baseURL: url, cookies: cookies, siteLogin: login)
+        // Kept only once the server has taken it: past the gate, the API answers (a 401 means just "not signed in").
+        do {
+            _ = try await candidate.threads()
+        } catch APIError.siteLogin {
+            throw APIError.server(status: 401, detail: "that site login didn't work")
+        } catch APIError.signedOut {}
+        client = candidate
+        var logins = Self.siteLogins(defaults)
+        logins[url.absoluteString] = login
+        defaults.set(logins, forKey: "siteLogins")
         await start()
-        if case .siteLogin = phase { throw APIError.server(status: 401, detail: "that site login didn't work") }
     }
 
     /// From the "can't reach Monty" screen: try now.
@@ -187,7 +204,7 @@ public final class AppModel {
         guard url != client.baseURL else { return }
         reset()
         defaults.set(url.absoluteString, forKey: "serverURL")
-        client = APIClient(baseURL: url, cookies: cookies)
+        client = APIClient(baseURL: url, cookies: cookies, siteLogin: Self.siteLogins(defaults)[url.absoluteString])
         phase = .signedOut
     }
 
