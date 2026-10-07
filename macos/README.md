@@ -17,7 +17,7 @@ scripts            dev_server.py, build-app.sh, make-icon.swift, tour.sh and ax-
 
 ```bash
 cd macos
-make run       # builds and opens Monty.app, talking to the deployed server (it asks once for its site login)
+make run       # builds Monty.app for the deployed server, installs it in /Applications and opens it
 make share     # build/Monty.zip to send to someone
 make           # everything else: setup, dev (a local server for development), test, tour, clean
 ```
@@ -87,7 +87,8 @@ menu, Notification Center and the Dock badge for chats that need you.
 
 Decisions from review:
 
-- Stop never sits where Send is (it is in the toolbar and Task menu, ⌘., and asks first). Approving has no keyboard
+- While Monty works or waits, Send becomes Stop, as in other chat apps; ⌘. stops too. A stopped or failed task can
+  be tried again as it was asked (⌘R), or put back in the message box to change first. Approving has no keyboard
   shortcut: going ahead with something that costs money takes a click.
 - While Monty waits for an answer the composer is off and says why; typed answers survive the question closing,
   switching chats, and being answered elsewhere.
@@ -95,8 +96,18 @@ Decisions from review:
   ⌘↩ hands back. Typing goes through macOS text input, so accents and input methods work; ⌘V pastes from the Mac.
   With VoiceOver, the remote page reads like a web page: the server sends its outline (headings, text, fields,
   buttons, with where they are; passwords only as a count), and activating an item clicks it.
-- Chats can be renamed and deleted (context menu, ⌘⌫); failed and stopped chats are marked in the sidebar.
-- Monty's steps stay under its reply, folded.
+- Watching Monty's browser opens it beside the chat; it can fill the window (⇧⌘F, or double-click it), and from there
+  the whole screen.
+- Chats can be renamed and deleted from the chat's ⋯ menu, the File menu, the sidebar (right-click, swipe, ⌫) or
+  ⌘⌫ there; failed and stopped chats are marked in the sidebar. Replies have a Copy button.
+- The app opens where you left it, with what you were writing in each chat; signing out forgets both. A chat whose
+  task finished while you looked elsewhere (or while the app was closed) is bold with a dot until you open it, and
+  opening it clears its notification; each chat has at most one notification, its latest news.
+- The sidebar is laid out as Codex's: the window's buttons alone at the top, New task as the first row, the chats,
+  and the library pinned at the bottom. Hovering a chat shows a button to delete it.
+- Reading further up a chat, it stays put while Monty writes, with a button back to the latest. Monty's browser
+  beside the chat widens a narrow window to fit (or fills the window on a small screen) rather than squeeze both.
+- Monty's steps stay under its reply, folded; approvals and takeovers stay in the chat as one quiet line each.
 
 ## Not yet
 

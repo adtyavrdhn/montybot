@@ -182,12 +182,14 @@ struct SignInView: View {
                     .frame(width: 396)
             }
             Spacer(minLength: 40)
-            if app.serverURL != AppModel.defaultServer {
-                Text("Using a custom server: \(app.serverURL.host() ?? app.serverURL.absoluteString). Change it in Settings (⌘,).")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Palette.onSurfaceVariant)
-                    .padding(.bottom, 14)
+            // Which Monty this is, always: signing in to the wrong server is otherwise a mystery.
+            HStack(spacing: 4) {
+                Text("Server: \(app.serverURL.host() ?? app.serverURL.absoluteString)")
+                SettingsLink { Text("Change…") }.buttonStyle(.link)
             }
+            .font(.system(size: 12))
+            .foregroundStyle(Palette.onSurfaceVariant)
+            .padding(.bottom, 14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Palette.surface)
@@ -315,7 +317,13 @@ struct SiteLoginView: View {
         working = true
         error = nil
         Task {
-            do { try await app.useSiteLogin(user: user, password: password) } catch { self.error = "That login didn't work. Check it with whoever runs the server." }
+            do {
+                try await app.useSiteLogin(user: user, password: password)
+            } catch APIError.offline {
+                self.error = APIError.offline("").localizedDescription  // not a wrong login: say what it is
+            } catch {
+                self.error = "That login didn't work. Check it with whoever runs the server."
+            }
             working = false
         }
     }

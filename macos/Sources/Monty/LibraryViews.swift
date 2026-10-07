@@ -19,8 +19,7 @@ struct Page<Items: RandomAccessCollection, Row: View>: View where Items.Element:
             VStack(alignment: .leading, spacing: 0) {
                 Text(title).font(.system(size: 20, weight: .semibold)).accessibilityAddTraits(.isHeader)
                 Text(subtitle).font(.system(size: 13)).foregroundStyle(Palette.onSurfaceVariant).padding(.top, 4)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let error = app.libraryError {
+                if let error = app.libraryError, items != nil {  // a list on screen, and an action on it failed
                     NoticeBar(notice: .error(error)) { app.libraryError = nil }.padding(.top, 16)
                 }
                 Group {
@@ -36,6 +35,11 @@ struct Page<Items: RandomAccessCollection, Row: View>: View where Items.Element:
                             }
                             .card(padding: 0)
                         }
+                    } else if let error = app.libraryError {
+                        EmptyState(icon: "exclamationmark.triangle", title: "Couldn't load \(title.lowercased())", text: error) {
+                            Button("Try again") { app.libraryError = nil; app.reloadPage() }.buttonStyle(.outline)
+                        }
+                        .card(padding: 0)
                     } else {
                         MontyMark(mood: .working, size: 22).frame(maxWidth: .infinity).padding(.vertical, 48)
                     }
@@ -49,6 +53,12 @@ struct Page<Items: RandomAccessCollection, Row: View>: View where Items.Element:
         }
         .navigationTitle(title)
         .navigationSubtitle("")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { app.libraryError = nil; app.reloadPage() } label: { Label("Reload", systemImage: "arrow.clockwise") }
+                    .help("Read this page again (⌘R)")
+            }
+        }
     }
 }
 

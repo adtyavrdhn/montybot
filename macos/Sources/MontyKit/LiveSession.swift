@@ -249,6 +249,9 @@ public final class LiveSession {
         }
     }
 
+    /// Says something over the page for a few seconds.
+    public func say(_ text: String) { show(text) }
+
     private func show(_ text: String) {
         notice = text
         noticeClear?.cancel()

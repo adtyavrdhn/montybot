@@ -24,17 +24,69 @@ public struct ThreadSummary: Codable, Equatable, Identifiable, Sendable {
     public let status: RunStatus?
     /// How the latest run ended (done, failed or stopped), when nothing is going on.
     public let outcome: RunStatus?
+    /// When something last happened in the chat (its latest task started); older servers don't say.
+    public let updatedAt: Date?
 
-    public init(id: String, title: String, status: RunStatus? = nil, outcome: RunStatus? = nil) {
+    enum CodingKeys: String, CodingKey {
+        case id, title, status, outcome
+        case updatedAt = "updated_at"
+    }
+
+    public init(id: String, title: String, status: RunStatus? = nil, outcome: RunStatus? = nil, updatedAt: Date? = nil) {
         self.id = id
         self.title = title
         self.status = status
         self.outcome = outcome
+        self.updatedAt = updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        status = try container.decodeIfPresent(RunStatus.self, forKey: .status)
+        outcome = try container.decodeIfPresent(RunStatus.self, forKey: .outcome)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt).flatMap(Self.date)
+    }
+
+    /// Python's `isoformat()`: "2026-10-07T15:58:18.123456+00:00", the fraction only when there is one.
+    static func date(_ text: String) -> Date? {
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return withFraction.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+    }
+
+    /// The same chat with another status, outcome or title, keeping when it was last active.
+    func with(title: String? = nil, status: RunStatus?, outcome: RunStatus?) -> ThreadSummary {
+        ThreadSummary(id: id, title: title ?? self.title, status: status, outcome: outcome, updatedAt: updatedAt)
+    }
+}
+
+/// A chat list grouped by when each chat was last active, newest first, as ChatGPT's sidebar is.
+public enum ChatAge: String, CaseIterable, Sendable {
+    case today = "Today", yesterday = "Yesterday", week = "Previous 7 days", month = "Previous 30 days", earlier = "Earlier"
+
+    public static func of(_ date: Date?, now: Date = Date(), calendar: Calendar = .current) -> ChatAge {
+        guard let date else { return .today }  // just made here, before the server said when
+        if calendar.isDate(date, inSameDayAs: now) || date > now { return .today }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) {
+            return .yesterday
+        }
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 0
+        return days <= 7 ? .week : days <= 30 ? .month : .earlier
     }
 }
 
 public struct ChatMessage: Codable, Equatable, Sendable {
-    public enum Role: String, Codable, Sendable { case user, assistant }
+    /// `event` is a line about what happened rather than something said: "You approved: …", "You took over the browser".
+    public enum Role: String, Codable, Sendable {
+        case user, assistant, event
+
+        /// A role this app doesn't know yet shows as an event, rather than making the whole chat unreadable.
+        public init(from decoder: Decoder) throws {
+            self = Role(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .event
+        }
+    }
     public let role: Role
     public let text: String
 
@@ -62,6 +114,8 @@ public struct Run: Codable, Equatable, Identifiable, Sendable {
     public let id: String
     public let threadId: String
     public let status: RunStatus
+    /// What the user asked for (or the schedule's task), to try again as it was. Older servers don't send it.
+    public let prompt: String?
     public let output: String?
     /// What the bot did so far, oldest first, in words: "Opening example.com".
     public let activity: [String]
@@ -69,14 +123,18 @@ public struct Run: Codable, Equatable, Identifiable, Sendable {
     public let ask: Ask?
 
     enum CodingKeys: String, CodingKey {
-        case id, status, output, activity, ask
+        case id, status, prompt, output, activity, ask
         case threadId = "thread_id"
     }
 
-    public init(id: String, threadId: String, status: RunStatus, output: String? = nil, activity: [String] = [], ask: Ask? = nil) {
+    public init(
+        id: String, threadId: String, status: RunStatus, prompt: String? = nil, output: String? = nil, activity: [String] = [],
+        ask: Ask? = nil
+    ) {
         self.id = id
         self.threadId = threadId
         self.status = status
+        self.prompt = prompt
         self.output = output
         self.activity = activity
         self.ask = ask

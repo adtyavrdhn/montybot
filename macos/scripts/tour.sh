@@ -17,7 +17,8 @@ DUMP=build/ax-dump
 rm -rf "$DIR"
 mkdir -p "$DIR"
 
-"$APP" --tour "$DIR" &
+# The app is the one users get; the tour points it at the dev server for this run only (MONTY_TOUR_SERVER).
+"$APP" --tour "$DIR" --server "${MONTY_TOUR_SERVER:-http://127.0.0.1:8000}" &
 TOUR=$!
 while kill -0 "$TOUR" 2>/dev/null; do
     for want in "$DIR"/*.want; do

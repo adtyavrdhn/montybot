@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
 from psycopg.errors import ForeignKeyViolation, UniqueViolation
@@ -110,11 +111,11 @@ async def get_thread(connection: Connection, user_id: str, thread_id: str) -> Th
 
 
 async def list_threads(connection: Connection, user_id: str) -> list[Thread]:
-    """The user's threads, the one with the latest message first."""
+    """The user's threads, the one last active first (its latest run started, or it was created)."""
     cursor = await connection.execute(
         'SELECT t.id, t.user_id, t.title FROM montybot.threads t WHERE t.user_id = %s '
-        'ORDER BY (SELECT max(r.created_at) FROM montybot.runs r WHERE r.thread_id = t.id) DESC NULLS LAST, '
-        't.created_at DESC',
+        # When it was last active, as `last_active` says: a schedule's chat with no run yet counts from its creation.
+        'ORDER BY coalesce((SELECT max(r.created_at) FROM montybot.runs r WHERE r.thread_id = t.id), t.created_at) DESC',
         (user_id,),
     )
     return [thread_from(row) for row in await cursor.fetchall()]
@@ -143,6 +144,17 @@ async def latest_outcomes(connection: Connection, user_id: str) -> dict[str, Run
         (user_id,),
     )
     return {str(row['thread_id']): row['status'] for row in await cursor.fetchall() if row['status'] in FINISHED}
+
+
+async def last_active(connection: Connection, user_id: str) -> dict[str, datetime]:
+    """When each of the user's threads last had something happen: its latest run started, or it was created. The
+    order of `list_threads`, as times an app can group by ("Today", "Yesterday")."""
+    cursor = await connection.execute(
+        'SELECT t.id, coalesce((SELECT max(r.created_at) FROM montybot.runs r WHERE r.thread_id = t.id), t.created_at) '
+        'AS at FROM montybot.threads t WHERE t.user_id = %s',
+        (user_id,),
+    )
+    return {str(row['id']): row['at'] for row in await cursor.fetchall()}
 
 
 async def rename_thread(connection: Connection, user_id: str, thread_id: str, title: str) -> bool:

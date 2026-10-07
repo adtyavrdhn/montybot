@@ -3,8 +3,59 @@ import SwiftUI
 
 struct MainView: View {
     @Environment(AppModel.self) private var app
+    @State private var newTitle = ""
 
     var body: some View {
+        Group {
+            // Monty's browser fills the window in place of the chat: to take over (the dogfood found a side panel too
+            // small to sign in with), or to watch it full size. In place of, not over: an overlay left the chat laid
+            // out larger than the window afterwards, its message box below the window's edge.
+            if let chat = app.chat, let live = chat.live {
+                TakeoverView(chat: chat, live: live)
+                    .navigationTitle(chat.title.isEmpty ? "Monty" : chat.title.readableTitle)
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+            } else if let chat = app.chat, chat.browserExpanded {
+                ExpandedBrowserView(chat: chat)
+                    .navigationTitle(chat.title.isEmpty ? "Monty" : chat.title.readableTitle)
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+            } else {
+                split.frame(minWidth: app.chat?.watching == true ? Metrics.windowWithBrowserMinWidth : nil)
+            }
+        }
+        .motion(.spring(response: 0.38, dampingFraction: 0.9), value: app.chat?.live == nil)
+        .motion(.spring(response: 0.38, dampingFraction: 0.9), value: app.chat?.browserExpanded)
+        .onChange(of: app.chat?.watching) { _, watching in
+            // Monty's browser beside the chat needs a wide window: widen it, as Xcode does for its inspector. A screen
+            // too small for that shows the browser filling the window instead.
+            guard watching == true, let chat = app.chat, !chat.browserExpanded else { return }
+            if !widenWindow(to: Metrics.windowWithBrowserMinWidth) { chat.browserExpanded = true }
+        }
+        .alert("Rename chat", isPresented: Binding(get: { app.renaming != nil }, set: { if !$0 { app.renaming = nil } })) {
+            TextField("Title", text: $newTitle)
+            Button("Rename") {
+                // The field shows the readable title: unchanged, it renames nothing.
+                if let thread = app.renaming, newTitle != thread.title.readableTitle { Task { await app.rename(thread, to: newTitle) } }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .onChange(of: app.renaming) { _, thread in if let thread { newTitle = thread.title.readableTitle } }
+        .confirmationDialog(
+            "Delete “\(app.deleting?.title.readableTitle ?? "")”?",
+            isPresented: Binding(get: { app.deleting != nil }, set: { if !$0 { app.deleting = nil } })
+        ) {
+            Button("Delete Chat", role: .destructive) { if let thread = app.deleting { Task { await app.delete(thread) } } }
+        } message: {
+            Text(deleteMessage)
+        }
+        .alert(
+            app.actionError ?? "",
+            isPresented: Binding(get: { app.actionError != nil }, set: { if !$0 { app.actionError = nil } })
+        ) {
+            Button("OK", role: .cancel) {}
+        }
+    }
+
+    private var split: some View {
         NavigationSplitView {
             Sidebar()
                 .navigationSplitViewColumnWidth(min: 220, ideal: 256, max: 340)
@@ -21,34 +72,51 @@ struct MainView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Palette.surface)
+            // Without a width of its own the chat's column asked for more room than the window allows, and was
+            // clipped at both sides in a narrow window, or with Monty's browser open beside it.
+            .navigationSplitViewColumnWidth(min: 340, ideal: 720)
         }
-        .toolbar(app.chat?.live == nil ? .automatic : .hidden, for: .windowToolbar)
-        .accessibilityHidden(app.chat?.live != nil)
-        .allowsHitTesting(app.chat?.live == nil)
-        .overlay {
-            // Taking over the browser fills the window: the dogfood found a side panel too small to sign in with.
-            if let chat = app.chat, let live = chat.live {
-                TakeoverView(chat: chat, live: live)
-                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
-            }
-        }
-        .motion(.spring(response: 0.38, dampingFraction: 0.9), value: app.chat?.live == nil)
+    }
+
+    /// Makes the main window at least `width` wide, staying on its screen; false if the screen is narrower than that.
+    private func widenWindow(to width: CGFloat) -> Bool {
+        guard let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("main") == true }) ?? NSApp.keyWindow,
+              let screen = window.screen?.visibleFrame
+        else { return true }
+        guard window.frame.width < width else { return true }
+        guard !window.styleMask.contains(.fullScreen), screen.width >= width else { return false }
+        var frame = window.frame
+        frame.origin.x -= (width - frame.width) / 2  // grows on both sides, as zooming does
+        frame.size.width = width
+        frame.origin.x = min(max(frame.origin.x, screen.minX), screen.maxX - width)
+        window.setFrame(frame, display: true, animate: true)
+        return true
+    }
+
+    private var deleteMessage: String {
+        guard let deleting = app.deleting else { return "" }
+        let stops = deleting.status != nil ? " Monty stops the task it is doing there." : ""
+        return "The chat and everything in it are deleted, along with a schedule that reports there.\(stops) This can't be undone."
     }
 }
 
 struct Sidebar: View {
     @Environment(AppModel.self) private var app
     @State private var search = ""
-    @State private var renaming: ThreadSummary?
-    @State private var newTitle = ""
-    @State private var deleting: ThreadSummary?
 
     private var selection: Binding<Route?> {
         Binding(get: { app.route }, set: { if let route = $0 { app.open(route) } })
     }
 
+    // Laid out as Codex's sidebar: the window's buttons alone at the top, then New task as the first row (selected
+    // while you are on it), then the chats, and the library pinned at the bottom, out of the chats' way.
     var body: some View {
         List(selection: selection) {
+            Label("New task", systemImage: "square.and.pencil")
+                .badge(Text("⌘N").font(.system(size: 11)).foregroundStyle(Palette.onSurfaceVariant))
+                .help("Start a new task (⌘N)")
+                .tag(Route.chat(nil))
+
             let needs = filtered(app.needsYou)
             if !needs.isEmpty {
                 Section {
@@ -58,84 +126,92 @@ struct Sidebar: View {
                 }
             }
 
-            Section("Library") {
-                Label("Schedules", systemImage: "calendar.badge.clock").tag(Route.schedules)
-                Label("Files", systemImage: "doc.on.doc").tag(Route.files)
-                Label("Saved sign-ins", systemImage: "key").tag(Route.signIns)
-                Label("Memory", systemImage: "brain").tag(Route.memory)
+            // Pinned chats, then the rest by when they were last active, as ChatGPT's sidebar. A chat that needs the
+            // user is only under "Needs you", above.
+            let pinned = filtered(app.pinned.compactMap { id in app.threads.first { $0.id == id && $0.status != .waiting } })
+            if !pinned.isEmpty {
+                Section("Pinned") { ForEach(pinned) { row($0) } }
             }
-
-            Section("Chats") {
-                let rest = filtered(app.threads.filter { $0.status != .waiting })
-                if !app.threadsLoaded {
-                    ForEach([150, 110, 170], id: \.self) { SkeletonRow(width: $0) }
-                } else if rest.isEmpty {
+            let rest = filtered(app.threads.filter { $0.status != .waiting && !app.pinned.contains($0.id) })
+            if !app.threadsLoaded {
+                Section("Chats") { ForEach([150, 110, 170], id: \.self) { SkeletonRow(width: $0) } }
+            } else if rest.isEmpty, pinned.isEmpty {
+                Section("Chats") {
                     Text(search.isEmpty ? (needs.isEmpty ? "Your chats with Monty appear here." : "No other chats.") : "No chats match “\(search)”.")
                         .font(.system(size: 12))
                         .foregroundStyle(Palette.onSurfaceVariant)
                         .selectionDisabled()
                 }
-                ForEach(rest) { row($0) }
+            } else if rest.contains(where: { $0.updatedAt != nil }) {
+                ForEach(ChatAge.allCases, id: \.self) { age in
+                    let chats = rest.filter { ChatAge.of($0.updatedAt) == age }
+                    if !chats.isEmpty { Section(age.rawValue) { ForEach(chats) { row($0) } } }
+                }
+            } else if !rest.isEmpty {
+                Section("Chats") { ForEach(rest) { row($0) } }  // a server that doesn't say when
             }
         }
         .listStyle(.sidebar)
         .tint(Palette.link)
-        .onDeleteCommand {  // ⌘⌫ on the selected chat
-            if case .chat(let id?) = app.route { deleting = app.threads.first { $0.id == id } }
-        }
-        .alert("Rename chat", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField("Title", text: $newTitle)
-            Button("Rename") { if let renaming { Task { await app.rename(renaming, to: newTitle) } } }
-            Button("Cancel", role: .cancel) {}
-        }
-        .confirmationDialog(
-            "Delete “\(deleting?.title.readableTitle ?? "")”?",
-            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })
-        ) {
-            Button("Delete chat", role: .destructive) { if let deleting { Task { await app.delete(deleting) } } }
-        } message: {
-            Text(deleteMessage)
-        }
+        .onDeleteCommand { app.deleting = app.openThread }  // ⌫ or ⌘⌫ on the selected chat
         .searchable(text: $search, placement: .sidebar, prompt: Text("Search chats"))
-        .toolbar {
-            ToolbarItem {
-                Button { app.open(.chat(nil)) } label: { Label("New task", systemImage: "square.and.pencil") }
-                    .help("New task (⌘N)")
-                    .disabled(app.isTakingOver)
+        .modifier(FocusedSearch())
+        // Nothing beside the window's buttons: the sidebar's own toggle is in the View menu (⌃⌘S).
+        .toolbar(removing: .sidebarToggle)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider().overlay(Palette.outline)
+                VStack(spacing: 1) {
+                    LibraryLink(title: "Schedules", icon: "calendar.badge.clock", route: .schedules)
+                    LibraryLink(title: "Files", icon: "doc.on.doc", route: .files)
+                    LibraryLink(title: "Saved sign-ins", icon: "key", route: .signIns)
+                    LibraryLink(title: "Memory", icon: "brain", route: .memory)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Library")
+                offlineBanner
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if app.offline {
-                HStack(spacing: 6) {
-                    MontyMark(mood: .failed, size: 9).frame(width: 16, height: 16)
-                    Text("Connection lost. Reconnecting…")
-                }
-                .font(.system(size: 12))
-                .foregroundStyle(Palette.onErrorContainer)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Palette.errorContainer)
+    }
+
+    @ViewBuilder private var offlineBanner: some View {
+        if app.offline {
+            HStack(spacing: 6) {
+                MontyMark(mood: .failed, size: 9).frame(width: 16, height: 16)
+                Text("Connection lost. Reconnecting…")
             }
+            .font(.system(size: 12))
+            .foregroundStyle(Palette.onErrorContainer)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.errorContainer)
         }
     }
 
     private func row(_ thread: ThreadSummary) -> some View {
-        ThreadRow(thread: thread)
+        ThreadRow(
+            thread: thread, unseen: app.unseen.contains(thread.id), pinned: app.pinned.contains(thread.id),
+            pin: { app.setPinned(thread, !app.pinned.contains(thread.id)) }, delete: { app.deleting = thread }
+        )
             .tag(Route.chat(thread.id))
             .contextMenu {
-                Button("Rename…") { newTitle = thread.title.readableTitle; renaming = thread }
+                let isPinned = app.pinned.contains(thread.id)
+                Button(isPinned ? "Unpin" : "Pin") { app.setPinned(thread, !isPinned) }
+                Button("Rename…") { app.renaming = thread }
                 Divider()
-                Button("Delete…", role: .destructive) { deleting = thread }
+                Button("Delete…", role: .destructive) { app.deleting = thread }
             }
-            .accessibilityAction(named: "Rename") { newTitle = thread.title.readableTitle; renaming = thread }
-            .accessibilityAction(named: "Delete") { deleting = thread }
-    }
-
-    private var deleteMessage: String {
-        guard let deleting else { return "" }
-        let stops = deleting.status != nil ? " Monty stops the task it is doing there." : ""
-        return "The chat and everything in it are deleted, along with a schedule that reports there.\(stops) This can't be undone."
+            .swipeActions(edge: .trailing) {
+                Button(role: .destructive) { app.deleting = thread } label: { Label("Delete", systemImage: "trash") }
+            }
+            .accessibilityAction(named: app.pinned.contains(thread.id) ? "Unpin" : "Pin") {
+                app.setPinned(thread, !app.pinned.contains(thread.id))
+            }
+            .accessibilityAction(named: "Rename") { app.renaming = thread }
+            .accessibilityAction(named: "Delete") { app.deleting = thread }
     }
 
     private func filtered(_ threads: [ThreadSummary]) -> [ThreadSummary] {
@@ -144,41 +220,97 @@ struct Sidebar: View {
     }
 }
 
-/// A chat in the sidebar: its title, and a mark for what Monty is doing in it.
+/// A page of the library, pinned under the chats: a row that looks selected while it is open.
+struct LibraryLink: View {
+    @Environment(AppModel.self) private var app
+    let title: String
+    let icon: String
+    let route: Route
+    @State private var hovering = false
+
+    var body: some View {
+        let selected = app.route == route
+        Button { app.open(route) } label: {
+            Label(title, systemImage: icon)
+                .font(.system(size: 13))
+                .foregroundStyle(Palette.onSurface)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 8)
+                .frame(height: 26)
+                .background(RoundedRectangle(cornerRadius: Metrics.radiusMedium)
+                    .fill(selected ? Palette.containerHighest : hovering ? Palette.containerHigh.opacity(0.6) : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .disabled(app.isTakingOver)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// A chat in the sidebar: its title, and a mark for what Monty is doing in it. On hover, a button to delete it, as
+/// Codex shows Archive.
 struct ThreadRow: View {
     let thread: ThreadSummary
+    /// Finished while the user looked elsewhere: bold, with a dot, until they open it, as unread mail.
+    var unseen = false
+    var pinned = false
+    var pin: (() -> Void)?
+    var delete: (() -> Void)?
+    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(thread.title.readableTitle).lineLimit(1)
+            Text(thread.title.readableTitle).lineLimit(1).fontWeight(unseen && thread.status == nil ? .semibold : nil)
             Spacer(minLength: 4)
-            switch thread.status {
-            case .waiting:
-                Circle().fill(Palette.logfire).frame(width: 7, height: 7).accessibilityHidden(true)
-            case .running, .queued:
-                MontyMark(mood: .working, size: 9).frame(width: 16, height: 16)
-            default:
-                switch thread.outcome {
-                case .failed:
-                    Image(systemName: "exclamationmark.circle").font(.system(size: 11)).foregroundStyle(Palette.onSurfaceVariant)
-                        .help("Monty couldn't finish this task")
-                case .stopped:
-                    Image(systemName: "stop.circle").font(.system(size: 11)).foregroundStyle(Palette.onSurfaceVariant)
-                        .help("You stopped this task")
-                default:
-                    EmptyView()
+            if hovering, let delete {
+                if let pin {
+                    Button(action: pin) { Image(systemName: pinned ? "pin.slash" : "pin").font(.system(size: 11)) }
+                        .buttonStyle(IconButtonStyle(size: 20))
+                        .help(pinned ? "Unpin" : "Pin to the top")
                 }
+                Button(action: delete) { Image(systemName: "trash").font(.system(size: 11)) }
+                    .buttonStyle(IconButtonStyle(size: 20))
+                    .help("Delete this chat")
+            } else {
+                mark
             }
         }
+        .onHover { hovering = $0 }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(thread.title.readableTitle)
         .accessibilityValue(statusText)
+    }
+
+    @ViewBuilder private var mark: some View {
+        switch thread.status {
+        case .waiting:
+            Circle().fill(Palette.logfire).frame(width: 7, height: 7).accessibilityHidden(true)
+        case .running, .queued:
+            MontyMark(mood: .working, size: 9).frame(width: 16, height: 16)
+        default:
+            switch thread.outcome {
+            case _ where unseen:
+                Circle().fill(Palette.link).frame(width: 7, height: 7)
+                    .help(thread.outcome == .failed ? "Monty couldn't finish this task" : "Monty finished: you haven't seen it yet")
+            case .failed:
+                Image(systemName: "exclamationmark.circle").font(.system(size: 11)).foregroundStyle(Palette.onSurfaceVariant)
+                    .help("Monty couldn't finish this task")
+            case .stopped:
+                Image(systemName: "stop.circle").font(.system(size: 11)).foregroundStyle(Palette.onSurfaceVariant)
+                    .help("You stopped this task")
+            default:
+                EmptyView()
+            }
+        }
     }
 
     private var statusText: String {
         switch (thread.status, thread.outcome) {
         case (.waiting, _): "Needs you"
         case (.running, _), (.queued, _): "Working"
+        case (_, .failed) where unseen: "Couldn't finish, not seen yet"
+        case _ where unseen: "New reply"
         case (_, .failed): "Couldn't finish"
         case (_, .stopped): "Stopped"
         default: ""
@@ -194,5 +326,20 @@ struct SkeletonRow: View {
             .frame(width: width, height: 9)
             .selectionDisabled()
             .accessibilityHidden(true)
+    }
+}
+
+/// ⌘F puts the keyboard in the sidebar's search (macOS 15 can move the focus there; 14 can't, and leaves it be).
+private struct FocusedSearch: ViewModifier {
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content
+                .searchFocused($focused)
+                .onReceive(NotificationCenter.default.publisher(for: .montyFindChats)) { _ in focused = true }
+        } else {
+            content
+        }
     }
 }
