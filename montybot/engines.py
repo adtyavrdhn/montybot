@@ -13,7 +13,9 @@ factory. `LazyChromium` starts one Playwright per process on the first `open()` 
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Callable
+from pathlib import Path
 
 from playwright.async_api import Playwright, async_playwright
 
@@ -90,4 +92,8 @@ def chromium_headless() -> LazyChromium:
 
 
 def chromium_server() -> LazyChromium:
-    return LazyChromium(ChromiumOptions.server)
+    def options() -> ChromiumOptions:
+        socket = os.environ.get('BROWSER_EGRESS_SOCKET')
+        return ChromiumOptions.server(egress_socket=Path(socket) if socket else None)
+
+    return LazyChromium(options)

@@ -91,6 +91,8 @@ class ChromiumOptions:
     through an `EgressProxy`, which refuses private addresses."""
     allow_private_networks: bool = False
     """With `bwrap`: let pages reach loopback and private addresses. Only for local fixture sites in tests."""
+    egress_socket: Path | None = None
+    """A shared SOCKS proxy in a separate container. Unset: start a private proxy for this browser (local tests)."""
     window_width: int = 1280
     window_height: int = 800
     """The window's outer size in pixels, and the virtual screen's size. The page gets a little less."""
@@ -225,8 +227,30 @@ async def _launch(playwright: Playwright, options: ChromiumOptions) -> _Chrome:
         if options.bwrap:
             if shutil.which(options.bwrap_path) is None:
                 raise ActionFailed(f'could not start Chrome: {options.bwrap_path} not found')
-            proxy = EgressProxy(workdir / 'egress.sock', allow_private=options.allow_private_networks)
-            await proxy.start()
+            if options.egress_socket is not None:
+                if options.allow_private_networks:
+                    raise ActionFailed('a shared browser proxy cannot allow private networks')
+                socket_path = options.egress_socket
+                for attempt in range(5):
+                    try:
+                        reader, writer = await asyncio.wait_for(asyncio.open_unix_connection(socket_path), 2)
+                        try:
+                            writer.write(b'\x05\x01\x00')
+                            if await asyncio.wait_for(reader.readexactly(2), 2) != b'\x05\x00':
+                                raise ActionFailed('browser network proxy unavailable')
+                        finally:
+                            writer.close()
+                            with contextlib.suppress(OSError):
+                                await writer.wait_closed()
+                        break
+                    except (OSError, TimeoutError, asyncio.IncompleteReadError) as error:
+                        if attempt == 4:
+                            raise ActionFailed('browser network proxy unavailable') from error
+                        await asyncio.sleep(1)
+            else:
+                proxy = EgressProxy(workdir / 'egress.sock', allow_private=options.allow_private_networks)
+                await proxy.start()
+                socket_path = proxy.path
             # Every connection through the proxy, loopback too, which Chrome would otherwise connect to directly.
             args += [f'--proxy-server=socks5://127.0.0.1:{PROXY_PORT}', '--proxy-bypass-list=<-loopback>']
             executable = str(
@@ -235,7 +259,8 @@ async def _launch(playwright: Playwright, options: ChromiumOptions) -> _Chrome:
                     chrome=Path(executable or playwright.chromium.executable_path),
                     profile=profile,
                     display=screen.display if screen else None,
-                    proxy=proxy.path,
+                    proxy=socket_path,
+                    proxy_directory=socket_path.parent if options.egress_socket is not None else None,
                     bwrap=options.bwrap_path,
                 )
             )

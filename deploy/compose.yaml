@@ -1,7 +1,9 @@
 # The whole product on one server: Postgres with a nightly backup, the app with its jailed browsers, and Caddy for
 # HTTPS. deploy/deploy.sh runs it on the VM with the settings in /opt/montybot/.env (made by deploy/bootstrap.sh).
-# Networks: Caddy and the app share `edge`; the app, Postgres and the backup share `db`. The browsers reach neither:
-# their only way out is the app's egress proxy, which refuses private addresses (montybot/browser/egress.py).
+# Networks: Caddy and the app share `edge`; the app, Postgres and the backup share `db`. The browser-egress
+# sidecar is only on its own internet-facing bridge, with no db network or app credentials. The public Caddy URL
+# remains reachable as it is from any internet client, under basic auth. Browsers in bwrap use a read-only mounted
+# Unix socket directory to reach the proxy.
 name: montybot
 
 services:
@@ -41,6 +43,29 @@ services:
       - ${BACKUP_DIR:-/opt/montybot/backups}:/backups
     networks: [db]
 
+  # The only process resolving browser destinations. It has internet access, but no route to the db bridge and no
+  # app credentials. The app shares only this Unix socket directory, not a Docker network, with the proxy.
+  browser-egress:
+    build:
+      context: ..
+      args:
+        COMMIT: ${COMMIT:-}
+    image: montybot-app
+    command: ['python', '-m', 'montybot.browser.egress_server', '/run/browser-egress/proxy.sock']
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges]
+    mem_limit: 512m
+    volumes:
+      - browser-egress:/run/browser-egress
+    networks: [browser-egress]
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect('/run/browser-egress/proxy.sock')"]
+      interval: 5s
+      retries: 12
+
   app:
     build:
       context: ..
@@ -50,6 +75,8 @@ services:
     restart: unless-stopped
     depends_on:
       postgres:
+        condition: service_healthy
+      browser-egress:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://montybot:${POSTGRES_PASSWORD:?}@postgres:5432/montybot
@@ -63,6 +90,7 @@ services:
       MODEL: ${MODEL:-claude-code:claude-opus-5-5}
       BROWSER_BACKEND: ${BROWSER_BACKEND:-montybot.engines:chromium_server}
       BROWSER_MAX_OPEN: ${BROWSER_MAX_OPEN:-2}
+      BROWSER_EGRESS_SOCKET: /run/browser-egress/proxy.sock
       CLAUDE_CODE_CREDENTIALS: file
       CLAUDE_CODE_AUTH_FILE: /data/claude-code/auth.json
       WORKSPACES_DIR: /data/workspaces
@@ -76,6 +104,7 @@ services:
     volumes:
       - claude-code:/data/claude-code
       - workspaces:/data/workspaces
+      - browser-egress:/run/browser-egress:ro
     # bwrap makes new namespaces for each Chrome. Docker's defaults forbid that, so (see deploy/README.md):
     # - seccomp.json is Docker's default profile plus the namespace and mount calls bwrap makes;
     # - AppArmor: docker-default refuses bwrap's mounts, so the container runs unconfined and the host's `bwrap`
@@ -151,11 +180,13 @@ networks:
   db: {}
   monty:
     internal: true
+  browser-egress: {}
 
 volumes:
   monty-sessions: {}
   postgres: {}
   claude-code: {}
   workspaces: {}
+  browser-egress: {}
   caddy-data: {}
   caddy-config: {}

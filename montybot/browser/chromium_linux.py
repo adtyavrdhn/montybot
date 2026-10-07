@@ -167,7 +167,13 @@ async def _read_line(fd: int) -> bytes:
 
 
 def bwrap_command(
-    *, chrome: Path, profile: Path, display: Display | None, proxy: Path | None = None, bwrap: str = 'bwrap'
+    *,
+    chrome: Path,
+    profile: Path,
+    display: Display | None,
+    proxy: Path | None = None,
+    proxy_directory: Path | None = None,
+    bwrap: str = 'bwrap',
 ) -> list[str]:
     """The bwrap command line that runs `chrome` with `profile` as its only writable folder.
 
@@ -209,7 +215,11 @@ def bwrap_command(
         command += ['--setenv', name, value]
     if proxy is None:
         return [*command, str(chrome)]
-    command += ['--bind', str(proxy), str(proxy)]
+    # A shared proxy may restart: bind its directory so socat sees the new socket inode on its next connection.
+    if proxy_directory is not None:
+        command += ['--ro-bind', str(proxy_directory), str(proxy_directory)]
+    else:
+        command += ['--bind', str(proxy), str(proxy)]
     return [
         *command,
         '/bin/sh',
@@ -230,10 +240,19 @@ _FORWARD_THEN_EXEC = (
 
 
 def write_bwrap_script(
-    *, path: Path, chrome: Path, profile: Path, display: Display | None, proxy: Path | None = None, bwrap: str = 'bwrap'
+    *,
+    path: Path,
+    chrome: Path,
+    profile: Path,
+    display: Display | None,
+    proxy: Path | None = None,
+    proxy_directory: Path | None = None,
+    bwrap: str = 'bwrap',
 ) -> Path:
     """Write an executable script at `path` that runs Chrome in bwrap with the arguments it is given."""
-    command = bwrap_command(chrome=chrome, profile=profile, display=display, proxy=proxy, bwrap=bwrap)
+    command = bwrap_command(
+        chrome=chrome, profile=profile, display=display, proxy=proxy, proxy_directory=proxy_directory, bwrap=bwrap
+    )
     path.write_text(
         f'#!/bin/sh\n# Written by montybot for one browser. CDP stays on fds 3 and 4.\nexec {shlex.join(command)} "$@"\n'
     )

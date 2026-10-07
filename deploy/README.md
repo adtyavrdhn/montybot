@@ -8,6 +8,7 @@ Everything runs on one Linux machine with Docker Compose (`deploy/compose.yaml`)
 | `app` | the web app, the DBOS workflows and the browsers: one headed Chromium per run, each on its own Xvfb screen, inside bwrap (`montybot.engines:chromium_server`) |
 | `postgres` | our tables and DBOS's |
 | `backup` | `pg_dump` every night at `BACKUP_AT` (03:00 UTC) into `/opt/montybot/backups`, keeping `BACKUP_KEEP_DAYS` (14) days |
+| `browser-egress` | public-only SOCKS proxy for jailed browsers, on a separate bridge without Postgres or app credentials; the app mounts only its socket volume |
 
 The app allows at most `BROWSER_MAX_OPEN` live browsers (default 2 on the server). When full it saves and closes the
 least-recently-used browser that is neither busy nor in a hand-off; that run reopens from saved state on its next call.

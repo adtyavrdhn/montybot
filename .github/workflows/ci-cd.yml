@@ -31,6 +31,8 @@ jobs:
       - run: uv run ruff check montybot tests
       - run: uv run ruff format --check montybot tests
       - run: uv run pyright
+      - name: Validate production Compose configuration
+        run: DOMAIN=localhost POSTGRES_PASSWORD=test SESSION_SECRET=test ENCRYPTION_KEY=test BASIC_AUTH_USER=test BASIC_AUTH_HASH=test docker compose -f deploy/compose.yaml config --quiet
 
   test:
     name: test (${{ matrix.name }})
@@ -84,8 +86,51 @@ jobs:
       - run: uv run playwright install --with-deps chromium
       - run: uv run pytest -q -p no:cacheprovider -n ${{ matrix.workers }} --durations=10 ${{ matrix.args }}
 
+  sidecar-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      DOMAIN: localhost
+      POSTGRES_PASSWORD: test-password
+      SESSION_SECRET: test-session
+      ENCRYPTION_KEY: bW9udHlib3QtdGVzdC1rZXktMzItYnl0ZXMtbG9uZyE=
+      BASIC_AUTH_USER: test
+      BASIC_AUTH_HASH: test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: docker compose -f deploy/compose.yaml up -d --build --wait --wait-timeout 240 app
+      - name: Browser uses sidecar to reach public sites but not Postgres
+        run: |
+          docker compose -f deploy/compose.yaml exec -T app python - <<'PY'
+          import asyncio
+          from montybot.browser.contract import ActionFailed, Navigate
+          from montybot.engines import chromium_server
+
+          async def check():
+              browser = chromium_server()
+              await browser.open(None)
+              try:
+                  try:
+                      await browser.act(Navigate(url='http://postgres:5432/'))
+                  except ActionFailed as error:
+                      assert 'ERR_SOCKS_CONNECTION_FAILED' in str(error), error
+                  else:
+                      raise AssertionError('Chrome reached the database')
+                  await browser.act(Navigate(url='https://example.com/'))
+                  assert 'Example Domain' in (await browser.snapshot()).text
+              finally:
+                  await browser.close()
+
+          asyncio.run(check())
+          PY
+      - if: always()
+        run: docker compose -f deploy/compose.yaml down --volumes --remove-orphans
+
   deploy:
-    needs: [lint, test]
+    needs: [lint, test, sidecar-smoke]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
