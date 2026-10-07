@@ -16,6 +16,7 @@ the source of truth and this page is the map.
 | `conformance.py` | `BrowserBackendConformance`: the tests every backend passes | every backend |
 | `chromium.py`, `chromium_linux.py` | `ChromiumBackend`: real Chrome through Playwright; Xvfb and bwrap on Linux. See [`CHROMIUM.md`](CHROMIUM.md) | #11 |
 | `lightpanda.py` | `LightpandaBackend`: Lightpanda over CDP, evaluation only, no pixels. See [`lightpanda.md`](lightpanda.md) | #18 |
+| `camoufox.py`, `camoufox_fingerprints/` | `CamoufoxBackend`: Camoufox (anti-detect Firefox) over WebDriver BiDi, in the same jail. Evaluation only; see [`camoufox.md`](camoufox.md) | #18 |
 
 ## `BrowserBackend`
 
