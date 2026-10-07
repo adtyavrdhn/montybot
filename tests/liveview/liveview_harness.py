@@ -36,6 +36,7 @@ import uvicorn
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from starlette.types import ASGIApp
 
+from montybot.browser.cdp import CDPOptions, ChromiumCDPBackend, default_executable
 from montybot.browser.contract import (
     Action,
     BrowserBackend,
@@ -378,9 +379,13 @@ class ServoStandIn:
 
 @asynccontextmanager
 async def backends(engine: str) -> AsyncIterator[Callable[[], BrowserBackend]]:
-    """A factory of fresh, closed stand-in backends for `engine`, `chromium` or `servo`. Skips the test when
-    servoshell is not installed."""
-    if engine == 'chromium':
+    """A factory of fresh, closed stand-in backends for `engine`, `chromium` or `servo`, or the real
+    `ChromiumCDPBackend` for `cdp`. Skips the test when servoshell or Chrome is not installed."""
+    if engine == 'cdp':
+        if not default_executable().exists():
+            pytest.skip(f'Chrome not found at {default_executable()}')
+        yield lambda: ChromiumCDPBackend(CDPOptions(headless=True))
+    elif engine == 'chromium':
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=True)
             try:
