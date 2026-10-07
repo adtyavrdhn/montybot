@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
+from importlib.resources import files
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from montybot.browser.contract import BrowserBackend, Click, MouseDown, MouseMove, MouseUp, Press, Scroll, Type
 
@@ -92,6 +93,93 @@ class FrameSource(Protocol):
         """Stop streaming, release any held mouse button, restore the browser's own size, and go back to the run's
         tab. The browser stays open. Safe to call more than once."""
         ...
+
+
+OUTLINE_JS: str = files('montybot.browser').joinpath('outline.js').read_text(encoding='utf-8')
+"""The page as a screen reader reads it (`outline.js`): a function expression run in the active tab."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class OutlineItem:
+    """One thing on screen, in reading order: a heading, a line of text, an image, or a control."""
+
+    role: str
+    """`heading`, `text`, `image`, or a control's ARIA role: `button`, `link`, `textbox`, `checkbox` and so on."""
+    name: str
+    x: float
+    y: float
+    width: float
+    height: float
+    """Its box in the viewport's CSS pixels, the space input uses."""
+    value: str = ''
+    """A field's value; for a password, only how many characters it has."""
+    level: int | None = None
+    checked: bool | None = None
+    disabled: bool = False
+    focused: bool = False
+    secure: bool = False
+
+
+@dataclass(frozen=True, kw_only=True)
+class Outline:
+    """The active tab's visible content for a screen reader. `available` is False for an engine that cannot read
+    the page, so the user is told rather than shown nothing."""
+
+    title: str = ''
+    items: tuple[OutlineItem, ...] = ()
+    available: bool = True
+
+    @classmethod
+    def from_walker(cls, result: object) -> Outline:
+        """`outline.js`'s result, checked: anything malformed is dropped rather than shown."""
+        data = cast(dict[str, Any], result) if isinstance(result, dict) else {}
+        items: list[OutlineItem] = []
+        for raw in cast(list[Any], data.get('items') or []):
+            if not isinstance(raw, dict):
+                continue
+            item = cast(dict[str, Any], raw)
+            try:
+                items.append(
+                    OutlineItem(
+                        role=str(item['role']),
+                        name=str(item.get('name', '')),
+                        x=float(item['x']),
+                        y=float(item['y']),
+                        width=float(item['width']),
+                        height=float(item['height']),
+                        value=str(item.get('value') or ''),
+                        level=int(item['level']) if item.get('level') is not None else None,
+                        checked=bool(item['checked']) if item.get('checked') is not None else None,
+                        disabled=item.get('disabled') is True,
+                        focused=item.get('focused') is True,
+                        secure=item.get('secure') is True,
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return cls(title=str(data.get('title') or ''), items=tuple(items))
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            'title': self.title,
+            'available': self.available,
+            'items': [
+                {key: value for key, value in vars(item).items() if not _default(key, value)} for item in self.items
+            ],
+        }
+
+
+def _default(key: str, value: object) -> bool:
+    """Left out of the JSON: what a reader assumes when it is missing (but an unchecked box still says so)."""
+    return value is None or value == '' or (value is False and key in ('disabled', 'focused', 'secure'))
+
+
+@runtime_checkable
+class OutlineSource(Protocol):
+    """A `FrameSource` that can also say what is on the page, for a user who drives the live view with a screen
+    reader. Chromium's does."""
+
+    async def outline(self) -> Outline: ...
 
 
 @runtime_checkable

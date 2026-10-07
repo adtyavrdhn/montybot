@@ -143,14 +143,20 @@ def _push(settings: Settings, subscription: dict[str, Any], payload: str) -> boo
     return True
 
 
-def _email(settings: Settings, to: str, subject: str, body: str, url: str) -> None:
+def send_email(settings: Settings, to: str, subject: str, body: str) -> None:
+    """One plain message, if email is set up; a failure is logged, never raised."""
+    if settings.smtp_url:
+        _email(settings, to, subject, body, url=None)
+
+
+def _email(settings: Settings, to: str, subject: str, body: str, url: str | None) -> None:
     assert settings.smtp_url is not None
     parts = urlsplit(settings.smtp_url)
     message = EmailMessage()
     message['From'] = settings.mail_from
     message['To'] = to
     message['Subject'] = subject
-    message.set_content(f'{body}\n\nOpen the chat: {url}\n')
+    message.set_content(f'{body}\n\nOpen the chat: {url}\n' if url else f'{body}\n')
     try:
         smtp_class = smtplib.SMTP_SSL if parts.scheme == 'smtps' else smtplib.SMTP
         with smtp_class(parts.hostname or 'localhost', parts.port or 25, timeout=10) as smtp:

@@ -213,3 +213,13 @@ def test_a_schedule_outlives_the_app(app: App, client: Client, slots: Slots, dat
     eventually(lambda: client.thread(watch['thread_id'])['run']['status'] == 'done' or None, what='the run')
     assert reply_of(client, watch['thread_id']) == 'Not yet.'
     assert client.http.delete(f'/api/schedules/{watch["id"]}').status_code == 200
+
+
+def test_deleting_a_schedules_chat_deletes_the_schedule(client: Client, slots: Slots, dbos: DBOSClient) -> None:
+    client.sign_up()
+    watch = set_up(client, f'Tell me when a delivery slot opens at {slots.url}')
+    assert len(dbos.list_schedules()) == 1
+
+    assert client.http.delete(f'/api/threads/{watch["thread_id"]}').status_code == 200
+    assert schedules(client) == []
+    assert dbos.list_schedules() == []  # nothing fires for a chat that is gone

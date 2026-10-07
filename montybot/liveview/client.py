@@ -12,7 +12,7 @@ from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 from websockets.typing import Origin
 
-from montybot.browser.live import Frame, LiveInput, Tab, Tabs
+from montybot.browser.live import Frame, LiveInput, Outline, Tab, Tabs
 from montybot.liveview.auth import SESSION_COOKIE
 from montybot.liveview.wire import (
     ClientMessage,
@@ -20,6 +20,7 @@ from montybot.liveview.wire import (
     ErrorMessage,
     GiveBackRequest,
     Hello,
+    OutlineRequest,
     SwitchTab,
     decode_frame,
     decode_server,
@@ -60,6 +61,8 @@ class LiveViewClient:
         self.frames = 0
         """Frames received so far."""
         self.errors: list[str] = []
+        self.outline: Outline | None = None
+        self._outlines = 0
         self.ended: Ended | None = None
         self.closed = False
 
@@ -107,6 +110,14 @@ class LiveViewClient:
         assert self.ended is not None
         return self.ended
 
+    async def read_outline(self, *, timeout: float = 10) -> Outline:
+        """Ask what is on the page, as a screen reader would, and wait for the answer."""
+        seen = self._outlines
+        await self.send(OutlineRequest())
+        await self.wait_until(lambda: self._outlines > seen, timeout=timeout)
+        assert self.outline is not None
+        return self.outline
+
     async def wait_until(self, condition: Callable[[], bool], *, timeout: float = 10) -> None:
         """Wait until `condition()` holds. Raises `LiveViewClosed` if the connection closes first."""
         async with self._changed:
@@ -145,6 +156,9 @@ class LiveViewClient:
                             self.errors.append(text)
                         case Ended() as ended:
                             self.ended = ended
+                        case Outline() as outline:
+                            self.outline = outline
+                            self._outlines += 1
                 async with self._changed:
                     self._changed.notify_all()
         except ConnectionClosed:

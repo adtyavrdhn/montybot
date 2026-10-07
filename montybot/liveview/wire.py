@@ -6,9 +6,13 @@ JSON header of that length (`seq`, `width`, `height`, `mime`), then the image.
 
     page -> server   mouse_down {x, y, button}   mouse_move {x, y}   mouse_up {x, y, button}   click {x, y}
                      type {text}   press {key, modifiers}   scroll {delta_x, delta_y, x?, y?}
-                     switch_tab {tab_id}   viewport {width, height}   give_back {}
+                     switch_tab {tab_id}   viewport {width, height}   give_back {}   outline {}
     server -> page   hello {handoff_id, reason}   tabs {tabs: [{tab_id, url, title, active}]}   error {message}
-                     ended {given_back}   and binary frames
+                     ended {given_back}   outline {title, available, items: [{role, name, x, y, width, height, ...}]}
+                     and binary frames
+
+`outline` is for a user who drives with a screen reader: what is on the page, in reading order, with where each item
+is (`montybot.browser.live.Outline`). The page asks for it; the server answers once per request.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ from montybot.browser.contract import (
     Scroll,
     Type,
 )
-from montybot.browser.live import Frame, LiveInput, Tab, Tabs
+from montybot.browser.live import Frame, LiveInput, Outline, Tab, Tabs
 
 MAX_MESSAGE = 64 * 1024
 """The longest text message the server accepts from the page, in characters."""
@@ -42,6 +46,13 @@ _SIZES = (100, 10_000)
 
 class WireError(ValueError):
     """A message that does not follow this protocol."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class OutlineRequest:
+    """The page wants to know what is on the active tab, for a screen reader."""
+
+    kind: Literal['outline'] = 'outline'
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -66,7 +77,7 @@ class GiveBackRequest:
     kind: Literal['give_back'] = 'give_back'
 
 
-ClientMessage = LiveInput | SwitchTab | ViewportSize | GiveBackRequest
+ClientMessage = LiveInput | SwitchTab | ViewportSize | GiveBackRequest | OutlineRequest
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -92,7 +103,7 @@ class Ended:
     kind: Literal['ended'] = 'ended'
 
 
-ServerMessage = Hello | Tabs | ErrorMessage | Ended
+ServerMessage = Hello | Tabs | ErrorMessage | Ended | Outline
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -134,6 +145,8 @@ def decode_client(text: str) -> ClientMessage:
             )
         case 'give_back':
             return GiveBackRequest()
+        case 'outline':
+            return OutlineRequest()
         case _:
             raise WireError('unknown kind')
 
@@ -163,7 +176,7 @@ def encode_client(message: ClientMessage) -> str:
             data = {'kind': message.kind, 'tab_id': tab_id}
         case ViewportSize(width=width, height=height):
             data = {'kind': message.kind, 'width': width, 'height': height}
-        case GiveBackRequest():
+        case GiveBackRequest() | OutlineRequest():
             data = {'kind': message.kind}
     return json.dumps(data)
 
@@ -185,6 +198,8 @@ def encode_server(message: ServerMessage) -> str:
             data = {'kind': message.kind, 'message': text}
         case Ended(given_back=given_back):
             data = {'kind': message.kind, 'given_back': given_back}
+        case Outline():
+            data = {'kind': 'outline'} | message.to_json()
     return json.dumps(data)
 
 
@@ -202,6 +217,9 @@ def decode_server(text: str) -> ServerMessage:
             return ErrorMessage(message=_str(data, 'message'))
         case 'ended':
             return Ended(given_back=data.get('given_back') is True)
+        case 'outline':
+            outline = Outline.from_walker(data)
+            return Outline(title=outline.title, items=outline.items, available=data.get('available') is not False)
         case _:
             raise WireError('unknown kind')
 
