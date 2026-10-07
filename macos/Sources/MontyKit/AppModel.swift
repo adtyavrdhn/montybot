@@ -101,6 +101,11 @@ public final class AppModel {
     /// How long a deletion can be undone.
     var undoWindow: Duration = .seconds(8)
     private var pendingDelete: Task<Void, Never>?
+    /// Deletions sent to the server and not answered yet: waited for before quitting or signing out, and kept off
+    /// the list meanwhile.
+    private var deletesInFlight: [String: Task<Void, Never>] = [:]
+    /// A chat is being deleted, or can still be undone: quitting waits for it.
+    public var hasPendingDeletes: Bool { recentlyDeleted != nil || !deletesInFlight.isEmpty }
     /// Where the user has been, for Back and Forward (⌘[ and ⌘]), as in a browser.
     private var backStack: [Route] = []
     private var forwardStack: [Route] = []
@@ -491,6 +496,7 @@ public final class AppModel {
     private func travel(from: inout [Route], to: inout [Route]) {
         guard !isTakingOver else { return }
         while let route = from.popLast() {
+            if route == self.route { continue }  // already here: nothing would happen
             if case .chat(let id?) = route, !threads.contains(where: { $0.id == id }) { continue }
             to.append(self.route)
             travelling = true
@@ -584,7 +590,7 @@ public final class AppModel {
             let changes = localChanges
             do {
                 // A chat deleted a moment ago stays off the list, though the server still has it.
-                let fresh = try await client.threads().filter { $0.id != recentlyDeleted?.id }
+                let fresh = try await client.threads().filter { $0.id != recentlyDeleted?.id && deletesInFlight[$0.id] == nil }
                 guard user != nil else { return }
                 if localChanges != changes { loadAgain = true; continue }  // changed here meanwhile: read again
                 offline = false
@@ -732,7 +738,7 @@ public final class AppModel {
     public func deleteWithUndo(_ thread: ThreadSummary) {
         if let previous = recentlyDeleted {
             pendingDelete?.cancel()
-            Task { await delete(previous) }
+            commit(previous)
         }
         let index = threads.firstIndex { $0.id == thread.id } ?? 0
         deletedFrom = (index, chat?.threadId == thread.id)
@@ -745,8 +751,9 @@ public final class AppModel {
         pendingDelete = Task { [weak self] in
             try? await Task.sleep(for: window)
             guard !Task.isCancelled, let self, self.recentlyDeleted?.id == thread.id else { return }
-            self.pendingDelete = nil  // this task: cancelling it now would cancel the delete's own request
-            await self.finishPendingDelete()
+            self.pendingDelete = nil
+            self.recentlyDeleted = nil
+            await self.commit(thread).value
         }
     }
 
@@ -763,12 +770,26 @@ public final class AppModel {
         if deletedFrom.wasOpen { open(.chat(thread.id)) }
     }
 
-    /// Deletes the chat waiting for its moment now: before signing out or quitting.
+    /// Deletes the chat waiting for its moment now, and waits for every deletion on its way: before signing out or
+    /// quitting.
     public func finishPendingDelete() async {
-        guard let thread = recentlyDeleted else { return }
-        pendingDelete?.cancel()
-        recentlyDeleted = nil
-        await delete(thread)
+        if let thread = recentlyDeleted {
+            pendingDelete?.cancel()
+            recentlyDeleted = nil
+            commit(thread)
+        }
+        for task in Array(deletesInFlight.values) { await task.value }
+    }
+
+    /// Sends the deletion, in a task of its own (not one that undo or a new deletion cancels), tracked until answered.
+    @discardableResult
+    private func commit(_ thread: ThreadSummary) -> Task<Void, Never> {
+        let task = Task { [weak self] in
+            await self?.delete(thread)
+            self?.deletesInFlight[thread.id] = nil
+        }
+        deletesInFlight[thread.id] = task
+        return task
     }
 
     /// Deletes the chat; if it is the one on screen, a new task takes its place.

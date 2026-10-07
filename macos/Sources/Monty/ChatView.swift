@@ -175,6 +175,10 @@ struct ChatView: View {
                         AskCard(chat: chat, ask: ask)
                             .id(ask.id)
                             .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
+                        // What the user had written, or queued, stays in sight under the card, for after.
+                        if chat.queued != nil || !chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Composer(chat: chat)
+                        }
                     }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 } else {
@@ -366,7 +370,7 @@ struct StepsView: View {
                 }
                 .frame(width: 16, height: 18, alignment: .leading)  // the same slot either way, so the text never moves
                 .accessibilityHidden(true)
-                if working, let started = chat.run?.started {
+                if working, chat.run?.status.isWorking == true, chat.pendingMessage == nil, let started = chat.run?.started {
                     // As T3 Code: how long Monty has been at it, ticking, with the steps below.
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         Text("Working for \(spoken(context.date.timeIntervalSince(started)))").monospacedDigit()
@@ -469,7 +473,7 @@ struct AskCard: View {
         .onChange(of: chat.denying) { _, denying in if denying { focus = .reason } }
         .onAppear {
             // Into the answer box only if the user isn't writing something else.
-            if ask.kind == .question, chat.draft.isEmpty { focus = .answer }
+            if ask.kind == .question { focus = .answer }
             announced = true
         }
     }
@@ -556,7 +560,7 @@ struct Composer: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if let queued = chat.queued {
-                QueuedMessage(text: queued, edit: chat.unqueue, remove: { chat.unqueue(); chat.draft = "" })
+                QueuedMessage(text: queued, edit: chat.unqueue, remove: chat.dropQueued)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             HStack(alignment: .bottom, spacing: 8) {

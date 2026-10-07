@@ -676,6 +676,25 @@ struct JourneyTests {
         #expect(!onServer)
     }
 
+    @Test func twoDeletesThenSigningOutAtOnceDeleteBoth() async throws {
+        let app = try await person()
+        let first = try await say("Say hello", in: app)
+        try await eventually("the first reply") { first.run?.status == .done }
+        let a = try #require(app.openThread)
+        app.open(.chat(nil))
+        let second = try await say("Say hello", in: app)
+        try await eventually("the second reply") { second.run?.status == .done }
+        let b = try #require(app.openThread)
+        let email = try #require(app.user?.email)
+
+        app.deleteWithUndo(a)
+        app.deleteWithUndo(b)  // the first is deleted now; the second can still be undone...
+        await app.signOut()  // ...until signing out, which deletes it and waits for both
+        try await app.signIn(email: email, password: "correct horse")
+        await app.loadThreads()
+        #expect(!app.threads.contains { $0.id == a.id || $0.id == b.id })
+    }
+
     @Test func aMessageQueuedWhileMontyWorksGoesWhenItIsDone() async throws {
         let app = try await person()
         let chat = try await say("Say hello", in: app)

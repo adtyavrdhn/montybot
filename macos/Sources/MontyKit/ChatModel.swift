@@ -85,7 +85,8 @@ public final class ChatModel {
     }
     /// Monty is working (not asking): what the user writes now can wait for it, and go when it is done.
     public var canQueue: Bool {
-        threadId != nil && isActive && ask == nil && queued == nil && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        threadId != nil && isActive && pendingMessage == nil && !sending && ask == nil && queued == nil
+            && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     /// There is a run on the server to stop (not just a message on its way).
     public var canStop: Bool { run?.status.isActive == true && !stopping }
@@ -429,6 +430,9 @@ public final class ChatModel {
         let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         draft = typed.isEmpty ? text : text + "\n\n" + typed
     }
+
+    /// Doesn't send the queued message after all.
+    public func dropQueued() { queued = nil }
 
     /// The task ended: a queued message goes now if it ended well; otherwise it comes back to the box, as what it
     /// followed up on didn't happen.

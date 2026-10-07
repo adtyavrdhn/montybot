@@ -109,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// A chat deleted a moment ago is deleted before Monty quits (waiting at most a few seconds for the server), so
     /// quitting never quietly undoes a delete.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard app.recentlyDeleted != nil else { return .terminateNow }
+        guard app.hasPendingDeletes else { return .terminateNow }
         Task {
             await withTaskGroup(of: Void.self) { group in
                 group.addTask { await self.app.finishPendingDelete() }
