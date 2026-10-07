@@ -618,10 +618,11 @@ class _WebDriverError(Exception):
 
 
 class _UnixHTTPConnection(http.client.HTTPConnection):
-    """HTTP over a Unix socket: a jailed Servo's WebDriver (`webdriver_socket`)."""
+    """HTTP over a Unix socket: a jailed Servo's WebDriver (`webdriver_socket`). The Host header still names the
+    port inside the jail, `127.0.0.1:PORT`, because Servo's WebDriver server refuses any other."""
 
-    def __init__(self, path: Path, *, timeout: float) -> None:
-        super().__init__('localhost', timeout=timeout)
+    def __init__(self, path: Path, *, port: int, timeout: float) -> None:
+        super().__init__('127.0.0.1', port, timeout=timeout)
         self._path = path
 
     def connect(self) -> None:
@@ -642,7 +643,7 @@ class _WebDriver:
         self._connection = (
             http.client.HTTPConnection('127.0.0.1', port, timeout=timeout)
             if unix_socket is None
-            else _UnixHTTPConnection(unix_socket, timeout=timeout)
+            else _UnixHTTPConnection(unix_socket, port=port, timeout=timeout)
         )
         self._lock = asyncio.Lock()
         self.session = ''
