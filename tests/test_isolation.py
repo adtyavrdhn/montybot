@@ -196,10 +196,10 @@ async def test_thread_history_and_status_share_a_snapshot(pool: Pool, monkeypatc
         await store.create_run(
             connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt='hello', trigger='message'
         )
-    original = store.load_history
+    original = store.list_runs
 
-    async def complete_between_reads(connection: Any, thread_id: str) -> list[Any]:
-        history = await original(connection, thread_id)
+    async def complete_between_reads(connection: Any, user_id: str, thread_id: str) -> list[Any]:
+        runs = await original(connection, user_id, thread_id)
         async with pool.connection() as writer:
             await store.append_history(
                 writer,
@@ -210,9 +210,9 @@ async def test_thread_history_and_status_share_a_snapshot(pool: Pool, monkeypatc
                 ],
             )
             await store.finish_run(writer, run_id, 'done', output='reply')
-        return history
+        return runs
 
-    monkeypatch.setattr(store, 'load_history', complete_between_reads)
+    monkeypatch.setattr(store, 'list_runs', complete_between_reads)
     request = Request(
         {
             'type': 'http',
@@ -228,7 +228,7 @@ async def test_thread_history_and_status_share_a_snapshot(pool: Pool, monkeypatc
     data = json.loads(bytes(response.body))
     assert data['run']['status'] == 'queued'
     assert data['messages'] == [{'role': 'user', 'text': 'hello'}]
-    monkeypatch.setattr(store, 'load_history', original)
+    monkeypatch.setattr(store, 'list_runs', original)
     data = json.loads(bytes((await api.read_thread(request)).body))
     assert data['run']['status'] == 'done'
     assert data['messages'][-1] == {'role': 'assistant', 'text': 'reply'}

@@ -120,6 +120,15 @@ async def create_run(
     return run_from(row)
 
 
+async def list_runs(connection: Connection, user_id: str, thread_id: str) -> list[Run]:
+    """The thread's runs, oldest first."""
+    cursor = await connection.execute(
+        f'SELECT {RUN_COLUMNS} FROM montybot.runs WHERE thread_id = %s AND user_id = %s ORDER BY created_at',
+        (thread_id, user_id),
+    )
+    return [run_from(row) for row in await cursor.fetchall()]
+
+
 async def get_run(connection: Connection, user_id: str, run_id: str) -> Run | None:
     cursor = await connection.execute(
         f'SELECT {RUN_COLUMNS} FROM montybot.runs WHERE id = %s AND user_id = %s', (run_id, user_id)
@@ -229,6 +238,17 @@ async def open_ask(connection: Connection, user_id: str, run_id: str) -> Ask | N
     )
     row = await cursor.fetchone()
     return None if row is None else ask_from(row)
+
+
+async def list_answered_asks(connection: Connection, user_id: str, thread_id: str) -> list[Ask]:
+    """The thread's asks that have an answer (or expired), in the order they were asked."""
+    cursor = await connection.execute(
+        f'SELECT {", ".join("a." + column for column in ASK_COLUMNS.split(", "))} FROM montybot.asks a '
+        'JOIN montybot.runs r ON r.id = a.run_id '
+        'WHERE r.thread_id = %s AND a.user_id = %s AND a.answer IS NOT NULL ORDER BY r.created_at, a.occurrence',
+        (thread_id, user_id),
+    )
+    return [ask_from(row) for row in await cursor.fetchall()]
 
 
 async def get_ask(connection: Connection, user_id: str, ask_id: str) -> Ask | None:

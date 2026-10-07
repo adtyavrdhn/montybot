@@ -41,6 +41,10 @@ def test_a_waiting_run_survives_the_app_being_killed(app: App, client: Client) -
     assert client.wait_for_ask(thread, 'question')['id'] == question['id']
     client.answer(question, text='green')
     assert 'green' in client.wait_for_reply(thread).lower()
+    assert client.thread(thread)['messages'][1:3] == [
+        {'role': 'assistant', 'text': question['prompt']},
+        {'role': 'user', 'text': 'green'},
+    ]
     memories = client.http.get('/api/memories').json()
     assert len(memories) == 1 and 'green' in memories[0]['text'].lower()  # written once, after the restart
 
@@ -61,6 +65,8 @@ def test_sign_in_through_a_hand_off_then_approve_the_order(client: Client, shop:
 
     assert '#1' in client.wait_for_reply(thread)
     assert [(o.user, o.items) for o in shop.orders] == [('alice', ['eggs'])]
+    events = [m['text'] for m in client.thread(thread)['messages'] if m['role'] == 'event']
+    assert events == [f'You took over the browser: {handoff["prompt"]}', f'You approved: {approval["prompt"]}']
 
 
 def test_a_denied_approval_places_no_order(client: Client, shop: Shop) -> None:

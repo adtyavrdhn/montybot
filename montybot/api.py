@@ -17,7 +17,6 @@ from typing import Annotated, Any, TypeVar
 from urllib.parse import quote, urlsplit
 
 from pydantic import AfterValidator, BaseModel, Field, StringConstraints
-from pydantic_ai.messages import ModelMessage, ModelRequest, TextPart, UserPromptPart
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
@@ -163,18 +162,45 @@ async def list_threads(request: Request, user: User) -> Response:
 @auth.signed_in
 async def read_thread(request: Request, user: User) -> Response:
     async with resources_of(request).pool.connection() as connection:
-        # History and status must describe the same instant, even if a workflow finishes between the reads.
+        # Messages and status must describe the same instant, even if a workflow finishes between the reads.
         await connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
         thread = await store.get_thread(connection, user.id, request.path_params['thread_id'])
         if thread is None:
             return NOT_FOUND
-        history = await store.load_history(connection, thread.id)
-        run = await store.latest_run(connection, user.id, thread.id)
-        run_json = None if run is None else await run_view(connection, user, run)
-    messages = chat_messages(history)
-    if run is not None and run.status in ACTIVE:
-        messages.append({'role': 'user', 'text': run.prompt})  # not in the history until the run finishes
+        runs = await store.list_runs(connection, user.id, thread.id)
+        asks = await store.list_answered_asks(connection, user.id, thread.id)
+        run_json = None if not runs else await run_view(connection, user, runs[-1])
+    messages = chat_messages(runs, asks)
     return JSONResponse({'id': thread.id, 'title': thread.title, 'messages': messages, 'run': run_json})
+
+
+def chat_messages(runs: list[Run], asks: list[Ask]) -> list[dict[str, str]]:
+    """The chat as the user sees it. Each run is their message, what Monty asked them and how they answered, and
+    Monty's reply once the run has finished. `event` lines record approvals and hand-offs."""
+    shown: list[dict[str, str]] = []
+    for run in runs:
+        shown.append({'role': 'user', 'text': run.prompt})
+        for ask in asks:
+            if ask.run_id == run.id:
+                shown.extend(ask_messages(ask))
+        if run.output:
+            shown.append({'role': 'assistant', 'text': run.output})
+    return shown
+
+
+def ask_messages(ask: Ask) -> list[dict[str, str]]:
+    """An answered ask as chat lines."""
+    answer = ask.answer or {}
+    if answer.get('expired'):
+        return [{'role': 'event', 'text': f'Not answered in time: {ask.prompt}'}]
+    match ask.kind:
+        case 'question':
+            return [{'role': 'assistant', 'text': ask.prompt}, {'role': 'user', 'text': str(answer.get('text', ''))}]
+        case 'approval':
+            verdict = 'You approved' if answer.get('approved') else 'You said no to'
+            return [{'role': 'event', 'text': f'{verdict}: {ask.prompt}'}]
+        case 'handoff':
+            return [{'role': 'event', 'text': f'You took over the browser: {ask.prompt}'}]
 
 
 @auth.signed_in
@@ -555,21 +581,6 @@ def schedule_json(schedule: Schedule, paused: bool) -> dict[str, Any]:
 def ask_json(ask: Ask) -> dict[str, Any]:
     """A hand-off's id stays on the server: the live view finds it from the signed-in user's open ask."""
     return {'id': ask.id, 'kind': ask.kind, 'prompt': ask.prompt}
-
-
-def chat_messages(history: list[ModelMessage]) -> list[dict[str, str]]:
-    """What the user sees of the history: their messages and the agent's words, not its tool calls."""
-    shown: list[dict[str, str]] = []
-    for message in history:
-        if isinstance(message, ModelRequest):
-            for part in message.parts:
-                if isinstance(part, UserPromptPart) and isinstance(part.content, str):
-                    shown.append({'role': 'user', 'text': part.content})
-        else:
-            text = '\n'.join(p.content for p in message.parts if isinstance(p, TextPart)).strip()
-            if text and not message.tool_calls:
-                shown.append({'role': 'assistant', 'text': text})
-    return shown
 
 
 # --- workspace results (no filenames in request URLs or telemetry) ---

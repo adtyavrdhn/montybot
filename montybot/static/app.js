@@ -215,6 +215,7 @@ $('new-chat').addEventListener('click', () => { location.hash = '#/new'; closeDr
 // --- a chat ---
 
 function messageBubble(role, text) {
+  // role: 'user', 'assistant', or 'event' (a line recording an approval or a hand-off)
   const bubble = element('div', '', `msg ${role}`);
   if (role === 'assistant') bubble.append(renderMarkdown(text)); else bubble.textContent = text;
   return bubble;
