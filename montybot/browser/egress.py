@@ -41,6 +41,25 @@ _MAX_CONNECTIONS = 128
 _CLOSE_GRACE = 5
 
 
+async def proxy_answers(path: Path, *, attempts: int = 5) -> bool:
+    """Whether a shared proxy on `path` answers a SOCKS5 greeting, trying once a second up to `attempts` times. The
+    browser checks it before starting, so it fails closed when the sidecar is down."""
+    for attempt in range(attempts):
+        try:
+            reader, writer = await asyncio.wait_for(asyncio.open_unix_connection(path), 2)
+            try:
+                writer.write(bytes([_VERSION, 1, _NO_AUTH]))
+                return await asyncio.wait_for(reader.readexactly(2), 2) == bytes([_VERSION, _NO_AUTH])
+            finally:
+                writer.close()
+                with contextlib.suppress(OSError):
+                    await writer.wait_closed()
+        except (OSError, TimeoutError, asyncio.IncompleteReadError):
+            if attempt < attempts - 1:
+                await asyncio.sleep(1)
+    return False
+
+
 class EgressProxy:
     """A SOCKS5 and HTTP `CONNECT` server (no authentication) on the Unix socket `path`."""
 

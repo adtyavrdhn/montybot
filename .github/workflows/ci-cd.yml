@@ -44,7 +44,9 @@ jobs:
           # start authenticated Xvfb sessions. Overlapping sessions failed X authentication under -n 4 (#41).
           - name: unit
             workers: 4
-            args: --ignore=tests/e2e --ignore=tests/browser/test_chromium.py --ignore=tests/browser/test_chromium_linux.py
+            args: >-
+              --ignore=tests/e2e --ignore=tests/browser/test_chromium.py --ignore=tests/browser/test_chromium_linux.py
+              --ignore=tests/browser/test_cdp.py
           - name: browser-serial
             workers: 0
             args: tests/browser/test_chromium.py tests/browser/test_chromium_linux.py
@@ -116,6 +118,50 @@ jobs:
           echo "MONTYBOT_SERVO_BINARY=$RUNNER_TEMP/servo/servoshell" >> "$GITHUB_ENV"
       - run: uv sync --locked
       - run: uv run pytest -q -p no:cacheprovider -rs tests/browser/test_servo.py tests/browser/test_egress.py
+
+  # Chrome over our own CDP pipe, no Playwright at runtime, is evaluated, not deployed (cdp.md): its conformance,
+  # unjailed and in the server's jail (headed on Xvfb, bwrap, no network but the egress proxy), its live view, and the
+  # end-to-end suite. Not a deploy gate. Chrome for Testing is pinned by its SHA-256: the build Playwright 1.63 runs.
+  chromium-cdp-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-retries 30
+        ports:
+          - 5432:5432
+    env:
+      MONTYBOT_TEST_POSTGRES: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      CHROME_VERSION: 153.0.8010.12
+      CHROME_SHA256: 8aac35011c18f6e2d10696154af89a5728ac2ddd6dc6fad24ffdf243c3fcfd5a
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Allow user namespaces, install Xvfb, bwrap, socat and CPython dependencies
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb bubblewrap socat python3-pandas python3-pypdf
+      - run: uv sync --locked
+      - name: Chrome for Testing, and the system libraries it loads
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/chrome.zip" \
+            "https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION/linux64/chrome-linux64.zip"
+          echo "$CHROME_SHA256  $RUNNER_TEMP/chrome.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/chrome.zip" -d "$RUNNER_TEMP"
+          echo "MONTYBOT_CHROME_BINARY=$RUNNER_TEMP/chrome-linux64/chrome" >> "$GITHUB_ENV"
+          uv run playwright install-deps chromium
+      - run: uv run pytest -q -p no:cacheprovider -rs tests/browser/test_cdp.py tests/browser/test_egress.py
+      - run: uv run pytest -q -p no:cacheprovider -rs tests/liveview/test_liveview_engines.py -k cdp
+      - run: uv run pytest -q -p no:cacheprovider -n 4 --durations=10 tests/e2e --browser=cdp
 
   sidecar-smoke:
     runs-on: ubuntu-24.04

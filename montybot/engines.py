@@ -9,9 +9,12 @@ factory. `LazyChromium` starts one Playwright per process on the first `open()` 
 | `montybot.engines:chromium_headless` | Playwright's headless shell, for CI and tests |
 | `montybot.engines:chromium_server` | the Linux server: Xvfb per browser, inside bwrap |
 | `montybot.engines:servo_server` | evaluation only: headless Servo in the same jail and egress proxy (`servo.md`) |
+| `montybot.engines:chromium_cdp_server` | evaluation: the same Chrome and jail, over our own CDP pipe, no Playwright (`cdp.md`) |
+| `montybot.engines:chromium_cdp_headless` | the same in Chrome's headless mode, unjailed, for tests |
 
 Servo needs servoshell at `$MONTYBOT_SERVO_BINARY`, which the app image does not ship. Its sessions are not saved
-between runs on a stock build (`NotSupported('export')`), so keep `chromium_server` for real users.
+between runs on a stock build (`NotSupported('export')`), so keep `chromium_server` for real users. The CDP backend uses
+the app image's Playwright Chromium, or `$MONTYBOT_CHROME_BINARY`.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from pathlib import Path
 
 from playwright.async_api import Playwright, async_playwright
 
+from montybot.browser.cdp import CDPOptions, ChromiumCDPBackend
 from montybot.browser.chromium import ChromiumBackend, ChromiumOptions
 from montybot.browser.contract import Action, Download, Screenshot, Snapshot
 from montybot.browser.live import FrameSource
@@ -103,6 +107,15 @@ def _egress_socket() -> Path | None:
 
 def chromium_server() -> LazyChromium:
     return LazyChromium(lambda: ChromiumOptions.server(egress_socket=_egress_socket()))
+
+
+def chromium_cdp_server() -> ChromiumCDPBackend:
+    """Always jailed, headed on its own Xvfb screen, like `chromium_server`."""
+    return ChromiumCDPBackend(CDPOptions.server(egress_socket=_egress_socket()))
+
+
+def chromium_cdp_headless() -> ChromiumCDPBackend:
+    return ChromiumCDPBackend(CDPOptions(headless=True))
 
 
 def servo_server() -> ServoBackend:

@@ -1,7 +1,9 @@
-"""The live view on real engines: Chromium (Playwright, headless) and Servo (servoshell, headless WebDriver).
+"""The live view on real engines: Chromium (Playwright, headless), Chromium over our own CDP pipe (`cdp`, headless)
+and Servo (servoshell, headless WebDriver).
 
-Each engine is driven directly by a stand-in backend from `liveview_harness`, not by #11's or #12's backends. Servo
-tests skip when servoshell is not installed (set `MONTYBOT_SERVO` to its path).
+Chromium and Servo are driven directly by stand-in backends from `liveview_harness`, not by #11's or #12's backends;
+`cdp` is the real `ChromiumCDPBackend`. Servo tests skip when servoshell is not installed (set `MONTYBOT_SERVO` to its
+path).
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from montybot.liveview.handoffs import InMemoryHandoffs
 from montybot.liveview.scripted_user import press_and_hold, sign_in_to_demo_shop
 from montybot.liveview.wire import ViewportSize
 
-pytestmark = [pytest.mark.anyio, pytest.mark.parametrize('engine', ['chromium', 'servo'])]
+pytestmark = [pytest.mark.anyio, pytest.mark.parametrize('engine', ['chromium', 'cdp', 'servo'])]
 
 RUN = 'run-1'
 USER = 'alice'
@@ -148,7 +150,7 @@ async def test_a_phone_gets_the_page_at_its_size_until_the_give_back(engine: str
                         assert user.frame is not None
                         desktop = (user.frame.frame.width, user.frame.frame.height)
                         await user.send(ViewportSize(width=390, height=700))
-                        if engine == 'chromium':
+                        if engine != 'servo':
                             await user.wait_until(lambda: user.frame is not None and user.frame.frame.width == 390)
                             assert user.frame.frame.height == 700
                             await user.send(ViewportSize(width=1280, height=700))  # turned wide: its own size again
@@ -168,7 +170,7 @@ async def test_a_phone_gets_the_page_at_its_size_until_the_give_back(engine: str
                         await laptop.give_back()
                 after = (await service.snapshot(run_id=RUN, user_id=USER)).snapshot.text
                 assert after == before
-                if engine == 'chromium':
+                if engine == 'chromium':  # Playwright's default viewport
                     assert 'size: 1280x720' in after
             finally:
                 await service.close_all()

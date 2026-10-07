@@ -70,7 +70,7 @@ from montybot.browser.contract import (
     TargetNotFound,
     Type,
 )
-from montybot.browser.egress import PROXY_PORT, EgressProxy
+from montybot.browser.egress import PROXY_PORT, EgressProxy, proxy_answers
 from montybot.browser.live import FrameSource
 from montybot.browser.snapshot import JSON, SnapshotWalker
 from montybot.browser.state import BLANK_URL, BrowserState, Cookie, origin_of
@@ -231,22 +231,8 @@ async def _launch(playwright: Playwright, options: ChromiumOptions) -> _Chrome:
                 if options.allow_private_networks:
                     raise ActionFailed('a shared browser proxy cannot allow private networks')
                 socket_path = options.egress_socket
-                for attempt in range(5):
-                    try:
-                        reader, writer = await asyncio.wait_for(asyncio.open_unix_connection(socket_path), 2)
-                        try:
-                            writer.write(b'\x05\x01\x00')
-                            if await asyncio.wait_for(reader.readexactly(2), 2) != b'\x05\x00':
-                                raise ActionFailed('browser network proxy unavailable')
-                        finally:
-                            writer.close()
-                            with contextlib.suppress(OSError):
-                                await writer.wait_closed()
-                        break
-                    except (OSError, TimeoutError, asyncio.IncompleteReadError) as error:
-                        if attempt == 4:
-                            raise ActionFailed('browser network proxy unavailable') from error
-                        await asyncio.sleep(1)
+                if not await proxy_answers(socket_path):
+                    raise ActionFailed('browser network proxy unavailable')
             else:
                 proxy = EgressProxy(workdir / 'egress.sock', allow_private=options.allow_private_networks)
                 await proxy.start()
