@@ -2,6 +2,7 @@
 // The protocol is in wire.py.
 'use strict';
 
+const main = document.querySelector('main');
 const view = document.getElementById('view');
 const context = view.getContext('2d');
 const keys = document.getElementById('keys');
@@ -25,6 +26,8 @@ let shown = 0;
 let retries = 0;
 let finished = false;
 let pendingMove = null;
+let resizeTimer = 0;
+let sentRoom = null;
 
 function socketUrl() {
   const address = new URL(location.href);
@@ -53,8 +56,10 @@ function connect() {
 
 function onMessage(message) {
   if (message.kind === 'hello') {
-    reason.textContent = 'montybot needs you: ' + message.reason;
+    reason.textContent = 'Monty needs you: ' + message.reason;
     giveBack.disabled = false;
+    sentRoom = null;  // a new connection: the server has not heard the size yet
+    sendViewport();  // now, with the reason shown, the bars have their final height
   } else if (message.kind === 'tabs') {
     tabs.replaceChildren(...message.tabs.map((tab) => new Option(tab.title || tab.url, tab.tab_id, false, tab.active)));
     tabs.hidden = message.tabs.length < 2;
@@ -104,6 +109,25 @@ function finish(text) {
   giveBack.disabled = true;
   if (socket) socket.close();
 }
+
+// --- size ---
+
+// The room for the picture. The server lays the bot's browser out at this size when it is phone-sized, so its pages
+// are readable here, and leaves a desktop-sized one alone (PHONE_WIDTH in app.py).
+function sendViewport() {
+  const box = main.getBoundingClientRect();
+  const room = { width: Math.floor(box.width), height: Math.floor(box.height) };  // never a fraction too big
+  // A small change in height (a status line, the address bar sliding away) is not worth laying the page out again.
+  if (sentRoom && room.width === sentRoom.width && Math.abs(room.height - sentRoom.height) < 50) return;
+  sentRoom = room;
+  send({ kind: 'viewport', ...room });
+}
+
+// Debounced: a resize or a turned phone sends many events, and each new size makes the bot's page lay out again.
+new ResizeObserver(() => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(sendViewport, 300);
+}).observe(main);
 
 // --- input ---
 

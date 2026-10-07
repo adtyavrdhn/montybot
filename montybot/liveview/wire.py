@@ -6,7 +6,7 @@ JSON header of that length (`seq`, `width`, `height`, `mime`), then the image.
 
     page -> server   mouse_down {x, y, button}   mouse_move {x, y}   mouse_up {x, y, button}   click {x, y}
                      type {text}   press {key, modifiers}   scroll {delta_x, delta_y, x?, y?}
-                     switch_tab {tab_id}   give_back {}
+                     switch_tab {tab_id}   viewport {width, height}   give_back {}
     server -> page   hello {handoff_id, reason}   tabs {tabs: [{tab_id, url, title, active}]}   error {message}
                      ended {given_back}   and binary frames
 """
@@ -36,6 +36,8 @@ from montybot.browser.live import Frame, LiveInput, Tab, Tabs
 MAX_MESSAGE = 64 * 1024
 """The longest text message the server accepts from the page, in characters."""
 _MIMES = ('image/jpeg', 'image/png')
+_SIZES = (100, 10_000)
+"""The smallest and largest `viewport` width and height, in CSS pixels."""
 
 
 class WireError(ValueError):
@@ -49,13 +51,22 @@ class SwitchTab:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ViewportSize:
+    """The room the page has for the picture, in CSS pixels. Sent when the page connects and when it resizes."""
+
+    width: int
+    height: int
+    kind: Literal['viewport'] = 'viewport'
+
+
+@dataclass(frozen=True, kw_only=True)
 class GiveBackRequest:
     """The user pressed "Give back to the bot"."""
 
     kind: Literal['give_back'] = 'give_back'
 
 
-ClientMessage = LiveInput | SwitchTab | GiveBackRequest
+ClientMessage = LiveInput | SwitchTab | ViewportSize | GiveBackRequest
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -116,6 +127,11 @@ def decode_client(text: str) -> ClientMessage:
             return Scroll(delta_x=_number(data, 'delta_x', 0), delta_y=_number(data, 'delta_y', 0), at=at)
         case 'switch_tab':
             return SwitchTab(tab_id=_str(data, 'tab_id'))
+        case 'viewport':
+            return ViewportSize(
+                width=round(_bounded(data, 'width', _SIZES)),
+                height=round(_bounded(data, 'height', _SIZES)),
+            )
         case 'give_back':
             return GiveBackRequest()
         case _:
@@ -145,6 +161,8 @@ def encode_client(message: ClientMessage) -> str:
                 data |= {'x': at.x, 'y': at.y}
         case SwitchTab(tab_id=tab_id):
             data = {'kind': message.kind, 'tab_id': tab_id}
+        case ViewportSize(width=width, height=height):
+            data = {'kind': message.kind, 'width': width, 'height': height}
         case GiveBackRequest():
             data = {'kind': message.kind}
     return json.dumps(data)
@@ -235,6 +253,13 @@ def _number(data: dict[str, object], key: str, default: float | None = None) -> 
     if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
         raise WireError(f'{key} must be a number')
     return float(value)
+
+
+def _bounded(data: dict[str, object], key: str, bounds: tuple[float, float]) -> float:
+    value = _number(data, key)
+    if not bounds[0] <= value <= bounds[1]:
+        raise WireError(f'{key} must be from {bounds[0]} to {bounds[1]}')
+    return value
 
 
 def _point(data: dict[str, object]) -> Point:

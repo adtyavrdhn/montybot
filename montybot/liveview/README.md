@@ -38,6 +38,12 @@ user's browser                     live view app (this package)              bro
   the socket only: never logged or stored. On give-back the run gets a `GiveBack`: `HandoffEnded` plus a summary in
   words.
 - **A dropped connection lets go.** Closing a source releases any held mouse button, so a check is never left held.
+- **Phones get a phone layout.** The page reports the room it has for the picture (`viewport`) when it connects and
+  when it resizes. Narrower than 900 CSS pixels (`PHONE_WIDTH`), the bot's browser is laid out at that size as a phone
+  browser would (Chromium: `Emulation.setDeviceMetricsOverride` with `mobile`, at most 2000 pixels tall),
+  so text is readable and fields can be tapped. Wider, it keeps its own desktop size, scaled down to fit. Closing the
+  source (give-back, a dropped or replaced connection, the hand-off ending) restores the browser's own size, so the
+  agent never sees the phone layout. Engines that cannot (Servo, polled) raise `NotSupported` and the app ignores it.
 - **Popups and new tabs** become the active tab, as in a browser window; the page shows a tab picker when there is
   more than one. When a popup closes, and when the hand-off ends, the run's own tab is active again. Tabs the user left
   open stay open.
@@ -49,7 +55,8 @@ JSON header (`seq`, `width`, `height` in CSS pixels, `mime`), then the image. Se
 
 ```
 page -> server   mouse_down {x, y, button}  mouse_move {x, y}  mouse_up {x, y, button}  click {x, y}
-                 type {text}  press {key, modifiers}  scroll {delta_x, delta_y, x?, y?}  switch_tab {tab_id}  give_back
+                 type {text}  press {key, modifiers}  scroll {delta_x, delta_y, x?, y?}  switch_tab {tab_id}
+                 viewport {width, height}  give_back
 server -> page   hello {handoff_id, reason}  tabs {tabs}  error {message}  ended {given_back}  + binary frames
 ```
 

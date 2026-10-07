@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import re
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -11,8 +12,8 @@ from dataclasses import dataclass
 
 import httpx
 import pytest
-from liveview_harness import StubBrowserService, serve_app
-from playwright.async_api import async_playwright
+from liveview_harness import StubBrowserService, backends, serve_app, serve_fixtures
+from playwright.async_api import async_playwright, expect
 from websockets.exceptions import InvalidStatus
 
 from montybot.browser.contract import (
@@ -34,6 +35,7 @@ from montybot.liveview.app import CLOSE_ENDED, CLOSE_NOT_FOUND, CLOSE_REPLACED, 
 from montybot.liveview.auth import SESSION_COOKIE, StubAuthenticator
 from montybot.liveview.client import LiveViewClient, LiveViewClosed
 from montybot.liveview.handoffs import InMemoryHandoffs
+from montybot.liveview.wire import ViewportSize
 
 pytestmark = pytest.mark.anyio
 
@@ -278,3 +280,59 @@ async def test_the_live_view_ends_when_the_handoff_ends_elsewhere() -> None:
         await client.wait_until(lambda: client.closed)
         assert client.ended is not None and not client.ended.given_back
         assert client.close_code == CLOSE_ENDED
+
+
+async def test_a_size_the_engine_cannot_use_is_ignored() -> None:
+    """The polled `FakeBrowser` cannot resize: the page's size is dropped quietly, and the user keeps driving."""
+    async with live() as setup, setup.connect() as client:
+        await client.wait_until(lambda: client.hello is not None)
+        await client.send(ViewportSize(width=390, height=700))
+        await client.send(Press(key='Tab'))
+        await eventually(lambda: performed(setup.browser) == [Press(key='Tab')])
+        assert client.errors == []
+
+
+@pytest.mark.parametrize(('width', 'height', 'phone'), [(1280, 800, False), (390, 844, True)])
+async def test_the_whole_picture_fits_the_screen(width: int, height: int, phone: bool) -> None:
+    """The page in a real browser, on a laptop and on a phone, with real Chromium as the bot's browser: the picture
+    fits the window without scrolling. On the phone the bot's page is laid out at the phone's size while the user
+    drives, and at its own size again after the give-back."""
+    with serve_fixtures() as origin:
+        async with backends('chromium') as new, async_playwright() as playwright:
+            service = StubBrowserService(new)
+            handoffs = InMemoryHandoffs()
+            auth = StubAuthenticator()
+            await service.start(run_id=RUN, user_id='alice')
+            await service.act(run_id=RUN, user_id='alice', action=Navigate(url=f'{origin}/size'))
+            handoff = await service.start_handoff(run_id=RUN, user_id='alice', reason='Please sign in')
+            handoffs.add(handoff)
+            browser = await playwright.chromium.launch(headless=True)
+            try:
+                async with serve_app(live_view_app(service=service, handoffs=handoffs, auth=auth)) as base:
+                    context = await browser.new_context(
+                        viewport={'width': width, 'height': height},
+                        is_mobile=phone,
+                        device_scale_factor=3 if phone else 1,
+                    )
+                    await context.add_cookies([{'name': SESSION_COOKIE, 'value': auth.sign_in('alice'), 'url': base}])
+                    page = await context.new_page()
+                    await page.goto(f'{base}/handoff/{handoff.handoff_id}')
+                    await page.locator('#reason', has_text='Monty needs you: Please sign in').wait_for()
+                    view = page.locator('#view')
+                    # Frames are in CSS pixels: on the phone, as wide as the room the page has once it is phone-sized.
+                    await expect(view).to_have_attribute('width', '1280' if not phone else re.compile(r'^3\d\d$'))
+                    box = await view.bounding_box()
+                    assert box is not None
+                    assert box['x'] >= 0 and box['y'] >= 0
+                    assert box['x'] + box['width'] <= width and box['y'] + box['height'] <= height
+                    if phone:
+                        assert box['width'] >= 370  # the phone's whole width, less a margin
+                    else:
+                        assert box['width'] / box['height'] == pytest.approx(1280 / 720, abs=0.01)
+                    await page.click('#give-back')
+                    await page.locator('#status', has_text='Thanks').wait_for()
+                after = (await service.snapshot(run_id=RUN, user_id='alice')).snapshot.text
+                assert 'size: 1280x720' in after
+            finally:
+                await browser.close()
+                await service.close_all()

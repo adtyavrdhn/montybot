@@ -8,13 +8,14 @@ in with the keyboard, give it back, approve the order.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 
 import pytest
 from conftest import App
-from playwright.sync_api import Page, expect, sync_playwright
+from playwright.sync_api import FloatRect, Page, expect, sync_playwright
 from sites.shop import Shop
 
 from montybot.workspaces import Workspaces, save_download
@@ -53,6 +54,16 @@ def send(page: Page, text: str) -> None:
     page.click('#send')
 
 
+def assert_fits_the_window(page: Page, selector: str) -> FloatRect:
+    """The element is wholly on screen: nothing of it needs scrolling to."""
+    box = page.frame_locator('#live').locator(selector).bounding_box()
+    viewport = page.viewport_size
+    assert box is not None and viewport is not None
+    assert box['x'] >= 0 and box['y'] >= 0
+    assert box['x'] + box['width'] <= viewport['width'] and box['y'] + box['height'] <= viewport['height']
+    return box
+
+
 @pytest.mark.scripted
 def test_chat(app: App, person: Page) -> None:
     sign_up(person, app)
@@ -71,6 +82,7 @@ def test_take_over_sign_in_and_approve(app: App, person: Page, shop: Shop) -> No
     live = person.frame_locator('#live')
     expect(live.locator('#give-back')).to_be_enabled()
     expect(live.locator('#url')).to_contain_text('/login')
+    assert_fits_the_window(person, '#view')
     live.locator('#keyboard').click()
     keys = live.locator('#keys')
     keys.press_sequentially('alice')
@@ -83,6 +95,30 @@ def test_take_over_sign_in_and_approve(app: App, person: Page, shop: Shop) -> No
     person.get_by_role('button', name='Approve').click()
     expect(person.locator('.msg.assistant').last).to_contain_text('#1')
     assert [(o.user, o.items) for o in shop.orders] == [('alice', ['eggs'])]
+
+
+def test_take_over_on_a_phone(app: App, shop: Shop, request: pytest.FixtureRequest) -> None:
+    """On a phone the bot's browser fills the screen's width, laid out at the phone's size when the engine can."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        phone = browser.new_page(
+            viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True, device_scale_factor=3
+        )
+        phone.set_default_timeout(30_000)
+        sign_up(phone, app)
+        send(phone, f'Order eggs from {shop.url}')
+        phone.get_by_role('button', name='Take over the browser').click()
+        live = phone.frame_locator('#live')
+        expect(live.locator('#reason')).to_contain_text('Monty needs you:')
+        expect(live.locator('#url')).to_contain_text('/login')
+        if request.config.getoption('--browser') == 'chromium':
+            expect(live.locator('#view')).to_have_attribute('width', re.compile(r'^3\d\d$'))  # phone-sized frames
+            assert assert_fits_the_window(phone, '#view')['width'] >= 350
+        else:
+            assert_fits_the_window(phone, '#view')  # HtmlBrowser cannot resize: its picture is scaled down
+        live.locator('#give-back').click()
+        expect(phone.locator('#takeover')).to_be_hidden()
+        browser.close()
 
 
 @pytest.mark.scripted

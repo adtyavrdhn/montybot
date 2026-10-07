@@ -42,7 +42,7 @@ from montybot.browser.contract import (
     Scroll,
     Type,
 )
-from montybot.browser.live import Frame, LiveInput, Tab, Tabs
+from montybot.browser.live import Frame, LiveInput, Tab, Tabs, Viewport
 from montybot.liveview.keys import key_for
 from montybot.liveview.latest import Latest
 
@@ -128,6 +128,10 @@ class WebDriverFrameSource:
                 raise ActionFailed('no such tab')
             await self._switch(tab_id)
         self._tabs_due = 0
+
+    async def set_viewport(self, viewport: Viewport | None) -> None:
+        # WebDriver can only resize the window, which gives no phone layout and outlives the hand-off.
+        raise NotSupported('viewport', engine=ENGINE)
 
     async def close(self) -> None:
         if self._closed:

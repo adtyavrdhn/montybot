@@ -34,6 +34,7 @@ from montybot.liveview.auth import StubAuthenticator
 from montybot.liveview.client import LiveViewClient
 from montybot.liveview.handoffs import InMemoryHandoffs
 from montybot.liveview.scripted_user import press_and_hold, sign_in_to_demo_shop
+from montybot.liveview.wire import ViewportSize
 
 pytestmark = [pytest.mark.anyio, pytest.mark.parametrize('engine', ['chromium', 'servo'])]
 
@@ -123,6 +124,54 @@ async def test_popups_are_followed_and_the_run_keeps_its_tab(engine: str) -> Non
             await source.switch_tab(popup.tab_id)
             await source.close()
             assert (await backend.snapshot()).url == f'{origin}/popup'  # the agent is back on its own tab
+
+
+async def test_a_phone_gets_the_page_at_its_size_until_the_give_back(engine: str) -> None:
+    """On a phone the user drives the page laid out for the phone; after the give-back the agent has it at its own size
+    again. Servo cannot resize, and keeps its own size."""
+    with serve_fixtures() as origin:
+        async with backends(engine) as new:
+            service = StubBrowserService(new)
+            handoffs = InMemoryHandoffs()
+            auth = StubAuthenticator()
+            app = live_view_app(service=service, handoffs=handoffs, auth=auth)
+            try:
+                await service.start(run_id=RUN, user_id=USER)
+                await service.act(run_id=RUN, user_id=USER, action=Navigate(url=f'{origin}/size'))
+                before = (await service.snapshot(run_id=RUN, user_id=USER)).snapshot.text
+                handoff = await service.start_handoff(run_id=RUN, user_id=USER, reason='Please sign in')
+                handoffs.add(handoff)
+                async with serve_app(app) as base:
+                    ws = f'{base.replace("http", "ws", 1)}/handoff/{handoff.handoff_id}/ws'
+                    async with LiveViewClient.connect(ws, session=auth.sign_in(USER)) as user:
+                        await user.wait_until(lambda: user.frame is not None)
+                        assert user.frame is not None
+                        desktop = (user.frame.frame.width, user.frame.frame.height)
+                        await user.send(ViewportSize(width=390, height=700))
+                        if engine == 'chromium':
+                            await user.wait_until(lambda: user.frame is not None and user.frame.frame.width == 390)
+                            assert user.frame.frame.height == 700
+                            await user.send(ViewportSize(width=1280, height=700))  # turned wide: its own size again
+                            await user.wait_until(lambda: user.frame is not None and user.frame.frame.width == 1280)
+                            await user.send(ViewportSize(width=390, height=700))
+                            await user.wait_until(lambda: user.frame is not None and user.frame.frame.width == 390)
+                        else:
+                            await user.send(Press(key='Tab'))  # the size was ignored, and the connection works
+                            await asyncio.sleep(0.5)
+                            assert (user.frame.frame.width, user.frame.frame.height) == desktop
+                        assert user.errors == []
+                    # The phone's connection dropped without a give-back; the user comes back on a laptop.
+                    async with LiveViewClient.connect(ws, session=auth.sign_in(USER)) as laptop:
+                        await laptop.wait_until(lambda: laptop.frame is not None)
+                        assert laptop.frame is not None
+                        assert (laptop.frame.frame.width, laptop.frame.frame.height) == desktop
+                        await laptop.give_back()
+                after = (await service.snapshot(run_id=RUN, user_id=USER)).snapshot.text
+                assert after == before
+                if engine == 'chromium':
+                    assert 'size: 1280x720' in after
+            finally:
+                await service.close_all()
 
 
 async def test_u2_sign_in_through_the_live_view(engine: str) -> None:
