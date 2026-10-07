@@ -21,6 +21,9 @@ struct ChatView: View {
         .navigationTitle(chat.title.isEmpty ? "New task" : chat.title.readableTitle)
         .navigationSubtitle(subtitle)
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                if chat.threadId != nil { MontyMark(mood: mood, size: 14).help(subtitle) }
+            }
             ToolbarItemGroup(placement: .primaryAction) {
                 if chat.isActive {
                     Button { chat.watching.toggle() } label: {
@@ -55,6 +58,17 @@ struct ChatView: View {
         }
     }
 
+    /// The mascot's mood for this chat: working, waiting for the user, or how the last task ended.
+    private var mood: MontyMark.Mood {
+        if chat.ask != nil { return .waiting }
+        if chat.isWorking { return .working }
+        switch chat.run?.status {
+        case .failed: return .failed
+        case .done: return .done
+        default: return .idle
+        }
+    }
+
     private var subtitle: String {
         if let ask = chat.ask { return AppModel.headline(for: ask.kind) }
         if chat.isWorking { return chat.reconnecting ? "Connection lost. Reconnecting…" : "Working" }
@@ -73,7 +87,7 @@ struct ChatView: View {
                         VStack(alignment: .leading, spacing: 20) {
                             Spacer(minLength: 0)  // a short chat sits just above the composer, as in Messages
                             if chat.loading {
-                                ProgressView().controlSize(.small).frame(maxWidth: .infinity)
+                                MontyMark(mood: .working, size: 22).frame(maxWidth: .infinity)
                             }
                             if !chat.loading, chat.shownMessages.isEmpty, !chat.isActive {
                                 EmptyState(
@@ -83,7 +97,7 @@ struct ChatView: View {
                                 )
                             }
                             ForEach(Array(chat.shownMessages.enumerated()), id: \.offset) { _, message in
-                                MessageView(message: message)
+                                MessageView(message: message).transition(.arrive)
                             }
                             if let text = chat.preview?.text, !text.isEmpty, chat.isWorking {
                                 MessageView(message: ChatMessage(role: .assistant, text: text), draft: true)
@@ -92,7 +106,7 @@ struct ChatView: View {
                                 StepsView(chat: chat)
                             }
                             if let ask = chat.ask {
-                                AskCard(chat: chat, ask: ask).id(ask.id)
+                                AskCard(chat: chat, ask: ask).id(ask.id).transition(.arrive)
                             }
                             if chat.canRetry {
                                 Button { Task { await chat.retry() } } label: {
@@ -103,6 +117,8 @@ struct ChatView: View {
                             }
                             Color.clear.frame(height: 1).id("end")
                         }
+                        .motion(.spring(response: 0.42, dampingFraction: 0.86), value: chat.shownMessages.count)
+                        .motion(.spring(response: 0.42, dampingFraction: 0.86), value: chat.ask?.id)
                         .frame(maxWidth: Metrics.readingWidth, alignment: .leading)
                         .padding(.horizontal, Metrics.gutter)
                         .padding(.top, 24)
@@ -190,7 +206,10 @@ struct MessageView: View {
                 if draft {
                     Text("Writing…").font(.system(size: 12)).foregroundStyle(Palette.onSurfaceVariant)
                 }
-                MarkdownView(text: message.text).opacity(draft ? 0.7 : 1)
+                MarkdownView(text: message.text)
+                    .opacity(draft ? 0.7 : 1)
+                    .contentTransition(.opacity)
+                    .motion(.easeOut(duration: 0.2), value: message.text)
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel(draft ? "Monty is writing" : "Monty said")
@@ -212,17 +231,20 @@ struct StepsView: View {
             HStack(spacing: 0) {
                 Group {
                     if working {
-                        ProgressView().controlSize(.mini)
+                        MontyMark(mood: .working, size: 10)
                     } else {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 9, weight: .semibold))
                             .rotationEffect(.degrees(expanded ? 90 : 0))
+                            .motion(.spring(response: 0.3, dampingFraction: 0.8), value: expanded)
                     }
                 }
-                .frame(width: 16, alignment: .leading)  // the same slot either way, so the text never moves
+                .frame(width: 16, height: 18, alignment: .leading)  // the same slot either way, so the text never moves
                 .accessibilityHidden(true)
                 Text(working ? (chat.activity ?? "Starting…") : "\(steps.count) step\(steps.count == 1 ? "" : "s")")
                     .lineLimit(1)
+                    .contentTransition(.opacity)
+                    .motion(.easeInOut(duration: 0.25), value: chat.activity)
                 if working, steps.count > 3 {
                     Text(expanded ? "  ·  Show fewer" : "  ·  Show all \(steps.count)").foregroundStyle(Palette.actionText)
                 }
@@ -418,6 +440,7 @@ struct Composer: View {
             .padding(.vertical, 6)
             .background(RoundedRectangle(cornerRadius: Metrics.radius).fill(chat.ask != nil ? Palette.containerLowest : Palette.container))
             .overlay(RoundedRectangle(cornerRadius: Metrics.radius).strokeBorder(focused ? Palette.link : Palette.outline, lineWidth: focused ? 1.5 : 1))
+            .motion(.easeOut(duration: 0.18), value: focused)
             .shadow(color: .black.opacity(0.04), radius: 6, y: 2)
             .onTapGesture { focused = true }
         }
@@ -484,6 +507,7 @@ struct NewTaskView: View {
         VStack(spacing: 0) {
             Spacer()
             VStack(alignment: .leading, spacing: 0) {
+                MontyMark(mood: .idle, size: 34).padding(.leading, -12).padding(.bottom, 6)
                 Text("What should Monty do?")
                     .font(.system(size: 22, weight: .semibold))
                     .accessibilityAddTraits(.isHeader)
@@ -571,7 +595,7 @@ struct BrowserPanel: View {
                         .accessibilityLabel("Monty's browser as it works")
                 } else {
                     VStack(spacing: 8) {
-                        if chat.isWorking { ProgressView().controlSize(.small).accessibilityHidden(true) }
+                        if chat.isWorking { MontyMark(mood: .working, size: 18) }
                         Text(chat.isWorking ? "Waiting for Monty to open a page…" : "No picture yet")
                             .font(.system(size: 12))
                             .foregroundStyle(Palette.onSurfaceVariant)

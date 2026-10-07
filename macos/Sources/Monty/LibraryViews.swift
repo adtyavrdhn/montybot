@@ -37,7 +37,7 @@ struct Page<Items: RandomAccessCollection, Row: View>: View where Items.Element:
                             .card(padding: 0)
                         }
                     } else {
-                        ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(.vertical, 48)
+                        MontyMark(mood: .working, size: 22).frame(maxWidth: .infinity).padding(.vertical, 48)
                     }
                 }
                 .padding(.top, 20)
