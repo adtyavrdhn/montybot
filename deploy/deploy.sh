@@ -21,11 +21,11 @@ DOMAIN=$DOMAIN sh ~/montybot-release/deploy/bootstrap.sh
 rm -rf /opt/montybot/src && mv ~/montybot-release /opt/montybot/src
 echo "$COMMIT" > /opt/montybot/src/COMMIT
 cd /opt/montybot/src/deploy
-compose() { sudo --preserve-env=COMPOSE_PROFILES,MONTY_URL docker compose --env-file /opt/montybot/.env "$@"; }
+compose() { sudo --preserve-env=COMPOSE_PROFILES,MONTY_URL,COMMIT docker compose --env-file /opt/montybot/.env "$@"; }
 
 . /opt/montybot/.env
 # Only the manual private release installs these images. Normal CD reuses them, failing closed if missing.
-export COMPOSE_PROFILES= MONTY_URL=
+export COMPOSE_PROFILES= MONTY_URL= COMMIT
 if [ -n "${MONTY_PRIVATE_COMMIT:-}" ]; then
     case "$MONTY_PRIVATE_COMMIT" in *[!0-9a-f]*) echo "Invalid MONTY_PRIVATE_COMMIT" >&2; exit 1 ;; esac
     [ "${#MONTY_PRIVATE_COMMIT}" -eq 40 ] || { echo "Expected full source commit" >&2; exit 1; }

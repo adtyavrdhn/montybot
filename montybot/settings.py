@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     executor_id: str = 'local'
     """DBOS recovers the unfinished workflows of this executor when the app starts. One id per app process."""
     logfire_token: SecretStr | None = Field(default=None, alias='LOGFIRE_TOKEN')
+    logfire_include_content: bool = True
+    """Export messages, replies, instructions, the agent's code, page snapshots and exception messages
+    (`montybot/observability.py`). On for the demo; turn off before real users' data flows through."""
+    environment: str = 'local'
+    commit: str | None = None
+    """The deployed commit, baked into the image by `deploy/deploy.sh`; Logfire's `service.version`."""
 
     session_secret: SecretStr
     encryption_key: SecretStr
@@ -30,7 +36,7 @@ class Settings(BaseSettings):
     """Mark the session cookie `Secure`; on behind TLS."""
 
     typesafe_api_key: SecretStr | None = None
-    jev_enabled: bool = False
+    """Jev advice is on whenever this is set (`montybot/jev.py`)."""
     jev_model: str = 'jev-latest'
     """Use a versioned Jev model after calibrating the threshold; the alias is for initial evaluation only."""
     jev_threshold: float = Field(default=0.8, ge=0, le=1)

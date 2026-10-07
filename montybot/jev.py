@@ -35,11 +35,8 @@ class Intent(BaseModel):
 
 
 def make_model(settings: Settings) -> Model | None:
-    if (
-        not settings.jev_enabled
-        or settings.typesafe_api_key is None
-        or not settings.typesafe_api_key.get_secret_value().strip()
-    ):
+    """Jev is on whenever a key is configured; without one the agent has no Jev tools."""
+    if settings.typesafe_api_key is None or not settings.typesafe_api_key.get_secret_value().strip():
         return None
     from pydantic_ai.models.typesafe import TypeSafeModel
     from pydantic_ai.providers.typesafe import TypeSafeProvider

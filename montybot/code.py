@@ -24,8 +24,10 @@ import re
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import urlsplit
 
 from dbos import DBOS
+from opentelemetry import trace
 from pydantic_ai import FunctionToolset, RunContext
 from pydantic_monty import (
     AsyncMonty,
@@ -151,6 +153,9 @@ def browser_functions(session: Session) -> dict[str, Callable[..., Awaitable[str
 
     @timed('code.browser.goto')
     async def goto(url: str) -> str:
+        if site := urlsplit(str(url)).hostname:  # the host only, never the URL
+            trace.get_current_span().set_attribute('browser.site', site)
+
         async def use() -> str:
             search_ready[0] = False
             refused = await refused_url(str(url), allow_private=allow_private)

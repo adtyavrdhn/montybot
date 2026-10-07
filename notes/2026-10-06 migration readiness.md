@@ -11,8 +11,8 @@ to transfer the repository or change organisation access.
 - Keep ENCRYPTION_KEY and SESSION_SECRET unchanged. A new key would invalidate existing users' sign-ins or cookies.
 - Verify U1-U6 on the hosted app with the basic-auth gate, not merely its unauthenticated health endpoint.
 - Inventory Actions secrets without printing values. Current optional integration keys are TYPESAFE_API_KEY and
-  LOGFIRE_TOKEN. Paid nightly evaluation additionally needs ANTHROPIC_API_KEY and explicit opt-in.
-- Jev remains off until JEV_ENABLED=true and a key are present. Its recommendations are not automatic actions.
+  LOGFIRE_TOKEN.
+- Jev is on whenever TYPESAFE_API_KEY is set (JEV_ENABLED was removed). Its recommendations are not automatic actions.
 - Full Monty release tooling is merged, but private images must be built/activated on the VM before claiming the
   hosted app uses Full Monty. Keep source and image layers private; app-only deploys must not publish them.
 

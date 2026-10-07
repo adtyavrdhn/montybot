@@ -50,7 +50,11 @@ def test_errors_and_missing_metadata_abstain() -> None:
     assert likelihood(None, 'direction', 'read') == 0
     assert likelihood({'probabilities': {'direction': {'read': float('nan')}}}, 'direction', 'read') == 0
     assert make_model(settings()) is None
-    assert make_model(settings(jev_enabled=True)) is None
+    assert make_model(settings(typesafe_api_key=SecretStr('  '))) is None
+
+
+def test_on_whenever_a_key_is_set() -> None:
+    assert make_model(settings(typesafe_api_key=SecretStr('key'))) is not None
 
 
 def test_only_unique_link_labels_are_candidates() -> None:
