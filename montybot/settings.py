@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     """Mark the session cookie `Secure`; on behind TLS."""
 
     typesafe_api_key: SecretStr | None = None
-    """Jev advice is on whenever this is set (`montybot/jev.py`)."""
+    """Retained for experimental Jev helpers. Production agent runs do not use Jev."""
     jev_model: str = 'jev-latest'
     """Use a versioned Jev model after calibrating the threshold; the alias is for initial evaluation only."""
     jev_threshold: float = Field(default=0.8, ge=0, le=1)

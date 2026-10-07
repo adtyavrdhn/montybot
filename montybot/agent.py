@@ -18,7 +18,6 @@ from montybot.code import code_tools
 from montybot.cpython import INSTRUCTIONS as CPYTHON_INSTRUCTIONS
 from montybot.cpython import cpython_tools
 from montybot.deps import RunDeps
-from montybot.jev import jev_tools
 from montybot.memory import memory_tools, recall
 from montybot.schedule_tools import INSTRUCTIONS as SCHEDULE_INSTRUCTIONS
 from montybot.schedule_tools import schedule_tools, scheduled_run
@@ -68,7 +67,7 @@ CACHE = AnthropicModelSettings(
 definitions and the conversation so far (page snapshots included). Other providers ignore these keys."""
 
 
-def build_agent(model: Model | str, *, jev: bool = False) -> Agent[RunDeps, str]:
+def build_agent(model: Model | str) -> Agent[RunDeps, str]:
     """Tools run one at a time: they number their DBOS steps as they go, and an ask must be the run's only one."""
     return Agent[RunDeps, str](
         model,
@@ -76,12 +75,6 @@ def build_agent(model: Model | str, *, jev: bool = False) -> Agent[RunDeps, str]
         deps_type=RunDeps,
         instructions=[
             INSTRUCTIONS,
-            (
-                'Optional Jev tools advise on user direction and ambiguous navigation. Use classify_intent when direction '
-                'is unclear, suggest_navigation when choosing a link is unclear. They do not click or grant approval.'
-                if jev
-                else ''
-            ),
             CODE_INSTRUCTIONS,
             CPYTHON_INSTRUCTIONS,
             SCHEDULE_INSTRUCTIONS,
@@ -96,7 +89,6 @@ def build_agent(model: Model | str, *, jev: bool = False) -> Agent[RunDeps, str]
             user_tools,
             memory_tools,
             schedule_tools,
-            *([jev_tools] if jev else []),
         ],
         capabilities=[
             HandleDeferredToolCalls(handler=approvals.handle_approvals),

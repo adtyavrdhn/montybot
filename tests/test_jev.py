@@ -13,7 +13,8 @@ from pydantic import SecretStr
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from montybot.jev import Intent, candidates, decide, likelihood, make_model, suggest_navigation
+from montybot.agent import build_agent
+from montybot.jev import Intent, candidates, decide, jev_tools, likelihood, make_model, suggest_navigation
 from montybot.settings import Settings
 
 
@@ -53,8 +54,15 @@ def test_errors_and_missing_metadata_abstain() -> None:
     assert make_model(settings(typesafe_api_key=SecretStr('  '))) is None
 
 
-def test_on_whenever_a_key_is_set() -> None:
+def test_experimental_model_can_still_be_constructed() -> None:
     assert make_model(settings(typesafe_api_key=SecretStr('key'))) is not None
+
+
+def test_production_agent_has_no_jev_tools_even_with_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('TYPESAFE_API_KEY', 'unused-fixture-key')
+    agent = build_agent(model('read', 0.95))
+    assert jev_tools not in agent.toolsets
+    assert all(toolset.id != 'jev' for toolset in agent.toolsets)
 
 
 def test_only_unique_link_labels_are_candidates() -> None:

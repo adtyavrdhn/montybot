@@ -24,6 +24,9 @@ own directory under `WORKSPACES_DIR` at `/work`, where browser downloads land to
 Python (pandas, PDFs) runs through `run_python` in real CPython, in a bubblewrap jail per call on the same files
 (`montybot/cpython.py`, Linux only). The browser contract and service are in [`montybot/browser/`](montybot/browser/README.md).
 
+Jev intent and navigation advice is disabled for now, even when `TYPESAFE_API_KEY` is set. The main agent handles
+these decisions directly. Experimental Jev helpers remain available in the source for later evaluation.
+
 ## Observability
 
 `LOGFIRE_TOKEN` is optional: without it, no telemetry is sent to Logfire. What is exported is decided per field in

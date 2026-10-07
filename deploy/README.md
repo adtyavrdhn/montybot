@@ -241,9 +241,6 @@ Each deploy bakes its commit into the image; Logfire shows it as `service.versio
 deploys. `ENVIRONMENT` (default `production`) and `LOGFIRE_INCLUDE_CONTENT` (default `true`: messages, the agent's
 code and page snapshots are exported; see the README's Observability section) can be set in the VM's `.env`.
 
-With `TYPESAFE_API_KEY` set, the agent gets the optional intent and navigation-advice tools; without it, it has
-none. `JEV_MODEL=jev-latest` is an evaluation alias; pin a version after testing.
-`JEV_THRESHOLD` applies to the probability of the chosen field value, not provider sureness. A missing key,
-metadata, timeout or uncertain decision falls back to the normal agent. Jev never clicks or grants approval.
-It receives up to three user requests for intent and up to 20 unique link labels for navigation, not form values
-or page prose. It is advisory, not a replacement for the code-writing agent; no latency improvement is claimed.
+Jev advice is disabled in production. Setting `TYPESAFE_API_KEY` does not add tools or make Jev requests.
+The experimental helpers and their tests remain in the repository for later evaluation. Existing credentials
+and Jev settings can remain stored, but normal agent runs ignore them.
