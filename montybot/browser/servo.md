@@ -145,4 +145,27 @@ Servo 0.7.0 gaps that block it as the default, each needing an upstream fix or a
 3. **No downloads** and **no WebSockets** behind the proxy.
 4. **Key input with nothing focused** (typing, then Tab, then typing on a page body) made servoshell stop answering.
 
-Bot checks from the server's address are not measured here: that needs real sites from the VM (#16).
+### Real sites from the server
+
+On the GCP VM (datacenter address), both engines jailed with their own egress proxy, a fresh browser per site, the page
+read 5 seconds after it loaded:
+
+| Site | Chromium (Playwright, headed in Xvfb) | Servo 0.7.0 (headless) |
+|---|---|---|
+| example.com | loads | loads |
+| Google search | results | CAPTCHA |
+| github.com/login | loads | loads |
+| Walmart search | results | "The requested URL was rejected" |
+| Amazon search | results | results |
+| Target search | results | results |
+| Best Buy | loads | does not load (`client error (SendRequest)`) |
+| Instacart | loads | loads |
+| LinkedIn sign-in | loads | loads |
+| Reddit | blocked (the address, both engines) | blocked |
+| bot.sannysoft.com | passes the rows checked | fails plugins, WebGL vendor, `PHANTOM_ETSL`; `navigator.languages` is `["C"]` |
+| Start a browser | 0.9 to 1.5 s | 0.25 to 0.35 s |
+
+Servo starts about four times faster, and simple pages load as fast or faster. But from the server's address it is
+blocked where Chromium is not (Google, Walmart), fails a page Chromium loads (Best Buy), and its fingerprint is easy to
+tell apart. It also blocked the internal address and the cloud metadata address (`10.128.0.2`, `169.254.169.254`), as
+the proxy should.
