@@ -87,6 +87,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
         jar=jar,
         lease=lease,
         idle_timeout=settings.browser_idle_timeout_seconds,
+        max_open_browsers=settings.browser_max_open,
     )
     DBOS(
         config=DBOSConfig(

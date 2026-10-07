@@ -116,6 +116,33 @@ async def test_a_retry_of_the_run_gets_the_same_browser() -> None:
     assert len(setup.made) == 1
 
 
+async def test_browser_cap_saves_and_eviction_restores_state() -> None:
+    setup = Setup()
+    host = BrowserHost(new_backend=setup.new_backend, jar=setup.jar, lease=setup.lease, max_open_browsers=1)
+    await host.start(**ALICE)
+    await sign_in_and_add_eggs(host)
+    bob = {'run_id': 'run-2', 'user_id': 'bob'}
+    await host.start(**bob)
+    assert not setup.made[0].is_open
+    saved = await setup.jar.load(user_id='alice')
+    assert saved is not None and saved.url == f'{SHOP}/shop'
+    restarted = await host.start(**ALICE)
+    assert restarted.restarted is not None
+    assert await page_text(host) == 'Signed in. In cart: eggs'
+    assert not setup.made[1].is_open
+
+
+async def test_browser_cap_does_not_evict_a_handoff() -> None:
+    setup = Setup()
+    host = BrowserHost(new_backend=setup.new_backend, jar=setup.jar, lease=setup.lease, max_open_browsers=1)
+    await host.start(**ALICE)
+    await host.start_handoff(**ALICE, reason='sign in')
+    with pytest.raises(ActionFailed, match='all browsers are in use'):
+        await host.start(run_id='run-2', user_id='bob')
+    assert setup.made[0].is_open
+    assert len(setup.made) == 1
+
+
 async def test_start_opens_the_saved_state() -> None:
     setup = Setup()
     saved = BrowserState(

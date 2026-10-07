@@ -9,6 +9,12 @@ Everything runs on one Linux machine with Docker Compose (`deploy/compose.yaml`)
 | `postgres` | our tables and DBOS's |
 | `backup` | `pg_dump` every night at `BACKUP_AT` (03:00 UTC) into `/opt/montybot/backups`, keeping `BACKUP_KEEP_DAYS` (14) days |
 
+The app allows at most `BROWSER_MAX_OPEN` live browsers (default 2 on the server). When full it saves and closes the
+least-recently-used browser that is neither busy nor in a hand-off; that run reopens from saved state on its next call.
+If all browsers are busy, a new call fails quickly rather than starting an unbounded number of Chromium processes.
+Tune this against measured VM memory: it is a concurrency guard, **not** a per-browser memory limit. Do not give
+bwrap writable cgroups or Docker privileged mode to impose one.
+
 Secrets live only in `/opt/montybot/.env` on the server, which `bootstrap.sh` writes once. Nothing secret is in the
 images or the repository.
 
