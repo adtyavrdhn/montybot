@@ -7,7 +7,7 @@
 #   xcrun notarytool submit … && xcrun stapler staple build/Monty.app
 set -eu
 cd "$(dirname "$0")/.."
-SERVER="${1:-http://127.0.0.1:8000}"
+SERVER="${1:-https://35-188-200-101.sslip.io}"
 VERSION="$(git describe --tags --always 2>/dev/null || echo dev)"
 
 swift build -c release --product Monty

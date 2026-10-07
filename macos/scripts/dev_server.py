@@ -9,7 +9,8 @@ Postgres is `--postgres` (or MONTYBOT_TEST_POSTGRES) when given; otherwise an em
 data/mac-dev-pg (the `pgserver` package, no Docker), which keeps running for next time. The app gets its own
 database, `montybot_mac_dev`, created on first use. A message that starts with one of the scripted prompts
 (tests/e2e/scripts.py) runs that path; they are printed with the fixture sites' addresses filled in. With
-MONTYBOT_TEST_MODEL set, a real model answers instead.
+MONTYBOT_TEST_MODEL set, a real model answers instead. Otherwise the demo model (demo_model.py) answers: the scripted
+model, made forgiving, so the app's suggestions work and anything else gets a friendly reply.
 """
 
 from __future__ import annotations
@@ -117,9 +118,12 @@ def main() -> None:
         'DATABASE_URL': database_url(args.postgres or embedded_postgres()),
         'SESSION_SECRET': 'dev-session-secret',
         'ENCRYPTION_KEY': 'bW9udHlib3QtdGVzdC1rZXktMzItYnl0ZXMtbG9uZyE=',
-        'MODEL': os.environ.get('MONTYBOT_TEST_MODEL', 'script:e2e.scripts:model'),
+        'MODEL': os.environ.get('MONTYBOT_TEST_MODEL', 'script:demo_model:model'),
+        'MONTY_DEMO_SITES': json.dumps({name: site.url for name, site in sites.items()}),
         'BROWSER_BACKEND': 'sites.html_browser:new_backend' if args.fake else 'montybot.engines:chromium_headless',
-        'PYTHONPATH': os.pathsep.join([str(TESTS), str(TESTS / 'e2e'), os.environ.get('PYTHONPATH', '')]),
+        'PYTHONPATH': os.pathsep.join(
+            [str(Path(__file__).parent), str(TESTS), str(TESTS / 'e2e'), os.environ.get('PYTHONPATH', '')]
+        ),
         'EXECUTOR_ID': 'local',
         'ALLOW_PRIVATE_NETWORKS': 'true',  # the fixture sites are on 127.0.0.1
         'WORKSPACES_DIR': str(workspaces),

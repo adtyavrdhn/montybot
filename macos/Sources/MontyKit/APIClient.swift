@@ -5,6 +5,8 @@ public enum APIError: Error, Equatable, LocalizedError {
     case signedOut
     /// The server said no, with its reason when it gave one.
     case server(status: Int, detail: String?)
+    /// The server is private: a site login (HTTP basic auth, in front of the app) is needed first. Carries its realm.
+    case siteLogin(realm: String)
     /// The server could not be reached.
     case offline(String)
     /// The server answered with something this app does not understand.
@@ -29,6 +31,8 @@ public enum APIError: Error, Equatable, LocalizedError {
             case 500...: return "Monty's server had a problem. Try again in a moment."
             default: return "Something went wrong (\(status))."
             }
+        case .siteLogin:
+            return "Monty's server is private. Enter its site login to continue."
         case .offline:
             return "Can't reach Monty. Check your connection."
         case .unexpected:
@@ -174,6 +178,7 @@ public final class APIClient: Sendable {
                 do {
                     let (bytes, response) = try await session.bytes(for: request)
                     guard let http = response as? HTTPURLResponse else { throw APIError.unexpected("no HTTP response") }
+                    if let realm = Self.basicRealm(http) { throw APIError.siteLogin(realm: realm) }
                     if http.statusCode == 401 { throw APIError.signedOut }
                     guard http.statusCode == 200 else { throw APIError.server(status: http.statusCode, detail: nil) }
                     var parser = EventStreamParser()
@@ -303,7 +308,26 @@ public final class APIClient: Sendable {
             throw APIError.offline(error.localizedDescription)
         }
         guard let http = response as? HTTPURLResponse else { throw APIError.unexpected("no HTTP response") }
+        if let realm = Self.basicRealm(http) { throw APIError.siteLogin(realm: realm) }
         return (data, http)
+    }
+
+    /// The realm of a private server's site login, when this answer asks for one (a 401 that wants basic auth).
+    static func basicRealm(_ response: HTTPURLResponse) -> String? {
+        guard response.statusCode == 401,
+              let challenge = response.value(forHTTPHeaderField: "WWW-Authenticate"), challenge.lowercased().hasPrefix("basic")
+        else { return nil }
+        return challenge.firstMatch(of: /realm="([^"]*)"/).map { String($0.1) } ?? ""
+    }
+
+    /// Keeps the site login in the keychain; URLSession answers the server's challenge with it from then on, for the
+    /// API, the live updates and the live view alike.
+    public func saveSiteLogin(user: String, password: String, realm: String) {
+        let space = URLProtectionSpace(
+            host: baseURL.host() ?? "", port: baseURL.port ?? (baseURL.scheme == "https" ? 443 : 80),
+            protocol: baseURL.scheme, realm: realm, authenticationMethod: NSURLAuthenticationMethodHTTPBasic
+        )
+        URLCredentialStorage.shared.setDefaultCredential(URLCredential(user: user, password: password, persistence: .permanent), for: space)
     }
 
     private func error(_ status: Int, _ data: Data, signingIn: Bool = false) -> APIError {
