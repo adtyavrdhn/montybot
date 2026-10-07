@@ -281,14 +281,14 @@ struct MontyCommands: Commands {
                 .keyboardShortcut("]")
                 .disabled(!app.canGoForward || app.isTakingOver)
             Divider()
-            Button("Find Chats") { openWindow(id: "main"); NotificationCenter.default.post(name: .montyFindChats, object: nil) }
+            Button("Find Chats") { openWindow(id: "main"); app.wantsFindChats = true }
                 .keyboardShortcut("f")
                 .disabled(app.user == nil || app.isTakingOver)
             Button("Message Box") { NotificationCenter.default.post(name: .montyFocusMessage, object: nil) }
                 .keyboardShortcut("l")
                 .disabled(app.user == nil || app.isTakingOver || app.chat == nil)
             Divider()
-            Button("Command Palette…") { openWindow(id: "main"); NotificationCenter.default.post(name: .montyCommandPalette, object: nil) }
+            Button("Command Palette…") { openWindow(id: "main"); app.showingPalette.toggle() }
                 .keyboardShortcut("k")
                 .disabled(app.user == nil || app.isTakingOver)
             // ⌘1…⌘9: the chats in the sidebar's order, as T3 Code's threads; their titles say which is which.
