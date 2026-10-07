@@ -223,6 +223,81 @@ async def test_u2_sign_in_through_the_live_view(engine: str) -> None:
                 await service.close_all()
 
 
+async def test_signing_in_by_the_outline_alone(engine: str) -> None:
+    """A user who drives with VoiceOver: they read the page from its outline (what a screen reader says, with where
+    each thing is) and act on it by pressing items, which clicks them. The outline never reveals a password. An engine
+    that cannot read the page says so."""
+    with serve_demo_shop() as shop:
+        async with backends(engine) as new:
+            service = StubBrowserService(new)
+            handoffs = InMemoryHandoffs()
+            auth = StubAuthenticator()
+            app = live_view_app(service=service, handoffs=handoffs, auth=auth)
+            try:
+                await service.start(run_id=RUN, user_id=USER)
+                await service.act(run_id=RUN, user_id=USER, action=Navigate(url=f'{shop}/login'))
+                handoff = await service.start_handoff(run_id=RUN, user_id=USER, reason='Please sign in to the shop')
+                handoffs.add(handoff)
+                async with serve_app(app) as base:
+                    ws = f'{base.replace("http", "ws", 1)}/handoff/{handoff.handoff_id}/ws'
+                    async with LiveViewClient.connect(ws, session=auth.sign_in(USER)) as user:
+                        await user.next_frame()
+                        outline = await user.read_outline()
+                        if engine == 'servo':
+                            assert not outline.available and outline.items == ()
+                            return
+                        assert outline.available and outline.title == 'Sign in'
+                        roles = [(item.role, item.name) for item in outline.items]
+                        assert roles[:4] == [
+                            ('heading', 'Sign in'),
+                            ('textbox', 'username'),
+                            ('textbox', 'password (hunter2)'),
+                            ('button', 'Sign in'),
+                        ]
+
+                        async def press(name: str, role: str = 'textbox') -> None:
+                            item = next(
+                                i for i in (await user.read_outline()).items if (i.role, i.name) == (role, name)
+                            )
+                            centre = Point(x=item.x + item.width / 2, y=item.y + item.height / 2)
+                            await user.send(MouseDown(at=centre))
+                            await user.send(MouseUp(at=centre))
+
+                        await press('username')
+                        await user.send(Type(text='mike'))
+                        await press('password (hunter2)')
+                        await user.send(Type(text='wrong'))
+                        typed = {i.name: i for i in (await user.read_outline()).items}
+                        assert typed['username'].value == 'mike'
+                        assert (
+                            typed['password (hunter2)'].value == '5 characters' and typed['password (hunter2)'].secure
+                        )
+                        assert typed['password (hunter2)'].focused
+                        await press('Sign in', 'button')
+
+                        async def reads(line: tuple[str, str]) -> None:
+                            for _ in range(50):
+                                if line in [(i.role, i.name) for i in (await user.read_outline()).items]:
+                                    return
+                                await asyncio.sleep(0.1)
+                            raise AssertionError(f'the page never read {line}: {user.outline}')
+
+                        await reads(('text', 'Wrong password.'))
+
+                        await press('username')  # the page came back empty
+                        await user.send(Type(text='mike'))
+                        await press('password (hunter2)')
+                        await user.send(Type(text='hunter2'))
+                        await press('Sign in', 'button')
+                        await user.wait_for_url(lambda url: urlsplit(url).path == '/shop')
+                        await reads(('text', 'Signed in as mike.'))
+                        await reads(('button', 'Add coffee'))
+                        await reads(('text', 'In cart: empty'))  # one line, as a screen reader reads a paragraph
+                        assert 'hunter2' not in str(user.outline)
+            finally:
+                await service.close_all()
+
+
 async def wait_for_cart(service: StubBrowserService, item: str) -> None:
     text = ''
     for _ in range(50):

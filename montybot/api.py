@@ -11,6 +11,7 @@ import binascii
 import contextlib
 import json
 import re
+import secrets
 import uuid
 from collections.abc import AsyncIterator, Callable
 from typing import Annotated, Any, TypeVar
@@ -27,7 +28,7 @@ from montybot.browser.contract import (
 from montybot.browser.state import BLANK_URL, BrowserState
 from montybot.memory import delete_memory, list_memories
 from montybot.models import ACTIVE, Ask, Run, Schedule, User
-from montybot.notifications import TakenEndpoint, add_subscription, remove_subscription
+from montybot.notifications import TakenEndpoint, add_subscription, remove_subscription, send_email
 from montybot.resources import Resources
 from montybot.signins import PostgresLease
 from montybot.workspaces import MAX_DOWNLOAD_BYTES, FileTooLarge, download_name
@@ -53,6 +54,10 @@ async def remember_timezone(connection: Any, user: User, timezone: str | None) -
     if timezone is None or timezone == user.timezone or not schedules.is_timezone(timezone):
         return
     await store.set_timezone(connection, user.id, timezone)
+
+
+class ThreadChange(BaseModel):
+    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
 
 
 class Answer(BaseModel):
@@ -95,6 +100,62 @@ async def sign_in(request: Request) -> Response:
         found = await store.find_login(connection, body.email.strip().lower())
     if found is None or not auth.check_password(body.password, found[1]):
         return JSONResponse({'detail': 'wrong email or password'}, status_code=401)
+    auth.sign_in(request, found[0])
+    return JSONResponse(user_json(found[0]))
+
+
+class ResetRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class ResetConfirm(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    code: str = Field(min_length=1, max_length=20)
+    password: str = Field(min_length=8, max_length=1024)
+
+
+RESET_MINUTES = 15
+RESET_ATTEMPTS = 5
+
+
+async def request_password_reset(request: Request) -> Response:
+    """POST. Emails a 6-digit code to the account's address. The answer is the same whether or not there is an
+    account, so the endpoint does not tell who has one."""
+    if (refused := auth.refuse_non_json(request)) is not None:
+        return refused
+    body = ResetRequest.model_validate_json(await request.body())
+    resources = resources_of(request)
+    code = f'{secrets.randbelow(1_000_000):06d}'
+    async with resources.pool.connection() as connection:
+        found = await store.find_login(connection, body.email.strip().lower())
+        if found is not None:
+            await store.start_password_reset(connection, found[0].id, auth.hash_password(code), RESET_MINUTES)
+    if found is not None:
+        await asyncio.to_thread(
+            send_email,
+            resources.settings,
+            found[0].email,
+            'Your Monty password reset code',
+            f'Your code is {code}. It works for {RESET_MINUTES} minutes.\n\n'
+            'If you did not ask to reset your password, ignore this email; your password stays as it is.',
+        )
+    return JSONResponse({'ok': True, 'email_configured': bool(resources.settings.smtp_url)})
+
+
+async def confirm_password_reset(request: Request) -> Response:
+    """POST. With the emailed code, sets a new password and signs in."""
+    if (refused := auth.refuse_non_json(request)) is not None:
+        return refused
+    body = ResetConfirm.model_validate_json(await request.body())
+    wrong = JSONResponse({'detail': 'that code is wrong or has expired; ask for a new one'}, status_code=400)
+    async with resources_of(request).pool.connection() as connection:
+        found = await store.find_login(connection, body.email.strip().lower())
+        if found is None:
+            return wrong
+        code_hash = await store.password_reset(connection, found[0].id, RESET_ATTEMPTS)
+        if code_hash is None or not auth.check_password(body.code.strip(), code_hash):
+            return wrong
+        await store.finish_password_reset(connection, found[0].id, auth.hash_password(body.password))
     auth.sign_in(request, found[0])
     return JSONResponse(user_json(found[0]))
 
@@ -152,11 +213,43 @@ async def add_message(request: Request, user: User) -> Response:
 @auth.signed_in
 async def list_threads(request: Request, user: User) -> Response:
     """Each thread with the status of its unfinished run, if it has one: `running`, `waiting` (for the user) or
-    `queued`."""
+    `queued`; and otherwise how its latest run ended (`outcome`: `done`, `failed` or `stopped`)."""
     async with resources_of(request).pool.connection() as connection:
         threads = await store.list_threads(connection, user.id)
         active = await store.active_runs(connection, user.id)
-    return JSONResponse([{'id': t.id, 'title': t.title, 'status': active.get(t.id)} for t in threads])
+        outcomes = await store.latest_outcomes(connection, user.id)
+    return JSONResponse(
+        [{'id': t.id, 'title': t.title, 'status': active.get(t.id), 'outcome': outcomes.get(t.id)} for t in threads]
+    )
+
+
+@auth.signed_in
+async def rename_thread(request: Request, user: User) -> Response:
+    """PATCH. A new title for the thread."""
+    body = ThreadChange.model_validate_json(await request.body())
+    async with resources_of(request).pool.connection() as connection:
+        renamed = await store.rename_thread(connection, user.id, str(request.path_params['thread_id']), body.title)
+    return JSONResponse({'ok': True}) if renamed else NOT_FOUND
+
+
+@auth.signed_in
+async def delete_thread(request: Request, user: User) -> Response:
+    """DELETE. The thread and everything in it. A run still going is stopped first (which frees its browser), and a
+    schedule that reports to the thread is deleted with it, so nothing fires for a thread that is gone."""
+    resources = resources_of(request)
+    thread_id = str(request.path_params['thread_id'])
+    async with resources.pool.connection() as connection:
+        if await store.get_thread(connection, user.id, thread_id) is None:
+            return NOT_FOUND
+        run = await store.latest_run(connection, user.id, thread_id)
+        schedule = await store.thread_schedule(connection, user.id, thread_id)
+    if run is not None and run.status in ACTIVE:
+        await workflows.stop(resources, run)
+    if schedule is not None:
+        await schedules.delete(resources.pool, user.id, schedule.id)
+    async with resources.pool.connection() as connection:
+        deleted = await store.delete_thread(connection, user.id, thread_id)
+    return JSONResponse({'ok': True}) if deleted else NOT_FOUND
 
 
 @auth.signed_in

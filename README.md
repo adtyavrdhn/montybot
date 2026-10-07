@@ -55,6 +55,11 @@ review before sending. Watch Monty's browser while it works, take over when it a
 questions or approve actions in the chat. Saved sign-ins and schedules are available in the sidebar, alongside
 notification opt-in. Motion respects your device's reduced-motion preference.
 
+## Mac app
+
+[`macos/`](macos/README.md) is Monty for Mac: a native SwiftUI client of this server, in Logfire's design. Run
+`uv run python macos/scripts/dev_server.py` for a local server it can use, with a scripted model and no Docker.
+
 ## Tests
 
 ```bash

@@ -29,7 +29,7 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from montybot.browser.contract import BrowserError, NotSupported
-from montybot.browser.live import Frame, FrameSource, Viewport
+from montybot.browser.live import Frame, FrameSource, Outline, OutlineSource, Viewport
 from montybot.browser.service import Handoff, HandoffEnded, HandoffId, HandoffNotActive, RunId, UnknownRun, UserId
 from montybot.liveview.activity import Activity
 from montybot.liveview.auth import Authenticator
@@ -39,6 +39,7 @@ from montybot.liveview.wire import (
     ErrorMessage,
     GiveBackRequest,
     Hello,
+    OutlineRequest,
     ServerMessage,
     SwitchTab,
     ViewportSize,
@@ -297,6 +298,11 @@ class _Connection:
                         await self._source.switch_tab(tab_id)
                     case ViewportSize():
                         await self._fit(decoded)
+                    case OutlineRequest():
+                        source = self._source
+                        await self._send(
+                            await source.outline() if isinstance(source, OutlineSource) else Outline(available=False)
+                        )
                     case _:
                         self._activity.record(decoded)
                         await self._source.send(decoded)

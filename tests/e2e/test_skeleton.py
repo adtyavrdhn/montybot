@@ -114,6 +114,40 @@ def test_the_agent_knows_the_time_for_the_user(client: Client) -> None:
     assert '(Asia/Tokyo)' in client.wait_for_reply(created.json()['thread_id'])  # not a real zone: the last one
 
 
+def test_chats_say_how_they_ended_and_can_be_renamed_and_deleted(app: App, client: Client) -> None:
+    client.sign_up()
+    hello = client.ask('Say hello.')
+    client.wait_for_reply(hello)
+    failed = client.ask('Fail please')
+    client.wait_for_reply(failed, failed=True)
+    waiting = client.ask('Ask me my favourite colour and remember it.')
+    client.wait_for_ask(waiting, 'question')
+
+    listed = {t['id']: (t['status'], t['outcome']) for t in client.http.get('/api/threads').json()}
+    assert listed == {hello: (None, 'done'), failed: (None, 'failed'), waiting: ('waiting', None)}
+
+    assert client.http.patch(f'/api/threads/{hello}', json={'title': '  Greetings  '}).status_code == 200
+    assert client.thread(hello)['title'] == 'Greetings'
+    assert client.http.patch(f'/api/threads/{hello}', json={'title': '   '}).status_code == 422
+
+    with httpx.Client(base_url=app.url) as other:
+        assert (
+            other.post('/api/signup', json={'email': 'eve@example.test', 'password': 'correct horse'}).status_code
+            == 201
+        )
+        assert other.patch(f'/api/threads/{waiting}', json={'title': 'mine'}).status_code == 404
+        assert other.delete(f'/api/threads/{waiting}').status_code == 404
+
+    # Deleting a chat whose run waits for the user stops the run first, so nothing is left holding the browser.
+    run_id = client.thread(waiting)['run']['id']
+    assert client.http.delete(f'/api/threads/{waiting}').status_code == 200
+    assert client.http.get(f'/api/threads/{waiting}').status_code == 404
+    assert client.http.get(f'/api/runs/{run_id}').status_code == 404
+    assert client.http.delete(f'/api/threads/{waiting}').status_code == 404
+    assert {t['id'] for t in client.http.get('/api/threads').json()} == {hello, failed}
+    assert 'hello' in client.wait_for_reply(client.ask('Say hello again.')).lower()  # the browser is free
+
+
 def test_users_cannot_see_each_other(app: App, client: Client) -> None:
     client.sign_up()
     thread = client.ask('Ask me my favourite colour and remember it.')

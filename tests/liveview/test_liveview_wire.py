@@ -5,7 +5,7 @@ import time
 import pytest
 
 from montybot.browser.contract import Click, MouseDown, MouseMove, MouseUp, Point, Press, Scroll, Selector, Type
-from montybot.browser.live import Frame, Tab, Tabs
+from montybot.browser.live import Frame, Outline, OutlineItem, Tab, Tabs
 from montybot.liveview.activity import Activity
 from montybot.liveview.keys import key_for
 from montybot.liveview.wire import (
@@ -14,6 +14,7 @@ from montybot.liveview.wire import (
     ErrorMessage,
     GiveBackRequest,
     Hello,
+    OutlineRequest,
     ServerMessage,
     SwitchTab,
     ViewportSize,
@@ -45,6 +46,7 @@ AT = Point(x=10.5, y=20)
         SwitchTab(tab_id='2'),
         ViewportSize(width=390, height=700),
         GiveBackRequest(),
+        OutlineRequest(),
     ],
 )
 def test_client_messages_round_trip(message: ClientMessage) -> None:
@@ -89,6 +91,20 @@ def test_the_live_view_only_clicks_points_and_types_at_the_caret() -> None:
         Tabs(tabs=(Tab(tab_id='1', url='http://a.test/', title='A', active=True),)),
         ErrorMessage(message='servo does not support press'),
         Ended(given_back=True),
+        Outline(
+            title='Sign in',
+            items=(
+                OutlineItem(role='heading', name='Sign in', x=8, y=0, width=300, height=37, level=1),
+                OutlineItem(
+                    role='textbox', name='username', x=8, y=60, width=150, height=21, value='mike', focused=True
+                ),
+                OutlineItem(
+                    role='textbox', name='password', x=8, y=90, width=150, height=21, value='7 characters', secure=True
+                ),
+                OutlineItem(role='checkbox', name='Remember me', x=0, y=0, width=13, height=13, checked=False),
+            ),
+        ),
+        Outline(available=False),
     ],
 )
 def test_server_messages_round_trip(message: ServerMessage) -> None:

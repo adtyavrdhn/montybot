@@ -36,7 +36,7 @@ from montybot.browser.contract import (
     Scroll,
     Type,
 )
-from montybot.browser.live import Frame, LiveInput, Tab, Tabs, Viewport
+from montybot.browser.live import OUTLINE_JS, Frame, LiveInput, Outline, Tab, Tabs, Viewport
 from montybot.liveview.keys import MODIFIER_BITS, Key, key_for
 from montybot.liveview.latest import Latest
 
@@ -91,7 +91,14 @@ class CdpFrameSource:
         await source._activate(page)
         return source
 
-    # --- FrameSource ---
+    # --- FrameSource, and OutlineSource ---
+
+    async def outline(self) -> Outline:
+        """What is on the active tab for a screen reader. A page mid-navigation reads as empty, not as an error."""
+        try:
+            return Outline.from_walker(await self._active.evaluate(OUTLINE_JS))
+        except PlaywrightError:
+            return Outline()
 
     def updates(self) -> AsyncIterator[Frame | Tabs]:
         return self._latest.updates()

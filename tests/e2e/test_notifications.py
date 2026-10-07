@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import socketserver
 import threading
 from collections.abc import Iterator
@@ -12,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 import psycopg
 import pytest
-from conftest import Client
+from conftest import App, Client
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from helpers import eventually
@@ -165,3 +166,44 @@ def test_the_user_hears_that_the_bot_needs_them(
     headers, body = pushes[0]
     assert headers['content-encoding'] == 'aes128gcm' and headers['authorization'].startswith('vapid ')
     assert b'take over' not in body  # encrypted for the subscriber's browser only
+
+
+def test_a_forgotten_password_is_reset_with_an_emailed_code(app: App, mailbox: Mailbox) -> None:
+    with httpx.Client(base_url=app.url) as http:
+        assert (
+            http.post('/api/signup', json={'email': 'rose@example.test', 'password': 'old password'}).status_code == 201
+        )
+        http.post('/api/signout', json={})
+        # Unknown addresses get the same answer, and no email.
+        assert http.post('/api/password/reset', json={'email': 'nobody@example.test'}).json()['ok'] is True
+        assert http.post('/api/password/reset', json={'email': ' Rose@example.test '}).status_code == 200
+        eventually(lambda: len(mailbox.messages) == 1 or None, what='the email')
+        code = re.search(r'Your code is (\d{6})', mailbox.messages[0]).group(1)  # pyright: ignore[reportOptionalMemberAccess]
+        assert 'rose@example.test' in mailbox.messages[0]
+
+        confirm = {'email': 'rose@example.test', 'password': 'new password'}
+        assert (
+            http.post(
+                '/api/password/reset/confirm', json=confirm | {'code': '000000' if code != '000000' else '111111'}
+            ).status_code
+            == 400
+        )
+        assert http.post('/api/password/reset/confirm', json=confirm | {'code': code}).status_code == 200
+        assert http.get('/api/me').json()['email'] == 'rose@example.test'  # signed in
+        assert http.post('/api/password/reset/confirm', json=confirm | {'code': code}).status_code == 400  # used up
+        http.post('/api/signout', json={})
+        assert (
+            http.post('/api/signin', json={'email': 'rose@example.test', 'password': 'old password'}).status_code == 401
+        )
+        assert (
+            http.post('/api/signin', json={'email': 'rose@example.test', 'password': 'new password'}).status_code == 200
+        )
+
+        # Five wrong tries and the code is spent, even if the sixth is right.
+        http.post('/api/password/reset', json={'email': 'rose@example.test'})
+        eventually(lambda: len(mailbox.messages) == 2 or None, what='the second email')
+        code = re.search(r'Your code is (\d{6})', mailbox.messages[1]).group(1)  # pyright: ignore[reportOptionalMemberAccess]
+        wrong = '000000' if code != '000000' else '111111'
+        for _ in range(5):
+            assert http.post('/api/password/reset/confirm', json=confirm | {'code': wrong}).status_code == 400
+        assert http.post('/api/password/reset/confirm', json=confirm | {'code': code}).status_code == 400

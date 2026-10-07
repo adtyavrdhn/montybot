@@ -48,6 +48,32 @@ async def find_login(connection: Connection, email: str) -> tuple[User, str] | N
     return None if row is None else (user_from(row), row['password_hash'])
 
 
+async def start_password_reset(connection: Connection, user_id: str, code_hash: str, minutes: int) -> None:
+    """A new code replaces any earlier one."""
+    await connection.execute(
+        'INSERT INTO montybot.password_resets (user_id, code_hash, expires_at) '
+        "VALUES (%s, %s, now() + %s * interval '1 minute') ON CONFLICT (user_id) DO UPDATE "
+        'SET code_hash = EXCLUDED.code_hash, expires_at = EXCLUDED.expires_at, attempts = 0',
+        (user_id, code_hash, minutes),
+    )
+
+
+async def password_reset(connection: Connection, user_id: str, max_attempts: int) -> str | None:
+    """The live code's hash, counting this attempt; None once it has expired or been tried too often."""
+    cursor = await connection.execute(
+        'UPDATE montybot.password_resets SET attempts = attempts + 1 '
+        'WHERE user_id = %s AND expires_at > now() AND attempts < %s RETURNING code_hash',
+        (user_id, max_attempts),
+    )
+    row = await cursor.fetchone()
+    return None if row is None else row['code_hash']
+
+
+async def finish_password_reset(connection: Connection, user_id: str, password_hash: str) -> None:
+    await connection.execute('UPDATE montybot.users SET password_hash = %s WHERE id = %s', (password_hash, user_id))
+    await connection.execute('DELETE FROM montybot.password_resets WHERE user_id = %s', (user_id,))
+
+
 async def get_user(connection: Connection, user_id: str) -> User | None:
     cursor = await connection.execute(f'SELECT {USER_COLUMNS} FROM montybot.users WHERE id = %s', (user_id,))
     row = await cursor.fetchone()
@@ -98,6 +124,41 @@ async def active_runs(connection: Connection, user_id: str) -> dict[str, RunStat
         (user_id,),
     )
     return {str(row['thread_id']): row['status'] for row in await cursor.fetchall()}
+
+
+async def latest_outcomes(connection: Connection, user_id: str) -> dict[str, RunStatus]:
+    """How each of the user's threads' latest run ended (`done`, `failed` or `stopped`), by thread id; threads whose
+    latest run is unfinished or that have none are left out."""
+    cursor = await connection.execute(
+        'SELECT DISTINCT ON (thread_id) thread_id, status FROM montybot.runs WHERE user_id = %s '
+        'ORDER BY thread_id, created_at DESC',
+        (user_id,),
+    )
+    return {str(row['thread_id']): row['status'] for row in await cursor.fetchall() if row['status'] in FINISHED}
+
+
+async def rename_thread(connection: Connection, user_id: str, thread_id: str, title: str) -> bool:
+    cursor = await connection.execute(
+        'UPDATE montybot.threads SET title = %s WHERE id = %s AND user_id = %s', (title[:120], thread_id, user_id)
+    )
+    return cursor.rowcount == 1
+
+
+async def delete_thread(connection: Connection, user_id: str, thread_id: str) -> bool:
+    """With its messages, runs and their asks and activity, and its schedule (cascades)."""
+    cursor = await connection.execute(
+        'DELETE FROM montybot.threads WHERE id = %s AND user_id = %s', (thread_id, user_id)
+    )
+    return cursor.rowcount == 1
+
+
+async def thread_schedule(connection: Connection, user_id: str, thread_id: str) -> Schedule | None:
+    cursor = await connection.execute(
+        f'SELECT {SCHEDULE_COLUMNS} FROM montybot.schedules WHERE thread_id = %s AND user_id = %s',
+        (thread_id, user_id),
+    )
+    row = await cursor.fetchone()
+    return None if row is None else schedule_from(row)
 
 
 # --- runs ---
