@@ -4,6 +4,7 @@ import SwiftUI
 struct MainView: View {
     @Environment(AppModel.self) private var app
     @State private var newTitle = ""
+    @State private var showingPalette = false
     @Environment(\.undoManager) private var undoManager
 
     var body: some View {
@@ -23,6 +24,8 @@ struct MainView: View {
                 split.frame(minWidth: app.chat?.watching == true ? Metrics.windowWithBrowserMinWidth : nil)
             }
         }
+        .overlay { if showingPalette, app.chat?.live == nil { CommandPalette(isPresented: $showingPalette) } }
+        .onReceive(NotificationCenter.default.publisher(for: .montyCommandPalette)) { _ in showingPalette.toggle() }
         .motion(.spring(response: 0.38, dampingFraction: 0.9), value: app.chat?.live == nil)
         .motion(.spring(response: 0.38, dampingFraction: 0.9), value: app.chat?.browserExpanded)
         .onChange(of: app.chat?.watching) { _, watching in
@@ -207,6 +210,11 @@ struct Sidebar: View {
             .contextMenu {
                 let isPinned = app.pinned.contains(thread.id)
                 Button(isPinned ? "Unpin" : "Pin") { app.setPinned(thread, !isPinned) }
+                if app.unseen.contains(thread.id) {
+                    Button("Mark as Read") { app.markSeen(thread) }
+                } else if thread.status == nil {
+                    Button("Mark as Unread") { app.markUnread(thread) }
+                }
                 Button("Rename…") { app.renaming = thread }
                 Divider()
                 Button("Delete…", role: .destructive) { app.deleting = thread }
@@ -317,7 +325,14 @@ struct ThreadRow: View {
     @ViewBuilder private var mark: some View {
         switch thread.status {
         case .waiting:
-            Circle().fill(Palette.logfire).frame(width: 7, height: 7).accessibilityHidden(true)
+            // What it needs, in a word, as T3 Code's status pills: "Approval" says more than a dot.
+            HStack(spacing: 5) {
+                if let kind = thread.waitingFor {
+                    Text(Self.word(for: kind)).font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.onSurfaceVariant)
+                }
+                Circle().fill(Palette.logfire).frame(width: 7, height: 7)
+            }
+            .accessibilityHidden(true)
         case .running, .queued:
             MontyMark(mood: .working, size: 9).frame(width: 16, height: 16)
         default:
@@ -340,9 +355,17 @@ struct ThreadRow: View {
         }
     }
 
+    static func word(for kind: AskKind) -> String {
+        switch kind {
+        case .question: "Question"
+        case .approval: "Approval"
+        case .handoff: "Browser"
+        }
+    }
+
     private var statusText: String {
         switch (thread.status, thread.outcome) {
-        case (.waiting, _): "Needs you"
+        case (.waiting, _): thread.waitingFor.map { "Needs you: \(Self.word(for: $0).lowercased())" } ?? "Needs you"
         case (.running, _), (.queued, _): "Working"
         case (_, .failed) where unseen: "Couldn't finish, not seen yet"
         case _ where unseen: "New reply"

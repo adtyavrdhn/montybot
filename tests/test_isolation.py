@@ -384,3 +384,30 @@ async def test_chats_are_listed_by_when_they_were_last_active(pool: Pool) -> Non
         last_active = await store.last_active(connection, user.id)
     assert listed == [scheduled.id, older.id]
     assert last_active[scheduled.id] > last_active[older.id]
+
+
+async def test_the_chat_list_says_what_a_waiting_chat_waits_for(pool: Pool) -> None:
+    """`waiting_for` names the latest open ask of a waiting run, for its user only."""
+    async with pool.connection() as connection:
+        user = await store.create_user(connection, 'waits@example.test', 'x')
+        other = await store.create_user(connection, 'other-waits@example.test', 'x')
+        assert user is not None and other is not None
+        thread = await store.create_thread(connection, user.id, 'buy eggs')
+        run_id = str(uuid.uuid4())
+        await store.create_run(
+            connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt='buy eggs', trigger='message'
+        )
+        for occurrence, kind in [(1, 'question'), (2, 'approval')]:
+            await store.create_ask(
+                connection,
+                ask_id=str(uuid.uuid4()),
+                run_id=run_id,
+                user_id=user.id,
+                occurrence=occurrence,
+                kind=kind,
+                prompt='?',
+                details={},
+            )
+        await store.set_run_status(connection, run_id, 'waiting')
+        assert await store.waiting_for(connection, user.id) == {thread.id: 'approval'}
+        assert await store.waiting_for(connection, other.id) == {}

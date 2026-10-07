@@ -146,6 +146,18 @@ async def latest_outcomes(connection: Connection, user_id: str) -> dict[str, Run
     return {str(row['thread_id']): row['status'] for row in await cursor.fetchall() if row['status'] in FINISHED}
 
 
+async def waiting_for(connection: Connection, user_id: str) -> dict[str, str]:
+    """What each of the user's waiting threads waits for (`question`, `approval` or `handoff`): the latest open ask
+    of its waiting run, by thread id, so the chat list can say "Approval" rather than just "needs you"."""
+    cursor = await connection.execute(
+        'SELECT DISTINCT ON (r.thread_id) r.thread_id, a.kind FROM montybot.runs r '
+        'JOIN montybot.asks a ON a.run_id = r.id AND a.answer IS NULL '
+        "WHERE r.user_id = %s AND r.status = 'waiting' ORDER BY r.thread_id, a.occurrence DESC",
+        (user_id,),
+    )
+    return {str(row['thread_id']): row['kind'] for row in await cursor.fetchall()}
+
+
 async def last_active(connection: Connection, user_id: str) -> dict[str, datetime]:
     """When each of the user's threads last had something happen: its latest run started, or it was created. The
     order of `list_threads`, as times an app can group by ("Today", "Yesterday")."""

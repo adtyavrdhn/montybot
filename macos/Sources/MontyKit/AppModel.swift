@@ -480,6 +480,16 @@ public final class AppModel {
         return false
     }
 
+    /// Marks a chat as not seen yet, to come back to it, as Mail's Mark as Unread.
+    public func markUnread(_ thread: ThreadSummary) {
+        unseen.insert(thread.id)
+    }
+
+    public func markSeen(_ thread: ThreadSummary) {
+        unseen.remove(thread.id)
+        chatSeen?(thread.id)
+    }
+
     public func setPinned(_ thread: ThreadSummary, _ pin: Bool) {
         pinned.removeAll { $0 == thread.id }
         if pin { pinned.append(thread.id) }
@@ -546,7 +556,7 @@ public final class AppModel {
         guard let id = chat.threadId, let index = threads.firstIndex(where: { $0.id == id }) else { return }
         let status = chat.run?.status.isActive == true ? chat.run?.status : nil
         if isActive, isWindowVisible, self.chat === chat { known[id] = .some(status) }
-        if threads[index].status != status {
+        if threads[index].status != status || (status == .waiting && chat.ask != nil && threads[index].waitingFor != chat.ask?.kind) {
             let outcome = status == nil ? chat.run?.status : nil
             let title = chat.title.isEmpty ? threads[index].title : chat.title
             if status != nil, threads[index].status == nil {
@@ -554,7 +564,7 @@ public final class AppModel {
                 threads.remove(at: index)
                 threads.insert(ThreadSummary(id: id, title: title, status: status, updatedAt: Date()), at: 0)
             } else {
-                threads[index] = threads[index].with(title: title, status: status, outcome: outcome)
+                threads[index] = threads[index].with(title: title, status: status, outcome: outcome, waitingFor: chat.ask?.kind)
             }
             localChanges += 1
             threadsChanged?()
