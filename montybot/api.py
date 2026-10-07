@@ -17,7 +17,6 @@ from typing import Annotated, Any, TypeVar
 from urllib.parse import quote, urlsplit
 
 from pydantic import AfterValidator, BaseModel, Field, StringConstraints
-from pydantic_ai.messages import ModelMessage, ModelRequest, TextPart, UserPromptPart
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
@@ -45,6 +44,15 @@ class Credentials(BaseModel):
 
 class NewMessage(BaseModel):
     text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20_000)]
+    timezone: str | None = Field(default=None, max_length=64)
+    """The IANA time zone of the user's browser, such as `Europe/London`."""
+
+
+async def remember_timezone(connection: Any, user: User, timezone: str | None) -> None:
+    """Keep the time zone the user's browser reports, if it is a real one and has changed."""
+    if timezone is None or timezone == user.timezone or not schedules.is_timezone(timezone):
+        return
+    await store.set_timezone(connection, user.id, timezone)
 
 
 class Answer(BaseModel):
@@ -112,6 +120,7 @@ async def create_thread(request: Request, user: User) -> Response:
     resources = resources_of(request)
     run_id = str(uuid.uuid4())
     async with resources.pool.connection() as connection, connection.transaction():
+        await remember_timezone(connection, user, body.timezone)
         thread = await store.create_thread(connection, user.id, body.text.splitlines()[0])
         await store.create_run(
             connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt=body.text, trigger='message'
@@ -129,6 +138,7 @@ async def add_message(request: Request, user: User) -> Response:
         thread = await store.get_thread(connection, user.id, request.path_params['thread_id'])
         if thread is None:
             return NOT_FOUND
+        await remember_timezone(connection, user, body.timezone)
         try:
             await store.create_run(
                 connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt=body.text, trigger='message'
@@ -141,26 +151,60 @@ async def add_message(request: Request, user: User) -> Response:
 
 @auth.signed_in
 async def list_threads(request: Request, user: User) -> Response:
+    """Each thread with the status of its unfinished run, if it has one: `running`, `waiting` (for the user) or
+    `queued`."""
     async with resources_of(request).pool.connection() as connection:
         threads = await store.list_threads(connection, user.id)
-    return JSONResponse([{'id': t.id, 'title': t.title} for t in threads])
+        active = await store.active_runs(connection, user.id)
+    return JSONResponse([{'id': t.id, 'title': t.title, 'status': active.get(t.id)} for t in threads])
 
 
 @auth.signed_in
 async def read_thread(request: Request, user: User) -> Response:
     async with resources_of(request).pool.connection() as connection:
-        # History and status must describe the same instant, even if a workflow finishes between the reads.
+        # Messages and status must describe the same instant, even if a workflow finishes between the reads.
         await connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
         thread = await store.get_thread(connection, user.id, request.path_params['thread_id'])
         if thread is None:
             return NOT_FOUND
-        history = await store.load_history(connection, thread.id)
-        run = await store.latest_run(connection, user.id, thread.id)
-        run_json = None if run is None else await run_view(connection, user, run)
-    messages = chat_messages(history)
-    if run is not None and run.status in ACTIVE:
-        messages.append({'role': 'user', 'text': run.prompt})  # not in the history until the run finishes
+        runs = await store.list_runs(connection, user.id, thread.id)
+        asks = await store.list_answered_asks(connection, user.id, thread.id)
+        run_json = None if not runs else await run_view(connection, user, runs[-1])
+    messages = chat_messages(runs, asks)
     return JSONResponse({'id': thread.id, 'title': thread.title, 'messages': messages, 'run': run_json})
+
+
+def chat_messages(runs: list[Run], asks: list[Ask]) -> list[dict[str, str]]:
+    """The chat as the user sees it. Each run is their message, what Monty asked them and how they answered, and
+    Monty's reply once the run has finished. `event` lines record approvals and hand-offs."""
+    asks_of_run: dict[str, list[Ask]] = {}
+    for ask in asks:
+        asks_of_run.setdefault(ask.run_id, []).append(ask)
+    shown: list[dict[str, str]] = []
+    for run in runs:
+        shown.append({'role': 'user', 'text': run.prompt})
+        for ask in asks_of_run.get(run.id, []):
+            shown.extend(ask_messages(ask))
+        if run.output:
+            shown.append({'role': 'assistant', 'text': run.output})
+    return shown
+
+
+def ask_messages(ask: Ask) -> list[dict[str, str]]:
+    """An answered ask as chat lines."""
+    answer = ask.answer or {}
+    if answer.get('closed'):
+        return []  # the run ended (it was stopped) before the user answered
+    if answer.get('expired'):
+        return [{'role': 'event', 'text': f'Not answered in time: {ask.prompt}'}]
+    match ask.kind:
+        case 'question':
+            return [{'role': 'assistant', 'text': ask.prompt}, {'role': 'user', 'text': str(answer.get('text', ''))}]
+        case 'approval':
+            verdict = 'You approved' if answer.get('approved') else 'You said no to'
+            return [{'role': 'event', 'text': f'{verdict}: {ask.prompt}'}]
+        case 'handoff':
+            return [{'role': 'event', 'text': f'You took over the browser: {ask.prompt}'}]
 
 
 @auth.signed_in
@@ -232,6 +276,19 @@ async def run_view(connection: Any, user: User, run: Run) -> dict[str, Any]:
         'activity': await store.list_activity(connection, user.id, run.id),
         'ask': None if ask is None else ask_json(ask),
     }
+
+
+@auth.signed_in
+async def stop_run(request: Request, user: User) -> Response:
+    """POST. Stop the user's run, whatever it is doing or waiting for."""
+    resources = resources_of(request)
+    async with resources.pool.connection() as connection:
+        run = await store.get_run(connection, user.id, str(request.path_params['run_id']))
+    if run is None:
+        return NOT_FOUND
+    if not await workflows.stop(resources, run):
+        return JSONResponse({'detail': 'that task has finished already'}, status_code=409)
+    return JSONResponse({'ok': True})
 
 
 # --- answering the run ---
@@ -528,21 +585,6 @@ def schedule_json(schedule: Schedule, paused: bool) -> dict[str, Any]:
 def ask_json(ask: Ask) -> dict[str, Any]:
     """A hand-off's id stays on the server: the live view finds it from the signed-in user's open ask."""
     return {'id': ask.id, 'kind': ask.kind, 'prompt': ask.prompt}
-
-
-def chat_messages(history: list[ModelMessage]) -> list[dict[str, str]]:
-    """What the user sees of the history: their messages and the agent's words, not its tool calls."""
-    shown: list[dict[str, str]] = []
-    for message in history:
-        if isinstance(message, ModelRequest):
-            for part in message.parts:
-                if isinstance(part, UserPromptPart) and isinstance(part.content, str):
-                    shown.append({'role': 'user', 'text': part.content})
-        else:
-            text = '\n'.join(p.content for p in message.parts if isinstance(p, TextPart)).strip()
-            if text and not message.tool_calls:
-                shown.append({'role': 'assistant', 'text': text})
-    return shown
 
 
 # --- workspace results (no filenames in request URLs or telemetry) ---

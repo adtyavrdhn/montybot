@@ -47,6 +47,16 @@ async def ask_user(ctx: RunContext[RunDeps], question: str) -> str:
     return str(reply.get('text', ''))
 
 
+def user_time(ctx: RunContext[RunDeps]) -> str:
+    """The user's date, time and time zone, so "today", "next Friday" and "9am" mean what they mean to the user."""
+    if not ctx.deps.local_time:
+        return ''
+    return (
+        f'For the user it is now {ctx.deps.local_time}. Use their time zone for dates, times and schedules unless '
+        'they name another.'
+    )
+
+
 CACHE = AnthropicModelSettings(
     # Automatic caching conflicts with explicit message breakpoints. Override model defaults too.
     anthropic_cache=False,
@@ -75,6 +85,7 @@ def build_agent(model: Model | str, *, jev: bool = False) -> Agent[RunDeps, str]
             CODE_INSTRUCTIONS,
             CPYTHON_INSTRUCTIONS,
             SCHEDULE_INSTRUCTIONS,
+            user_time,
             recall,
             scheduled_run,
         ],

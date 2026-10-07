@@ -89,7 +89,7 @@ def snapshot(run_id: str) -> Snapshot:
         _prune()
         preview = _previews.get(run_id)
         if preview is None:
-            return {'revision': 0, 'text': '', 'activity': 'Working'}
+            return {'revision': 0, 'text': '', 'activity': ''}  # the web app shows the run's activity log
         return {
             'revision': preview.revision,
             'text': '\n'.join(preview.parts[i] for i in sorted(preview.parts))[:MAX_TEXT],
@@ -129,6 +129,7 @@ async def handler(ctx: RunContext[RunDeps], events: AsyncIterable[AgentStreamEve
                 _touch(run_id, preview)
             elif isinstance(event, (FunctionToolCallEvent, FunctionToolResultEvent)):
                 preview = _previews.get(run_id, Preview())
-                preview.activity = 'Running a step' if isinstance(event, FunctionToolCallEvent) else 'Step completed'
-                # Never retain tool names, arguments, results, thinking or provider metadata.
+                preview.activity = ''
+                # Blank: the web app then shows the run's own activity log ("Opening example.com"). Never retain tool
+                # names, arguments, results, thinking or provider metadata here.
                 _touch(run_id, preview)

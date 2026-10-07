@@ -55,10 +55,17 @@ def check(cron: str, timezone: str) -> None:
     """Five-field cron (minute first) in an IANA zone."""
     if len(cron.split()) != 5 or not croniter.is_valid(cron):  # pyright: ignore[reportUnknownMemberType]
         raise InvalidSchedule(f'{cron!r} is not a five-field cron expression, such as `0 9 * * 1`')
+    if not is_timezone(timezone):
+        raise InvalidSchedule(f'{timezone!r} is not a known time zone')
+
+
+def is_timezone(name: str) -> bool:
+    """An IANA zone such as `Europe/London`."""
     try:
-        ZoneInfo(timezone)
-    except (ZoneInfoNotFoundError, ValueError) as error:
-        raise InvalidSchedule(f'{timezone!r} is not a known time zone') from error
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, OSError):  # OSError: a name such as 'America' is a directory
+        return False
+    return True
 
 
 def is_uuid(value: str) -> bool:

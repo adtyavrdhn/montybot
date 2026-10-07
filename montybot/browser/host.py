@@ -288,7 +288,12 @@ class BrowserHost:
 
     @timed('browser.close')
     async def close(self, *, run_id: RunId, user_id: UserId) -> bool:
-        run = await self._find(run_id, user_id)
+        try:
+            run = await self._find(run_id, user_id)
+        except UnknownRun:
+            # The run may be stopped before its first browser call: one already on its way must not open a browser.
+            self._closed.add(run_id)
+            raise
         async with self._hold(run):
             try:
                 saved = await self._save_if_open(run)
@@ -336,6 +341,9 @@ class BrowserHost:
         held_already = await self._lease.holder(user_id=user_id) == run_id
         if not await self._lease.acquire(user_id=user_id, run_id=run_id):
             raise UserBusy("another run of this user's is using the browser and the saved sign-ins")
+        if run_id in self._closed:  # closed while this call waited for the lease
+            await self._lease.release(user_id=user_id, run_id=run_id)
+            raise UnknownRun('no browser for this run')
         run = self._runs.get(run_id)
         if run is None:  # no await since the lookup, so a concurrent `start` cannot have made one meanwhile
             restart_reason = SERVICE_RESTARTED if held_already else None

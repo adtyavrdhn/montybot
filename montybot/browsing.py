@@ -73,7 +73,7 @@ class Session:
         started = await self.browser.start(run_id=self.run_id, user_id=self.user_id)
         self._note(started.restarted)
         # Renew the run's lease on the user's sign-ins (after `start`, which takes it on the first call).
-        await self.resources.lease.acquire(user_id=self.user_id, run_id=self.run_id)
+        await self.resources.lease.renew(user_id=self.user_id, run_id=self.run_id)
 
     async def act(self, action: Navigate | Click | Type | Press) -> None:
         await self.start()
@@ -115,6 +115,14 @@ class Session:
             await store.add_activity(connection, self.run_id, text)
 
 
+BROWSER_BUSY = (
+    "the browser is in use by another of the user's chats, which is still working or waiting for them. Do not try "
+    'again in this run: tell the user to finish or stop that chat, then ask again.'
+)
+"""What the agent is told when another run of the user's holds the browser. Retrying cannot help: that run may wait
+for the user for hours."""
+
+
 async def browser_step(ctx: RunContext[RunDeps], name: str, use: Callable[[Session], Awaitable[str]]) -> str:
     """Run `use` as one DBOS step on the run's browser. Errors the browser raises on purpose are safe to show the
     model, so they come back as text it can act on."""
@@ -124,7 +132,7 @@ async def browser_step(ctx: RunContext[RunDeps], name: str, use: Callable[[Sessi
         try:
             return await use(session)
         except UserBusy:
-            return 'Error: another of your tasks is using the browser right now. Try again when it has finished.'
+            return f'Error: {BROWSER_BUSY}'
         except BrowserError as error:
             return f'Error: {error}'
 

@@ -63,7 +63,7 @@ async def schedule_task(
     Args:
         name: A short label, such as "Weekly groceries".
         cron: Five-field cron in `timezone`, minute first: `0 9 * * 1` is Mondays at 09:00.
-        timezone: An IANA zone such as `Europe/London`. Use the user's zone if you know it; ask if it matters.
+        timezone: An IANA zone such as `Europe/London`. The user's own zone unless they name another.
         when: The schedule in plain words, for the user: "Mondays at 09:00".
         prompt: What to do each time, written as the user would ask it, with the site's address.
         watch: True to watch for something ("tell me when a slot opens"): the user hears only when it is found, and

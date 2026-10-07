@@ -4,12 +4,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-RunStatus = Literal['queued', 'running', 'waiting', 'done', 'failed']
+RunStatus = Literal['queued', 'running', 'waiting', 'done', 'failed', 'stopped']
 Trigger = Literal['message', 'schedule']
 AskKind = Literal['question', 'approval', 'handoff']
 NoticeKind = AskKind | Literal['finished', 'failed', 'found']
 """What a notification tells the user: an ask, a scheduled task that ended, or a watch that found something."""
 ACTIVE: tuple[RunStatus, ...] = ('queued', 'running', 'waiting')
+FINISHED: tuple[RunStatus, ...] = ('done', 'failed', 'stopped')
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -17,6 +18,8 @@ class User:
     id: str
     email: str
     name: str
+    timezone: str = 'UTC'
+    """An IANA zone, as the user's browser last reported it."""
 
 
 @dataclass(frozen=True, kw_only=True)

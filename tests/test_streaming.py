@@ -68,7 +68,7 @@ def deps(run_id: str, monkeypatch: pytest.MonkeyPatch) -> Any:
         return ''
 
     monkeypatch.setattr(agent_module, 'recall', no_memories)
-    return SimpleNamespace(run_id=run_id, run=SimpleNamespace(id=run_id, prompt='hello'), schedule=None)
+    return SimpleNamespace(run_id=run_id, run=SimpleNamespace(id=run_id, prompt='hello'), schedule=None, local_time='')
 
 
 async def test_handler_publishes_text_before_event_stream_finishes(run_id: str) -> None:
@@ -131,7 +131,7 @@ async def test_runs_are_isolated_and_discard_removes_preview(run_id: str) -> Non
         await streaming.handler(context(run_id), events(PartStartEvent(index=0, part=TextPart('first'))))
         await streaming.handler(context(other), events(PartStartEvent(index=0, part=TextPart('second'))))
         streaming.discard(run_id)
-        assert streaming.snapshot(run_id) == {'revision': 0, 'text': '', 'activity': 'Working'}
+        assert streaming.snapshot(run_id) == {'revision': 0, 'text': '', 'activity': ''}
         assert streaming.snapshot(other)['text'] == 'second'
         streaming.discard(run_id)  # Cleanup is safe more than once.
     finally:
@@ -318,21 +318,21 @@ async def test_part_end_reconciles_text_without_appending_it_twice(run_id: str) 
     assert streaming.snapshot(run_id)['text'] == 'Hello world'
 
 
-async def test_tool_activity_is_generic_and_preserves_current_text(run_id: str) -> None:
+async def test_tool_activity_is_blank_and_preserves_current_text(run_id: str) -> None:
     await streaming.handler(context(run_id), events(PartStartEvent(index=0, part=TextPart('Working on it'))))
     before = streaming.snapshot(run_id)
     await streaming.handler(
         context(run_id), events(FunctionToolCallEvent(ToolCallPart('run_code', {'code': 'private-argument'})))
     )
     running = streaming.snapshot(run_id)
-    assert running['activity'] == 'Running a step'
+    assert running['activity'] == ''  # the web app shows the run's own activity log instead
     assert running['text'] == before['text']
     assert running['revision'] > before['revision']
     await streaming.handler(
         context(run_id), events(FunctionToolResultEvent(ToolReturnPart('run_code', 'private-result')))
     )
     completed = streaming.snapshot(run_id)
-    assert completed['activity'] == 'Step completed'
+    assert completed['activity'] == ''
     assert completed['text'] == before['text']
     assert completed['revision'] > running['revision']
 

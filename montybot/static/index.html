@@ -8,6 +8,7 @@
   <title>Monty | Your web assistant</title>
   <link rel="manifest" href="/static/manifest.json">
   <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/markdown.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -52,6 +53,7 @@
         <div class="header-title"><span class="workspace-label">Your workspace</span><h1 id="title">Monty</h1></div>
         <button id="browser-button" class="secondary" aria-label="Browser" hidden><span aria-hidden="true">▣</span> Watch browser</button>
       </header>
+      <div id="notice" role="alert" hidden><span id="notice-text"></span><button id="close-notice" class="icon" aria-label="Dismiss">✕</button></div>
       <button id="drawer-backdrop" aria-label="Close navigation" hidden></button>
       <nav id="drawer" class="drawer" aria-label="Workspace navigation">
         <div class="drawer-brand"><div class="brand"><span class="monty-mark" aria-hidden="true">m<span>•</span></span><span>Monty<small>Built with Pydantic AI</small></span></div><button id="close-drawer" class="icon" aria-label="Close navigation">✕</button></div>
@@ -77,19 +79,26 @@
               <label for="message" class="sr-only">Message Monty</label>
               <textarea id="message" rows="2" placeholder="What would you like Monty to do?" required aria-describedby="composer-hint"></textarea>
               <button type="submit" id="send">Send <span aria-hidden="true">↑</span></button>
+              <button type="button" id="stop" class="bad" hidden>Stop</button>
             </form>
             <p id="composer-hint">You can watch Monty's browser and step in when needed.</p>
           </div>
         </main>
         <aside id="browser" aria-label="Monty's browser" hidden>
           <div class="panel-bar">
-            <span id="browser-label">The bot's browser</span>
+            <span>Monty's browser, as it works</span>
             <button id="close-browser" class="icon" aria-label="Close">✕</button>
           </div>
-          <img id="screen" alt="The bot's browser">
-          <iframe id="live" title="Take over the browser" hidden></iframe>
+          <img id="screen" alt="Monty's browser">
         </aside>
       </div>
+      <dialog id="takeover" aria-labelledby="takeover-title">
+        <div class="panel-bar">
+          <span id="takeover-title">You are driving Monty's browser. Give it back when you are done.</span>
+          <button id="close-takeover" class="secondary">Back to chat</button>
+        </div>
+        <iframe id="live" title="Monty's browser"></iframe>
+      </dialog>
       <section id="files" class="page" aria-labelledby="files-title" hidden>
         <div class="page-content">
           <button class="secondary back">Back to chat</button>
@@ -115,7 +124,6 @@
           <div class="page-heading"><span class="page-symbol" aria-hidden="true">◷</span><h2 id="schedules-title" tabindex="-1">Schedules</h2></div>
           <p class="muted">Tasks Monty runs on your schedule. Pause a task without deleting it, or resume it when you're ready.</p>
           <ul id="schedule-list" aria-label="Scheduled tasks"></ul>
-          <div class="page-note"><strong>Start with a chat.</strong> Try asking: “Every Tuesday at 9, check the price of my usual shopping list.”</div>
         </div>
       </section>
     </section>

@@ -27,6 +27,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 class Turn:
     prompt: str
     returns: list[ToolReturnPart]
+    instructions: str = ''
 
     @property
     def last(self) -> str:
@@ -85,6 +86,10 @@ def line_with(page: str, needle: str) -> str:
 
 def hello(turn: Turn) -> ModelResponse:
     return say('Hello! I am monty-bot.')
+
+
+def users_time(turn: Turn) -> ModelResponse:
+    return say(next(line for line in turn.instructions.splitlines() if 'For the user it is now' in line))
 
 
 def favourite_colour(turn: Turn) -> ModelResponse:
@@ -332,6 +337,7 @@ SCRIPTS: dict[str, Script] = {
     'Fail please': fail,
     'Say hello': hello,
     'Ask me my favourite colour': favourite_colour,
+    'What time is it for me': users_time,
     'Order eggs from': order_eggs,
     'Find the three cheapest flights to Lisbon next Friday': cheapest_flights,
     'What is on offer today at': todays_offer,
@@ -360,7 +366,9 @@ def current_turn(messages: list[ModelMessage]) -> Turn:
         for part in message.parts
         if isinstance(part, ToolReturnPart)
     ]
-    return Turn(prompt=prompt, returns=returns)
+    latest = messages[-1]
+    instructions = (latest.instructions or '') if isinstance(latest, ModelRequest) else ''
+    return Turn(prompt=prompt, returns=returns, instructions=instructions)
 
 
 def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:

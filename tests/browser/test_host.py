@@ -144,6 +144,17 @@ async def test_a_run_that_ends_is_saved_and_closed() -> None:
     assert await setup.lease.holder(user_id='alice') is None
 
 
+async def test_a_run_closed_before_its_first_call_never_opens_a_browser() -> None:
+    setup = Setup()
+    host = setup.host()
+    with pytest.raises(UnknownRun):
+        await host.close(**ALICE)  # the user stopped the run before it used the browser
+    with pytest.raises(UnknownRun):
+        await host.start(**ALICE)  # a call that was already on its way
+    assert setup.made == []
+    assert await setup.lease.holder(user_id='alice') is None
+
+
 async def test_unknown_closed_and_other_users_runs_look_the_same() -> None:
     host = Setup().host()
     await host.start(**ALICE)
