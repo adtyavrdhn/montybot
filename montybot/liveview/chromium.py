@@ -199,11 +199,13 @@ class CdpFrameSource:
 
     async def _let_go(self, cdp: CDPSession) -> None:
         """Leave the tab as the user found it: buttons up, its own size, no screencast."""
+        if self._viewport is not None:
+            # First, and on its own: detaching alone leaves the size in place, so the agent would get phone-sized
+            # screenshots, and a failure below must not skip it.
+            with suppress(PlaywrightError):
+                await _call(cdp, 'Emulation.clearDeviceMetricsOverride')
         with suppress(PlaywrightError):
             await self._release_buttons(cdp)
-            if self._viewport is not None:
-                # Detaching alone leaves the size in place, so the agent would get phone-sized screenshots.
-                await _call(cdp, 'Emulation.clearDeviceMetricsOverride')
             await _call(cdp, 'Page.stopScreencast')
             await cdp.detach()
 
