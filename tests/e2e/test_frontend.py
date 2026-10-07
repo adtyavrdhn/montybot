@@ -750,3 +750,16 @@ def test_sending_to_a_deleted_chat_starts_over_and_says_why(frontend: tuple[Page
     expect(page).to_have_url('http://monty.test/#/new')
     expect(page.locator('#notice')).to_contain_text('That chat was deleted')
     expect(page.locator('#message')).to_have_value('Run it now')
+
+
+def test_a_chat_that_fails_to_load_says_so_and_lets_you_act(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    mock.messages = [{'role': 'user', 'text': 'Order eggs'}]
+    page.route(
+        f'**/api/threads/{THREAD}', lambda route: route.fulfill(status=500, body='{}', content_type='application/json')
+    )
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    expect(page.locator('#title')).to_have_text('Could not load this chat')
+    expect(page.locator('#notice')).to_contain_text('Something went wrong (500)')
+    expect(page.locator('#send')).to_be_enabled()

@@ -97,7 +97,7 @@ function onClose(code) {
   if (finished) return;
   if (code === 4410) return finish('Monty has its browser back. Nothing more to do here.');
   if (code === 4404) return finish('This takeover has ended. Go back to the chat, and take over again if Monty still needs you.');
-  if (code === 4401) return finish('Sign in, then open this link again.');
+  if (code === 4401) return finish('You were signed out. Sign in again, then take over the browser from the chat.');
   if (code === 4409) {
     status.textContent = 'You are driving Monty\'s browser in another window or on another device.';
     useHere.hidden = false;

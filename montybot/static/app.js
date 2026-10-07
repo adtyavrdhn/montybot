@@ -58,7 +58,7 @@ async function api(path, { method = 'GET', body } = {}) {
 
 function problem(status, detail) {
   // The server's words where they are meant for the user; plain ones where they are not.
-  if (status === 404) return 'That is no longer here: it may have finished or been deleted.';
+  if (status === 404) return 'That is no longer here. It may have been deleted, or the task may have finished.';
   if (status === 422) return 'Please check what you typed, and try again.';
   return detail || `Something went wrong (${status}). Please try again.`;
 }
@@ -297,16 +297,7 @@ async function openChat(threadId) {
   $('messages').replaceChildren();  // never the last chat's messages under this chat's address
   renderRun(null);
   $('send').disabled = true;  // until the chat has loaded and says whether it is still working
-  const mine = page;
-  try {
-    await loadChat();
-  } catch (error) {
-    if (page === mine) {
-      $('title').textContent = 'Could not load this chat';
-      $('send').disabled = false;
-    }
-    throw error;
-  }
+  await loadChat();
 }
 
 async function loadChat() {
@@ -316,6 +307,10 @@ async function loadChat() {
     thread = await api(`/api/threads/${state.threadId}`);
   } catch (error) {
     if (error.status === 404) { location.hash = '#/new'; return; }
+    if (load === state.chatLoads && error.name !== 'AbortError' && state.run === null) {
+      $('title').textContent = 'Could not load this chat';  // the newest load failed: say so, and let the user act
+      $('send').disabled = false;
+    }
     throw error;
   }
   if (load !== state.chatLoads) return;  // a later load is drawing this chat
