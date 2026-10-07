@@ -483,7 +483,7 @@ def test_sse_snapshots_error_recovery_and_committed_reply(frontend: tuple[Page, 
     page, mock = frontend
     streaming_chat(page, mock)
     emit(page, 'preview', {'revision': 1, 'text': 'First draft', 'activity': 'Finding flights'})
-    expect(page.locator('.msg.assistant')).to_contain_text('Live draft · not saved yet')
+    expect(page.locator('.msg.draft')).to_have_text('First draft')  # no label while the connection is fine
     expect(page.locator('#status')).to_have_text('Finding flights')
     emit(page, 'preview', {'revision': 2, 'text': '<b>Replacement draft</b>', 'activity': 'Comparing fares'})
     expect(page.locator('.msg.assistant')).to_have_count(1)
@@ -495,10 +495,10 @@ def test_sse_snapshots_error_recovery_and_committed_reply(frontend: tuple[Page, 
     expect(page.locator('#messages')).not_to_contain_text('Bad draft')
     emit(page, 'error')
     expect(page.locator('#status')).to_contain_text('Live preview unavailable')
-    expect(page.locator('.msg.assistant')).to_contain_text('connection lost; may be incomplete')
+    expect(page.locator('.msg.assistant')).to_contain_text('Connection lost; this may be incomplete')
     emit(page, 'open')
     expect(page.locator('#status')).to_have_text('Comparing fares')
-    expect(page.locator('.msg.assistant')).to_contain_text('not saved yet')
+    expect(page.locator('.msg.draft small')).to_have_count(0)
     mock.messages.append({'role': 'assistant', 'text': 'Committed flight options'})
     mock.run = {'id': 'run', 'thread_id': THREAD, 'status': 'done', 'activity': [], 'ask': None}
     emit(page, 'status', mock.run)

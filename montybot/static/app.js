@@ -320,7 +320,7 @@ function renderDraft() {
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
   const bubble = messageBubble('assistant', state.draft.text);
   bubble.classList.add('draft');
-  bubble.prepend(element('small', state.draftLost ? 'Live draft · connection lost; may be incomplete' : 'Live draft · not saved yet'));
+  if (state.draftLost) bubble.prepend(element('small', 'Connection lost; this may be incomplete'));
   box.append(bubble);
   if (atBottom) box.scrollTop = box.scrollHeight;
 }
