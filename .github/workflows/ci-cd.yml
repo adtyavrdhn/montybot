@@ -127,7 +127,9 @@ jobs:
                   else:
                       raise AssertionError('Chrome reached the database')
                   await browser.act(Navigate(url='https://example.com/'))
-                  assert 'Example Domain' in (await browser.snapshot()).text
+                  page = await browser.snapshot()
+                  print('public page:', repr(page.url), repr(page.title), repr(page.text[:500]))
+                  assert 'Example Domain' in (page.title + page.text)
               finally:
                   await browser.close()
 
