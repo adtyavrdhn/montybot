@@ -86,9 +86,23 @@ _ARGS = (
     '--disable-background-timer-throttling',
     '--disable-backgrounding-occluded-windows',
     '--disable-renderer-backgrounding',
-    # Nothing Chrome would fetch on its own (component updates, field trials) goes out through the proxy.
+    # Take input before a new page's first frame is on screen. Without it, a window on Xvfb dropped the first key
+    # presses after a load. Playwright passes it too.
+    '--allow-pre-commit-input',
+    # Nothing Chrome would fetch on its own (component updates, sync, phishing lists) goes out through the proxy, and
+    # no background extension or service runs in its own process. No page can see these.
     '--disable-background-networking',
     '--disable-component-update',
+    '--disable-component-extensions-with-background-pages',
+    '--disable-default-apps',
+    '--disable-sync',
+    '--disable-client-side-phishing-detection',
+    '--disable-breakpad',
+    '--metrics-recording-only',
+    '--no-service-autorun',
+    '--disable-search-engine-choice-screen',
+    # Chrome for Testing's built-in experiments off, so it behaves like a default Chrome. Playwright does the same.
+    '--disable-field-trial-config',
     '--disable-features=Translate,MediaRouter,DialMediaRouteProvider',
     # WebGL in software where there is no GPU (Xvfb), as a normal Chrome would have it.
     '--enable-unsafe-swiftshader',
@@ -668,15 +682,15 @@ class ChromiumCDPBackend:
                     await proxy.start()
                     socket_path = proxy.path
             argv = options.command(profile=profile, display=screen.display if screen else None, proxy=socket_path)
-            # Chrome reads commands on its fd 3 and writes on its fd 4. sh puts our pipe ends there, then becomes
-            # Chrome (or bwrap, which passes them on).
+            # Chrome reads commands on its fd 3 and writes on its fd 4. bash puts our pipe ends there, then becomes
+            # Chrome (or bwrap, which passes them on). Not sh: dash cannot redirect from a descriptor above 9.
             commands_read, commands_write = os.pipe()
             replies_read, replies_write = os.pipe()
             ours = [commands_write, replies_read]
             log = os.open(workdir / 'chrome.log', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
                 process = await asyncio.create_subprocess_exec(
-                    '/bin/sh',
+                    '/bin/bash',
                     '-c',
                     f'exec "$@" 3<&{commands_read} 4>&{replies_write} {commands_read}<&- {replies_write}>&-',
                     'sh',
@@ -696,8 +710,10 @@ class ChromiumCDPBackend:
             try:
                 tab = await asyncio.wait_for(self._first_tab(connection, process), options.start_timeout)
             except (TimeoutError, CDPClosed) as error:
-                log_tail = (workdir / 'chrome.log').read_text(errors='replace')[-500:].strip()
-                raise ActionFailed(f'could not start Chrome: {log_tail or type(error).__name__}') from None
+                log = (workdir / 'chrome.log').read_text(errors='replace').splitlines()
+                # Chrome's fatal error, such as "No usable sandbox!", not the stack trace after it.
+                reason = next((line.split('] ', 1)[-1] for line in log if ':FATAL:' in line), '\n'.join(log[-5:]))
+                raise ActionFailed(f'could not start Chrome: {reason[:300] or type(error).__name__}') from None
             chrome = _Chrome(
                 workdir=workdir, process=process, connection=connection, tab=tab, screen=screen, proxy=proxy
             )
@@ -734,11 +750,18 @@ class ChromiumCDPBackend:
                 break
             await asyncio.sleep(0.02)
         target_id = str(pages[0]['targetId'])
-        await connection.send('Target.setDiscoverTargets', {'discover': True})  # for the live view's tabs
-        attached = await connection.send('Target.attachToTarget', {'targetId': target_id, 'flatten': True})
+        _, attached = await asyncio.gather(
+            connection.send('Target.setDiscoverTargets', {'discover': True}),  # for the live view's tabs
+            connection.send('Target.attachToTarget', {'targetId': target_id, 'flatten': True}),
+        )
         tab = _Tab(target_id=target_id, session=str(attached['sessionId']))
-        await connection.send('Page.enable', session=tab.session)
-        await connection.send('Page.setLifecycleEventsEnabled', {'enabled': True}, session=tab.session)
+        await asyncio.gather(
+            connection.send('Page.enable', session=tab.session),
+            connection.send('Page.setLifecycleEventsEnabled', {'enabled': True}, session=tab.session),
+            # A window on a screen with no window manager (Xvfb) may not get the focus. The page gets it, as the
+            # front window of a desktop would, as Playwright does for its pages.
+            connection.send('Emulation.setFocusEmulationEnabled', {'enabled': True}, session=tab.session),
+        )
         return tab
 
     def _listen(self, chrome: _Chrome) -> None:
