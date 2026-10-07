@@ -4,6 +4,7 @@ import SwiftUI
 struct MainView: View {
     @Environment(AppModel.self) private var app
     @State private var newTitle = ""
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         Group {
@@ -39,13 +40,17 @@ struct MainView: View {
             Button("Cancel", role: .cancel) {}
         }
         .onChange(of: app.renaming) { _, thread in if let thread { newTitle = thread.title.readableTitle } }
-        .confirmationDialog(
-            "Delete “\(app.deleting?.title.readableTitle ?? "")”?",
-            isPresented: Binding(get: { app.deleting != nil }, set: { if !$0 { app.deleting = nil } })
-        ) {
-            Button("Delete Chat", role: .destructive) { if let thread = app.deleting { Task { await app.delete(thread) } } }
-        } message: {
-            Text(deleteMessage)
+        // No "are you sure": the chat goes at once, and Undo (in the sidebar, Edit menu or ⌘Z) brings it back for a moment.
+        .onChange(of: app.deleting) { _, thread in
+            guard let thread else { return }
+            app.deleting = nil
+            app.deleteWithUndo(thread)
+            undoManager?.removeAllActions(withTarget: app)
+            undoManager?.registerUndo(withTarget: app) { app in app.undoDelete() }
+            undoManager?.setActionName("Delete Chat")
+        }
+        .onChange(of: app.recentlyDeleted == nil) { _, gone in
+            if gone { undoManager?.removeAllActions(withTarget: app) }  // deleted for good, or put back
         }
         .alert(
             app.actionError ?? "",
@@ -93,11 +98,6 @@ struct MainView: View {
         return true
     }
 
-    private var deleteMessage: String {
-        guard let deleting = app.deleting else { return "" }
-        let stops = deleting.status != nil ? " Monty stops the task it is doing there." : ""
-        return "The chat and everything in it are deleted, along with a schedule that reports there.\(stops) This can't be undone."
-    }
 }
 
 struct Sidebar: View {
@@ -160,6 +160,10 @@ struct Sidebar: View {
         .toolbar(removing: .sidebarToggle)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
+                if let deleted = app.recentlyDeleted {
+                    UndoDeleteBar(title: deleted.title.readableTitle) { app.undoDelete() }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
                 Divider().overlay(Palette.outline)
                 VStack(spacing: 1) {
                     LibraryLink(title: "Schedules", icon: "calendar.badge.clock", route: .schedules)
@@ -173,6 +177,7 @@ struct Sidebar: View {
                 .accessibilityLabel("Library")
                 offlineBanner
             }
+            .animation(.easeOut(duration: 0.2), value: app.recentlyDeleted?.id)
         }
     }
 
@@ -194,6 +199,8 @@ struct Sidebar: View {
     private func row(_ thread: ThreadSummary) -> some View {
         ThreadRow(
             thread: thread, unseen: app.unseen.contains(thread.id), pinned: app.pinned.contains(thread.id),
+            hasDraft: app.chat?.threadId != thread.id
+                && !(app.drafts[thread.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             pin: { app.setPinned(thread, !app.pinned.contains(thread.id)) }, delete: { app.deleting = thread }
         )
             .tag(Route.chat(thread.id))
@@ -217,6 +224,29 @@ struct Sidebar: View {
     private func filtered(_ threads: [ThreadSummary]) -> [ThreadSummary] {
         let query = search.trimmingCharacters(in: .whitespaces)
         return query.isEmpty ? threads : threads.filter { $0.title.localizedCaseInsensitiveContains(query) }
+    }
+}
+
+/// "Deleted “…”. Undo", for the moment a deleted chat can still come back.
+struct UndoDeleteBar: View {
+    let title: String
+    let undo: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "trash").font(.system(size: 11)).accessibilityHidden(true)
+            Text("Deleted “\(title)”").lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 4)
+            Button("Undo", action: undo)
+                .buttonStyle(.link)
+                .help("Bring the chat back (⌘Z)")
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(Palette.onSurfaceVariant)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Palette.containerHigh.opacity(0.6))
+        .onAppear { AccessibilityNotification.Announcement("Deleted \(title). Undo is available.").post() }
     }
 }
 
@@ -255,6 +285,8 @@ struct ThreadRow: View {
     /// Finished while the user looked elsewhere: bold, with a dot, until they open it, as unread mail.
     var unseen = false
     var pinned = false
+    /// Holds a message the user started and hasn't sent, as T3 Code marks an unsent draft.
+    var hasDraft = false
     var pin: (() -> Void)?
     var delete: (() -> Void)?
     @State private var hovering = false
@@ -293,6 +325,9 @@ struct ThreadRow: View {
             case _ where unseen:
                 Circle().fill(Palette.link).frame(width: 7, height: 7)
                     .help(thread.outcome == .failed ? "Monty couldn't finish this task" : "Monty finished: you haven't seen it yet")
+            case _ where hasDraft:
+                Image(systemName: "pencil.line").font(.system(size: 11)).foregroundStyle(Palette.onSurfaceVariant)
+                    .help("You started a message here and haven't sent it")
             case .failed:
                 Image(systemName: "exclamationmark.circle").font(.system(size: 11)).foregroundStyle(Palette.onSurfaceVariant)
                     .help("Monty couldn't finish this task")
@@ -311,6 +346,7 @@ struct ThreadRow: View {
         case (.running, _), (.queued, _): "Working"
         case (_, .failed) where unseen: "Couldn't finish, not seen yet"
         case _ where unseen: "New reply"
+        case _ where hasDraft: "Unsent draft"
         case (_, .failed): "Couldn't finish"
         case (_, .stopped): "Stopped"
         default: ""

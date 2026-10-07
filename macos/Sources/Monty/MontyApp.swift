@@ -106,6 +106,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         app.telemetry.flushBeforeQuitting()
     }
 
+    /// A chat deleted a moment ago is deleted before Monty quits (waiting at most a few seconds for the server), so
+    /// quitting never quietly undoes a delete.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard app.hasPendingDeletes else { return .terminateNow }
+        Task {
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await self.app.finishPendingDelete() }
+                group.addTask { try? await Task.sleep(for: .seconds(4)) }
+                await group.next()
+                group.cancelAll()
+            }
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     /// Closing the window keeps Monty in the menu bar, where it still says when a task needs you.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
@@ -257,6 +273,13 @@ struct MontyCommands: Commands {
             Button("Next Chat") { step(1) }.keyboardShortcut("]", modifiers: [.command, .option]).disabled(app.isTakingOver)
         }
         CommandGroup(after: .sidebar) {
+            Divider()
+            Button("Back") { app.goBack() }
+                .keyboardShortcut("[")
+                .disabled(!app.canGoBack || app.isTakingOver)
+            Button("Forward") { app.goForward() }
+                .keyboardShortcut("]")
+                .disabled(!app.canGoForward || app.isTakingOver)
             Divider()
             Button("Find Chats") { show(app.route); NotificationCenter.default.post(name: .montyFindChats, object: nil) }
                 .keyboardShortcut("f")

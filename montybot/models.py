@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Literal
 
 RunStatus = Literal['queued', 'running', 'waiting', 'done', 'failed', 'stopped']
@@ -39,6 +40,8 @@ class Run:
     status: RunStatus
     output: str | None = None
     error: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

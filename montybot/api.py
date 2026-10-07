@@ -396,6 +396,9 @@ async def run_view(connection: Any, user: User, run: Run) -> dict[str, Any]:
         'thread_id': run.thread_id,
         'status': status,
         'prompt': run.prompt,  # what was asked, so an app can offer to try it again as it was
+        # How long it has been working, or worked: "Working for 12s", "Worked for 1m 3s".
+        'started_at': run.started_at.isoformat() if run.started_at else None,
+        'completed_at': run.completed_at.isoformat() if run.completed_at else None,
         'output': run.output,
         'activity': await store.list_activity(connection, user.id, run.id),
         'ask': None if ask is None else ask_json(ask),
