@@ -113,9 +113,14 @@ class CDPFrameSource:
         async with self._lock:
             if self._closed or viewport == self._viewport:
                 return
-            if self._session is not None:
+            if (session := self._session) is not None:
                 try:
-                    await self._emulate(self._session, viewport)
+                    await self._emulate(session, viewport)
+                    # The screencast sends a frame only when something repaints, and a new size does not always
+                    # repaint. Starting it again sends the page at its new size at once.
+                    await self._connection.send('Page.stopScreencast', session=session)
+                    start = {'format': 'jpeg', 'quality': self._quality}
+                    await self._connection.send('Page.startScreencast', start, session=session)
                 except CDPError as error:
                     raise ActionFailed(f'{ENGINE}: {error.message}') from error
             self._viewport = viewport

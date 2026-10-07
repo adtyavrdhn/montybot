@@ -128,6 +128,19 @@ async def test_popups_are_followed_and_the_run_keeps_its_tab(engine: str) -> Non
             assert (await backend.snapshot()).url == f'{origin}/popup'  # the agent is back on its own tab
 
 
+async def settled_text(service: StubBrowserService) -> str:
+    """The page's text once it stops changing. Headless Chrome resizes the window by a pixel just after its first
+    page loads, and the size page shows each resize."""
+    text = (await service.snapshot(run_id=RUN, user_id=USER)).snapshot.text
+    for _ in range(25):
+        await asyncio.sleep(0.2)
+        again = (await service.snapshot(run_id=RUN, user_id=USER)).snapshot.text
+        if again == text:
+            return text
+        text = again
+    raise AssertionError(f'the page kept changing: {text!r}')
+
+
 async def test_a_phone_gets_the_page_at_its_size_until_the_give_back(engine: str) -> None:
     """On a phone the user drives the page laid out for the phone; after the give-back the agent has it at its own size
     again. Servo cannot resize, and keeps its own size."""
@@ -140,7 +153,7 @@ async def test_a_phone_gets_the_page_at_its_size_until_the_give_back(engine: str
             try:
                 await service.start(run_id=RUN, user_id=USER)
                 await service.act(run_id=RUN, user_id=USER, action=Navigate(url=f'{origin}/size'))
-                before = (await service.snapshot(run_id=RUN, user_id=USER)).snapshot.text
+                before = await settled_text(service)
                 handoff = await service.start_handoff(run_id=RUN, user_id=USER, reason='Please sign in')
                 handoffs.add(handoff)
                 async with serve_app(app) as base:
@@ -168,7 +181,7 @@ async def test_a_phone_gets_the_page_at_its_size_until_the_give_back(engine: str
                         assert laptop.frame is not None
                         assert (laptop.frame.frame.width, laptop.frame.frame.height) == desktop
                         await laptop.give_back()
-                after = (await service.snapshot(run_id=RUN, user_id=USER)).snapshot.text
+                after = await settled_text(service)
                 assert after == before
                 if engine == 'chromium':  # Playwright's default viewport
                     assert 'size: 1280x720' in after
