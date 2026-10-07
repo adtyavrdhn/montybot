@@ -388,6 +388,12 @@ class _Tab:
         self.events.append((kind, loader))
         self.changed.set()
 
+    def loaded(self, mark: int, loader: str) -> bool:
+        """Whether the main frame's page has loaded: the document `loader` brought, or the latest one committed
+        since `mark`. A page that moves on to another before its load event never fires it (Google's results did)."""
+        committed = self.since(mark, 'committed')
+        return ('load', committed[-1] if committed else loader) in self.events[mark:]
+
     def since(self, mark: int, *kinds: str) -> list[str]:
         """The loader ids of events of `kinds` from index `mark` on."""
         return [loader for kind, loader in self.events[mark:] if kind in kinds]
@@ -886,7 +892,7 @@ class ChromiumCDPBackend:
             raise ActionFailed(f'could not load {url}: {error_text}')
         if not loader:
             return  # a jump within the document
-        if not await tab.until(lambda: ('load', loader) in tab.events, timeout):
+        if not await tab.until(lambda: tab.loaded(mark, loader), timeout):
             raise ActionFailed(f'{url} did not finish loading in {timeout:g} s')
 
     async def _find(self, target: Selector | Ref, *, typing: bool) -> Point:
@@ -926,10 +932,8 @@ class ChromiumCDPBackend:
             # A download's events may come just after the navigation ends, so `take_downloads` sees it.
             await tab.until(lambda: bool(tab.since(mark, 'committed', 'download')), 1)
         committed = tab.since(mark, 'committed')
-        if committed:
-            loader = committed[-1]
-            if not await tab.until(lambda: ('load', loader) in tab.events[mark:], timeout):
-                raise ActionFailed(f'the page did not finish loading in {timeout:g} s')
+        if committed and not await tab.until(lambda: tab.loaded(mark, committed[0]), timeout):
+            raise ActionFailed(f'the page did not finish loading in {timeout:g} s')
 
     @asynccontextmanager
     async def _side_tab(self) -> AsyncGenerator[Callable[[str, str, JSON], Awaitable[object]]]:
