@@ -47,6 +47,10 @@ these decisions directly. Experimental Jev helpers remain available in the sourc
 
 `tests/e2e/test_traces.py` holds these lines through a whole sign-in hand-off and order, with content on and off.
 
+Each run is a trace of its own, `run.lifecycle` at the top with the agent (`invoke_agent montybot`) inside, unless an
+app traced the action that started it (below). Database spans, `run.dispatch` and the live picture's
+`browser.peek_screenshot` are recorded only inside a trace: the apps' polling starts none.
+
 The web and Mac apps send their own telemetry too, to the same Logfire project: page loads, Web Vitals, every API
 call by route template, the user's actions, the live view, and errors. They post OTLP to `/api/telemetry/v1/...`,
 which forwards it with the server's token, for signed-in users only, so neither app holds a token. `GET

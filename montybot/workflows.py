@@ -105,7 +105,9 @@ async def run_thread(run_id: str) -> str:
                 streaming.discard(run_id)
 
 
-@timed('run.dispatch')
+# The workflow starts in this context: a run an app traced joins the app's trace; any other run is a trace of its own,
+# with `run.lifecycle` at the top.
+@timed('run.dispatch', only_in_trace=True)
 async def start(run_id: str) -> WorkflowHandleAsync[str]:
     with SetWorkflowID(run_id):
         return await DBOS.start_workflow_async(run_thread, run_id)

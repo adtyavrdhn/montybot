@@ -207,7 +207,7 @@ class BrowserHost:
             screenshot, restarted = await self._use(run, lambda backend: backend.screenshot(), replay=True)
             return ScreenshotResult(screenshot=screenshot, restarted=restarted)
 
-    @timed('browser.peek_screenshot')
+    @timed('browser.peek_screenshot', only_in_trace=True)
     async def peek_screenshot(self, *, run_id: RunId, user_id: UserId) -> Screenshot:
         """The viewport of the run's open browser, for the user watching the run. Read only: it never opens, restarts
         or keeps a browser alive, and does not wait for a call in progress. `UnknownRun` if there is no open browser
