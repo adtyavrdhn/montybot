@@ -373,10 +373,15 @@ async def tabs_shown(source: FrameSource) -> int:
     return await asyncio.wait_for(first_tabs(), 10)
 
 
+JAILED = CDPOptions(bwrap=True, virtual_screen=True, allow_private_networks=True)
+
+
 @needs_chrome
-async def test_tabs_share_one_chrome_and_close_on_their_own() -> None:
+@pytest.mark.parametrize('options', [HEADLESS, pytest.param(JAILED, marks=needs_jail, id='jailed')], ids=str)
+async def test_tabs_share_one_chrome_and_close_on_their_own(options: CDPOptions) -> None:
+    """Headless, and as on the server: headed on Xvfb in bwrap, where each tab is a window of its own."""
     with account() as origin:
-        first = ChromiumCDPBackend(HEADLESS)
+        first = ChromiumCDPBackend(options)
         await first.open(BrowserState(url=f'{origin}/sign-in'))
         second = first.new_tab()
         assert isinstance(first, TabsBackend)
@@ -389,6 +394,8 @@ async def test_tabs_share_one_chrome_and_close_on_their_own() -> None:
             exported = await second.export()
             assert exported.url == f'{origin}/me' and [c.name for c in exported.cookies] == ['sid']
             assert (await first.snapshot()).url == f'{origin}/sign-in'
+            for tab in (first, second):  # both draw: neither is a background tab
+                assert (await tab.screenshot()).width > 0
 
             await first.close()  # its tab only
             await second.act(Navigate(url=f'{origin}/me'))
