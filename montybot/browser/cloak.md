@@ -81,7 +81,8 @@ view engine tests run on `cloak` too: 7 of 7 on this Mac and in CI.
 | Passed | 94 of 94 (98 s, same day) | 94 of 94 (69 s; the first run, with a cold binary, 241 s) |
 | Sign-in hand-off, saved sign-in, press-and-hold, downloads | pass | pass |
 
-CI runs the same suite on Linux with the linux-x64 build (`cloak-linux`).
+CI runs the same suite on Linux with the linux-x64 build (`cloak-linux`): 95 passed, 4 skipped (Linux runs one test
+more than macOS), 102 s.
 
 ### (b) Real sites from the server
 
