@@ -236,6 +236,10 @@ export function start(settings, user) {
   return async () => {
     window.removeEventListener('error', uncaught);
     window.removeEventListener('unhandledrejection', unhandled);
-    await shutdown();
+    try {
+      await shutdown();
+    } finally {
+      sessionStorage.removeItem('lf_browser_session');  // the next user of this tab is a new browser session
+    }
   };
 }

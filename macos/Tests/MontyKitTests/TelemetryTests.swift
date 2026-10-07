@@ -232,3 +232,24 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
 
     override func stopLoading() {}
 }
+
+/// Signing out stops telemetry for good, however slow the server, and quickly.
+@Suite struct StoppingTests {
+    @Test func aStartBeganBeforeSigningOutDoesNotUndoIt() async {
+        let telemetry = Telemetry()
+        let before = telemetry.currentGeneration  // `startTelemetry` asks the server...
+        await telemetry.shutdown()  // ...the user signs out meanwhile...
+        telemetry.configure(TelemetrySettings(enabled: true, environment: "test"), exporter: Spans(), userId: "u",
+                            batch: false, generation: before)  // ...and the answer comes
+        #expect(!telemetry.isEnabled)
+        telemetry.configure(TelemetrySettings(enabled: true, environment: "test"), exporter: Spans(), userId: "u",
+                            batch: false, generation: telemetry.currentGeneration)  // signing in again
+        #expect(telemetry.isEnabled)
+    }
+
+    @Test func waitingForAStuckServerHasALimit() async {
+        let started = Date()
+        await Telemetry.waiting(atMost: 0.2) { Thread.sleep(forTimeInterval: 3) }
+        #expect(Date().timeIntervalSince(started) < 1)
+    }
+}

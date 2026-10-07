@@ -59,6 +59,8 @@ public final class Telemetry: @unchecked Sendable {
     private let lock = NSLock()
     private var pipeline: Pipeline?
     private var userId: String?
+    /// Counts shutdowns, so a start that began before one (`startTelemetry` waits on the server) cannot undo it.
+    private var generation = 0
 
     public init() {}
 
@@ -80,8 +82,14 @@ public final class Telemetry: @unchecked Sendable {
         )
     }
 
-    /// Starts sending with `exporter` (nil: stops). `batch` is off in tests, to see spans as they end.
-    func configure(_ settings: TelemetrySettings, exporter: SpanExporter?, userId: String?, batch: Bool = true) {
+    /// Which shutdown this is after: pass it back to `configure`.
+    var currentGeneration: Int { lock.withLock { generation } }
+
+    /// Starts sending with `exporter` (nil: stops), unless shut down since `generation`. `batch` is off in tests,
+    /// to see spans as they end.
+    func configure(_ settings: TelemetrySettings, exporter: SpanExporter?, userId: String?, batch: Bool = true,
+                   generation expected: Int? = nil) {
+        if let expected, expected != currentGeneration { return }  // signed out (or moved server) meanwhile
         let processor: SpanProcessor? = exporter.map {
             batch ? BatchSpanProcessor(spanExporter: $0, scheduleDelay: 5, exportTimeout: 10, maxQueueSize: 2048) as SpanProcessor
                 : SimpleSpanProcessor(spanExporter: $0)
@@ -91,11 +99,16 @@ public final class Telemetry: @unchecked Sendable {
             return Pipeline(settings: settings, processor: processor,
                             tracer: provider.get(instrumentationName: "montybot-mac", instrumentationVersion: Self.appVersion))
         }
-        let previous = lock.withLock {
+        let previous: Pipeline?? = lock.withLock {
+            if let expected, expected != generation { return .none }
             let previous = pipeline
             pipeline = next
             self.userId = userId
-            return previous
+            return .some(previous)
+        }
+        guard let previous else {  // shut down while this was being built
+            if let next { Self.background { next.processor.shutdown(explicitTimeout: 1) } }
+            return
         }
         if let previous { Self.background { previous.processor.shutdown(explicitTimeout: 3) } }
     }
@@ -105,21 +118,18 @@ public final class Telemetry: @unchecked Sendable {
         lock.withLock { pipeline?.settings == settings && self.userId == userId }
     }
 
-    /// Stops sending, after sending what is left (a few seconds at most).
+    /// Stops sending, after sending what is left. Waits 3 seconds at most: the SDK's own timeouts are not kept (an
+    /// export in flight can take 10), and signing out must not wait on a slow server.
     public func shutdown() async {
         let previous = lock.withLock {
             let previous = pipeline
             pipeline = nil
             userId = nil
+            generation += 1
             return previous
         }
         guard let previous else { return }
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            Self.background {
-                previous.processor.shutdown(explicitTimeout: 3)
-                done.resume()
-            }
-        }
+        await Self.waiting(atMost: 3) { previous.processor.shutdown(explicitTimeout: 3) }
     }
 
     /// Sends what is waiting now (the app went to the background), off the main thread.
@@ -128,9 +138,35 @@ public final class Telemetry: @unchecked Sendable {
         Self.background { pipeline.processor.forceFlush(timeout: 3) }
     }
 
-    /// Sends what is waiting before the app quits, waiting for it a moment.
+    /// Sends what is waiting before the app quits, blocking the quit 2 seconds at most.
     public func flushBeforeQuitting() {
-        lock.withLock { pipeline }?.processor.forceFlush(timeout: 2)
+        guard let pipeline = lock.withLock({ pipeline }) else { return }
+        let done = DispatchSemaphore(value: 0)
+        Self.background {
+            pipeline.processor.forceFlush(timeout: 2)
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + 2)
+    }
+
+    /// Runs `work` off the calling thread, and returns when it is done or `seconds` have passed, whichever is first.
+    static func waiting(atMost seconds: Double, _ work: @escaping @Sendable () -> Void) async {
+        let once = Once()
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            background {
+                work()
+                if once.claim() { done.resume() }
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + seconds) {
+                if once.claim() { done.resume() }
+            }
+        }
+    }
+
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var claimed = false
+        func claim() -> Bool { lock.withLock { defer { claimed = true }; return !claimed } }
     }
 
     private static func background(_ work: @escaping @Sendable () -> Void) {

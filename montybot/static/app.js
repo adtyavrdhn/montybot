@@ -54,12 +54,16 @@ const NO_TELEMETRY = {
   error: () => {},
 };
 const telemetry = { ...NO_TELEMETRY };
-let telemetryRun = null;  // while signed in: the started telemetry's stop function, or null when it is off
+let telemetryRun = null;  // once started: the started telemetry's stop function, or null when it is off
+let telemetryUser = null;  // whose telemetry is running
 let telemetryStopping = Promise.resolve();
 
 function startTelemetry(userId) {
-  // In the background, and never failing: the app works the same without it.
-  if (telemetryRun) return telemetryRun;
+  // In the background, and never failing: the app works the same without it. It keeps running when a session ends
+  // (its last export would be refused, and the SDK cannot start again after that), and starts again for another user.
+  if (telemetryRun && telemetryUser === userId) return telemetryRun;
+  if (telemetryRun) stopTelemetry();  // signed in again, as someone else: the new session sends what is left
+  telemetryUser = userId;
   telemetryRun = telemetryStopping.then(async () => {
     const response = await fetch('/api/telemetry', { credentials: 'same-origin' });
     const settings = response.ok ? await response.json() : null;
@@ -79,6 +83,7 @@ function stopTelemetry() {
   // Sends what is left. Resolves once done; never fails.
   const run = telemetryRun;
   telemetryRun = null;
+  telemetryUser = null;
   if (!run) return telemetryStopping;
   telemetryStopping = run.then(async (stop) => {
     Object.assign(telemetry, NO_TELEMETRY);
@@ -202,7 +207,6 @@ function show(screen) {
 }
 
 function signedOut() {
-  stopTelemetry();
   newPage();
   state.threadId = null;
   state.run = null;
@@ -267,11 +271,17 @@ async function signOut() {
       console.error(error);  // signing out matters more than the push subscription
     }
     $('notifications-label').textContent = 'Notify me when Monty needs me';  // this browser's subscription is gone
-    await api('/api/signout', { method: 'POST', body: {} });  // first: a failed sign-out must not look like one
   });
-  signedOut();
-  // What telemetry has left is sent before the reload, unless that takes long.
+  // What telemetry has left goes while the session still lets it, unless that takes long.
+  const userId = telemetryUser;
   await Promise.race([stopTelemetry(), new Promise((resolve) => setTimeout(resolve, 2000))]);
+  try {
+    await api('/api/signout', { method: 'POST', body: {} });  // first: a failed sign-out must not look like one
+  } catch (error) {
+    if (userId) startTelemetry(userId);  // still signed in
+    throw error;
+  }
+  signedOut();
   location.hash = '';
   location.reload();
 }

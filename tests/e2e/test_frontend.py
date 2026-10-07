@@ -976,3 +976,18 @@ def test_telemetry_sends_message_text_only_as_content(frontend: tuple[Page, Mock
     exported = flush_telemetry(page, mock, 'send message')
     assert ('Compare flights to Porto' in exported) == include_content
     assert ('text_length' in exported) != include_content
+
+
+def test_telemetry_is_sent_before_signing_out(frontend: tuple[Page, MockAPI]) -> None:
+    """After the sign-out the server refuses telemetry, so what is left goes first, the sign-out span with it."""
+    page, mock = frontend
+    mock.telemetry = True
+    workspace(page, mock)
+    assert telemetry_started(page)
+    with page.expect_navigation():
+        page.click('#signout')
+    calls = [(method, path) for method, path, _ in mock.calls]
+    signout = calls.index(('POST', '/api/signout'))
+    assert ('POST', '/api/telemetry/v1/traces') in calls[:signout]
+    exported = '\n'.join(body for path, body in mock.exported if path == '/api/telemetry/v1/traces')
+    assert '"sign out"' in exported

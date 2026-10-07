@@ -138,8 +138,9 @@ _TRACE_HEADERS = (b'traceparent', b'tracestate')
 class ClientTraceContext:
     """Continue a client's trace (W3C `traceparent`) for one request, without a span of its own.
 
-    The request's database spans, and a run it starts, join the client's trace. Requests without the header, such as
-    the apps' polling, are untraced as before. Only trace context is read: client baggage would set span attributes.
+    The request's database spans, and a run it starts, join the client's trace. Requests without the header are
+    untraced as before. Only trace context is read: client baggage would set span attributes. An unsampled one is
+    ignored: following it would let a client switch off the server's own spans for its request and run.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -151,10 +152,12 @@ class ClientTraceContext:
             for name, value in scope.get('headers', ())
             if name in _TRACE_HEADERS
         }
-        if scope['type'] not in ('http', 'websocket') or 'traceparent' not in carrier:
+        client = _TRACE_CONTEXT.extract(carrier) if 'traceparent' in carrier else None
+        sampled = client is not None and trace.get_current_span(client).get_span_context().trace_flags.sampled
+        if scope['type'] not in ('http', 'websocket') or client is None or not sampled:
             await self.app(scope, receive, send)
             return
-        token = context.attach(_TRACE_CONTEXT.extract(carrier))
+        token = context.attach(client)
         try:
             await self.app(scope, receive, send)
         finally:
