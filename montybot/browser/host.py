@@ -31,6 +31,7 @@ import secrets
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import TracebackType
 from typing import Self, TypeVar
 
@@ -71,6 +72,17 @@ T = TypeVar('T')
 
 BackendFactory = Callable[[], BrowserBackend]
 """Makes a closed backend for one run. The host opens it, and closes it when the run is done with it."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class Detour:
+    """Some browsers leave through another egress proxy (the Mac tunnel, `tunnel.py`). Each time the host launches a
+    browser it asks `route` for the run's proxy socket; None is the usual way, `new_backend` makes one for a socket.
+    A run that gets a tab of its user's open browser shares that browser's way out."""
+
+    route: Callable[[RunId, UserId], Awaitable[Path | None]]
+    new_backend: Callable[[Path], BrowserBackend]
+
 
 DEFAULT_IDLE_TIMEOUT = 10 * 60.0
 """Seconds without a call before the reaper saves and closes a browser."""
@@ -132,8 +144,10 @@ class BrowserHost:
         reap_every: float | None = None,
         max_open_browsers: int | None = None,
         share_browser: bool = False,
+        detour: Detour | None = None,
     ) -> None:
         self._new_backend = new_backend
+        self._detour = detour
         self._share_browser = share_browser
         self._user_locks: dict[UserId, asyncio.Lock] = {}
         self._jar = jar
@@ -450,7 +464,7 @@ class BrowserHost:
         try:
             with timing('browser.state.load'):
                 state = await self._jar.load(user_id=run.user_id)
-            backend = self._new_backend()
+            backend = await self._make_backend(run)
             if self._share_browser and not isinstance(backend, TabsBackend):
                 raise TypeError('share_browser needs an engine with tabs (TabsBackend)')
             try:
@@ -465,6 +479,11 @@ class BrowserHost:
         finally:
             if self._max_open_browsers is not None:
                 self._launching -= 1
+
+    async def _make_backend(self, run: _Run) -> BrowserBackend:
+        if self._detour is not None and (egress := await self._detour.route(run.run_id, run.user_id)) is not None:
+            return self._detour.new_backend(egress)
+        return self._new_backend()
 
     def _opened(self, run: _Run, backend: BrowserBackend, url: str) -> BrowserBackend:
         run.backend = backend

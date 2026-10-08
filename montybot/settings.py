@@ -2,6 +2,7 @@
 # the model and the browser backend are chosen by name.
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 from pydantic import Field, SecretStr, field_validator
@@ -51,6 +52,12 @@ class Settings(BaseSettings):
     browser_idle_timeout_seconds: float = 10 * 60
     browser_max_open: int | None = Field(default=None, gt=0)
     """Limit simultaneously running browsers; idle browsers are saved and closed first. Unset on a desktop."""
+    mac_tunnel: bool = True
+    """The browser of a run the user started goes out through their Mac app while it is connected, so sites see the
+    user's own address (`montybot/browser/tunnel.py`). Only for a jailed engine, which has an egress proxy to swap;
+    scheduled runs always go out through the server."""
+    tunnel_dir: Path = Path(tempfile.gettempdir()) / 'montybot-tunnels'
+    """Each user's Mac tunnel proxy socket, one directory per user. Short: Unix socket paths are limited to ~100."""
     monty_url: str | None = None
     """Full Monty: monty-server's WebSocket URL, such as `ws://monty-server:8000`. Unset: Monty in local
     subprocesses."""

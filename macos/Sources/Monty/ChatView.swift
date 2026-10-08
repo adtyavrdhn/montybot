@@ -28,6 +28,13 @@ struct ChatView: View {
                 if chat.threadId != nil { MontyMark(mood: mood, size: 14).help(subtitle) }
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                if chat.isActive && app.tunnelStatus.browsing > 0 {
+                    Label("Browsing from your Mac", systemImage: "laptopcomputer.and.arrow.down")
+                        .labelStyle(.titleAndIcon)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .help("Sites see this Mac's internet connection. You can turn this off in Settings.")
+                }
                 if chat.isActive {
                     Button { chat.watching.toggle() } label: {
                         Label(chat.watching ? "Hide Monty's browser" : "Watch Monty's browser", systemImage: "macwindow")

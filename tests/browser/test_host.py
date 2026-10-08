@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Collection
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
 from montybot.browser.contract import Action, ActionFailed, Click, Feature, Navigate, NotSupported, Selector
 from montybot.browser.contract import TargetNotFound as TargetNotFoundError
 from montybot.browser.fake import FakeBrowser, FakeElement, FakePage
-from montybot.browser.host import CRASHED, SERVICE_RESTARTED, BrowserHost, _duration
+from montybot.browser.host import CRASHED, SERVICE_RESTARTED, BrowserHost, Detour, _duration
 from montybot.browser.jar import InMemoryJar, InMemoryJarLease
 from montybot.browser.service import (
     ActionResult,
@@ -486,3 +487,24 @@ async def test_closing_ends_the_handoff() -> None:
     assert await host.close(**ALICE) is True
     with pytest.raises(UnknownRun):
         await host.end_handoff(**ALICE, handoff_id=handoff.handoff_id)
+
+
+async def test_detour_picks_each_browsers_way_out_at_launch() -> None:
+    """The Mac tunnel's hook: `route` is asked at every launch, and its socket goes to `new_backend`."""
+    setup = Setup()
+    routed: list[Path] = []
+    tunnel = Path('/tmp/tunnels/alice/proxy.sock')
+
+    async def route(run_id: str, user_id: str) -> Path | None:
+        return tunnel if user_id == 'alice' else None
+
+    def through(socket: Path) -> FakeBrowser:
+        routed.append(socket)
+        return setup.new_backend()
+
+    host = BrowserHost(
+        new_backend=setup.new_backend, jar=setup.jar, lease=setup.lease, detour=Detour(route=route, new_backend=through)
+    )
+    await host.start(**ALICE)
+    await host.start(run_id='run-2', user_id='bob')
+    assert routed == [tunnel] and len(setup.made) == 2  # alice's through the detour, bob's the usual way
