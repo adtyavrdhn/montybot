@@ -5,10 +5,10 @@
 POST /api/threads/<id>/messages  (montybot.api)
   store.create_run, then DBOS.start_workflow(run_thread, run_id) with workflow id = run_id
 run_thread(run_id)                                   @DBOS.workflow
-  step run.start        status running, load the run and the thread's history
+  step run.start        status running, load the run and the thread's history, the message's files into /work/uploads
   agent.run(...)        model requests are steps (DBOSDurability); browser and memory calls are our own steps;
                         ask_user, approvals and hand-offs wait in DBOS.recv (montybot.approvals)
-  step run.finish       append the new messages, status done (or failed)
+  step run.finish       append the new messages (files as notes: montybot.attachments), status done (or failed)
   step run.close        the browser service saves the user's sign-ins and closes the run's browser
 ```
 
@@ -34,11 +34,11 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from montybot import store, streaming
+from montybot import attachments, store, streaming
 from montybot.browser.contract import BrowserError
 from montybot.browser.service import UnknownRun
 from montybot.deps import RunDeps
-from montybot.models import FINISHED, Run, RunStatus, Schedule
+from montybot.models import FINISHED, Attachment, Run, RunStatus, Schedule
 from montybot.observability import timed, timing
 from montybot.resources import Resources, current
 
@@ -114,17 +114,22 @@ async def run_thread(run_id: str) -> str:
         run, history_json, schedule = started[:3]
         local_time = started[3] if len(started) > 3 else ''
         squirrel_name = started[4] if len(started) > 4 else ''  # and before the squirrel's name, a 4-tuple
+        files: list[Attachment] = started[5] if len(started) > 5 else []  # and before files, a 5-tuple
         if run.status in FINISHED:
             return run.status  # stopped before its workflow started
         lifecycle.set_attributes({'thread_id': run.thread_id, 'user_id': run.user_id, 'trigger': run.trigger})
         history = recent(ModelMessagesTypeAdapter.validate_json(history_json), resources.settings.history_limit)
+        # The files go in outside a step, so DBOS records no file's bytes: a replay reads the same rows again.
+        asked = ModelRequest(parts=[UserPromptPart(content=attachments.prompt(run.prompt, files))])
+        *history, asked = await attachments.with_files(resources.pool, run.user_id, [*history, asked])
+        prompt = next(p.content for p in asked.parts if isinstance(p, UserPromptPart))
         deps = RunDeps(
             resources=resources, run=run, schedule=schedule, local_time=local_time, squirrel_name=squirrel_name
         )
         try:
             try:
                 with timing('run.agent'):
-                    result = await resources.agent.run(run.prompt, deps=deps, message_history=history)
+                    result = await resources.agent.run(prompt, deps=deps, message_history=history)
             except Exception as error:
                 logfire.error('Run {run_id} failed: {error_type}', run_id=run_id, error_type=type(error).__qualname__)
                 # Also in this process's own log, for running without Logfire. The type only: an error's text can
@@ -141,7 +146,7 @@ async def run_thread(run_id: str) -> str:
                 if isinstance(error, DBOSException):
                     raise  # a replay that does not match its recording is a bug to see, not a failed task
                 return 'failed'
-            new_messages = ModelMessagesTypeAdapter.dump_json(result.new_messages())
+            new_messages = ModelMessagesTypeAdapter.dump_json(attachments.without_files(result.new_messages()))
             await DBOS.run_step_async(
                 {**RETRIED, 'name': 'run.finish'}, finish_run, resources, run, new_messages, result.output
             )
@@ -161,7 +166,9 @@ async def start(run_id: str) -> WorkflowHandleAsync[str]:
         return await DBOS.start_workflow_async(run_thread, run_id)
 
 
-async def start_run(resources: Resources, run_id: str) -> tuple[Run, bytes, Schedule | None, str, str]:
+async def start_run(
+    resources: Resources, run_id: str
+) -> tuple[Run, bytes, Schedule | None, str, str, list[Attachment]]:
     with timing('run.start'):
         async with resources.pool.connection() as connection, connection.transaction():
             run = await store.load_run(connection, run_id)
@@ -171,7 +178,9 @@ async def start_run(resources: Resources, run_id: str) -> tuple[Run, bytes, Sche
             user = await store.get_user(connection, run.user_id)
         timezone = user.timezone if user is not None else 'UTC'
         squirrel_name = user.squirrel_name if user is not None else ''
-        return run, ModelMessagesTypeAdapter.dump_json(history), schedule, local_time_in(timezone), squirrel_name
+        files = await attachments.into_workspace(resources, run.user_id, run.id)
+        history_json = ModelMessagesTypeAdapter.dump_json(history)
+        return run, history_json, schedule, local_time_in(timezone), squirrel_name, files
 
 
 def local_time_in(timezone: str) -> str:
@@ -216,11 +225,12 @@ async def end_run(resources: Resources, run: Run, status: RunStatus, notice: str
     async with resources.pool.connection() as connection, connection.transaction():
         if await store.lock_finished(connection, run.id):
             return False
+        files = await attachments.users_files(connection, run.id)
         await store.append_history(
             connection,
             run.thread_id,
             [
-                ModelRequest(parts=[UserPromptPart(content=run.prompt)]),
+                ModelRequest(parts=[UserPromptPart(content=attachments.prompt(run.prompt, files))]),
                 ModelResponse(parts=[TextPart(content=notice)]),
             ],
         )

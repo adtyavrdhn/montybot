@@ -149,7 +149,7 @@ enum Tour {
             await wait(60) { chat.run?.status.isActive == false }
             await snap("invoices-reply")
         }
-        for (route, name) in [(Route.schedules, "schedules"), (.files, "files"), (.signIns, "saved-sign-ins"), (.memory, "memory")] {
+        for (route, name) in [(Route.schedules, "schedules"), (.signIns, "saved-sign-ins"), (.memory, "memory")] {
             app.open(route)
             await snap(name)
         }

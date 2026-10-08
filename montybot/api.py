@@ -19,14 +19,15 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from typing import Annotated, Any, TypeVar
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
+from uuid import UUID
 
 import logfire
-from pydantic import AfterValidator, BaseModel, Field, StrictBool, StringConstraints
+from pydantic import AfterValidator, BaseModel, Field, StrictBool, StringConstraints, model_validator
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
-from montybot import approvals, auth, schedules, store, streaming, workflows
+from montybot import approvals, attachments, auth, schedules, store, streaming, workflows
 from montybot.browser.contract import (
     BrowserError,
 )
@@ -37,7 +38,6 @@ from montybot.models import ACTIVE, Ask, Run, Schedule, User
 from montybot.notifications import TakenEndpoint, add_subscription, remove_subscription, send_email
 from montybot.resources import Resources
 from montybot.signins import PostgresLease
-from montybot.workspaces import MAX_DOWNLOAD_BYTES, FileTooLarge, download_name
 
 T = TypeVar('T')
 logger = logging.getLogger(__name__)
@@ -51,11 +51,28 @@ class Credentials(BaseModel):
 
 
 class NewMessage(BaseModel):
-    text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20_000)]
+    text: Annotated[str, StringConstraints(strip_whitespace=True, max_length=20_000)] = ''
+    """Empty only when the message has files."""
+    attachments: list[UUID] = Field(default_factory=list[UUID], max_length=attachments.MAX_FILES)
+    """The ids of the user's uploads (`POST /api/attachments`) that go with the message."""
     timezone: str | None = Field(default=None, max_length=64)
     """The IANA time zone of the user's browser, such as `Europe/London`."""
     squirrel_name: Annotated[str, StringConstraints(strip_whitespace=True, max_length=24)] | None = None
     """What the user named their squirrel in the Mac app; empty to forget it. The web app sends none."""
+
+    @model_validator(mode='after')
+    def says_something(self) -> NewMessage:
+        if not self.text and not self.attachments:
+            raise ValueError('a message needs text or a file')
+        return self
+
+    async def start(self, connection: Any, user: User, thread_id: str, run_id: str) -> list[str]:
+        """Make the message's run, with its files; returns their names. Raises `store.ActiveRun`, `store.ThreadGone`,
+        `attachments.AttachmentGone` or `attachments.TooMuch`. Call in a transaction."""
+        await store.create_run(
+            connection, run_id=run_id, user_id=user.id, thread_id=thread_id, prompt=self.text, trigger='message'
+        )
+        return await attachments.attach(connection, user.id, run_id, [str(i) for i in self.attachments])
 
 
 async def remember_about_user(connection: Any, user: User, message: NewMessage) -> None:
@@ -203,12 +220,16 @@ async def create_thread(request: Request, user: User) -> Response:
     body = NewMessage.model_validate_json(await request.body())
     resources = resources_of(request)
     run_id = str(uuid.uuid4())
-    async with resources.pool.connection() as connection, connection.transaction():
-        await remember_about_user(connection, user, body)
-        thread = await store.create_thread(connection, user.id, body.text.splitlines()[0])
-        await store.create_run(
-            connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt=body.text, trigger='message'
-        )
+    try:
+        async with resources.pool.connection() as connection, connection.transaction():
+            await remember_about_user(connection, user, body)
+            # Titled by the message's first line, or (a message of files only) its first file's name.
+            thread = await store.create_thread(connection, user.id, body.text.splitlines()[0] if body.text else '')
+            names = await body.start(connection, user, thread.id, run_id)
+            if not body.text:
+                await store.rename_thread(connection, user.id, thread.id, names[0][:120])
+    except (attachments.AttachmentGone, attachments.TooMuch) as error:
+        return JSONResponse({'detail': str(error)}, status_code=400)
     await workflows.start(run_id)
     return JSONResponse({'thread_id': thread.id, 'run_id': run_id}, status_code=201)
 
@@ -218,19 +239,19 @@ async def add_message(request: Request, user: User) -> Response:
     body = NewMessage.model_validate_json(await request.body())
     resources = resources_of(request)
     run_id = str(uuid.uuid4())
-    async with resources.pool.connection() as connection, connection.transaction():
-        thread = await store.get_thread(connection, user.id, request.path_params['thread_id'])
-        if thread is None:
-            return NOT_FOUND
-        await remember_about_user(connection, user, body)
-        try:
-            await store.create_run(
-                connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt=body.text, trigger='message'
-            )
-        except store.ActiveRun as error:
-            return JSONResponse({'detail': str(error)}, status_code=409)
-        except store.ThreadGone:
-            return NOT_FOUND
+    try:
+        async with resources.pool.connection() as connection, connection.transaction():
+            thread = await store.get_thread(connection, user.id, request.path_params['thread_id'])
+            if thread is None:
+                return NOT_FOUND
+            await remember_about_user(connection, user, body)
+            await body.start(connection, user, thread.id, run_id)
+    except store.ActiveRun as error:
+        return JSONResponse({'detail': str(error)}, status_code=409)
+    except store.ThreadGone:
+        return NOT_FOUND
+    except (attachments.AttachmentGone, attachments.TooMuch) as error:
+        return JSONResponse({'detail': str(error)}, status_code=400)
     await workflows.start(run_id)
     return JSONResponse({'thread_id': thread.id, 'run_id': run_id}, status_code=201)
 
@@ -314,7 +335,8 @@ async def read_thread(request: Request, user: User) -> Response:
         asks = await store.list_answered_asks(connection, user.id, thread.id)
         run_json = None if not runs else await run_view(connection, user, runs[-1])
         activity = await store.list_thread_activity(connection, user.id, thread.id)
-    messages, replies = chat_messages(runs, asks)
+        files = await attachments.files_of_runs(connection, user.id, [run.id for run in runs])
+    messages, replies = chat_messages(runs, asks, files)
     # What Monty did for each earlier reply (the latest run's steps are in `run`): `after` is the reply's position in
     # `messages`, where an app shows them folded.
     steps = [
@@ -330,23 +352,31 @@ async def read_thread(request: Request, user: User) -> Response:
     return JSONResponse({'id': thread.id, 'title': thread.title, 'messages': messages, 'run': run_json, 'steps': steps})
 
 
-def chat_messages(runs: list[Run], asks: list[Ask]) -> tuple[list[dict[str, str]], dict[str, int]]:
+def chat_messages(
+    runs: list[Run], asks: list[Ask], files: dict[str, dict[str, Any]] | None = None
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """The chat as the user sees it, and where each run's reply is in it, by run id. Each run is their message, what
     Monty asked them and how they answered, and Monty's reply once the run has finished. `event` lines record
-    approvals and hand-offs."""
+    approvals and hand-offs. A message with files has them in `files`: the user's own on their message, and those
+    Monty shared on its reply (`attachments.files_of_runs`)."""
     asks_of_run: dict[str, list[Ask]] = {}
     for ask in asks:
         asks_of_run.setdefault(ask.run_id, []).append(ask)
-    shown: list[dict[str, str]] = []
+    shown: list[dict[str, Any]] = []
     replies: dict[str, int] = {}
     for run in runs:
-        shown.append({'role': 'user', 'text': run.prompt})
+        run_files = (files or {}).get(run.id, {})
+        shown.append(with_files({'role': 'user', 'text': run.prompt}, run_files.get('user')))
         for ask in asks_of_run.get(run.id, []):
             shown.extend(ask_messages(ask))
         if run.output:
             replies[run.id] = len(shown)
-            shown.append({'role': 'assistant', 'text': run.output})
+            shown.append(with_files({'role': 'assistant', 'text': run.output}, run_files.get('monty')))
     return shown, replies
+
+
+def with_files(message: dict[str, Any], files: list[dict[str, Any]] | None) -> dict[str, Any]:
+    return {**message, 'files': files} if files else message
 
 
 def ask_messages(ask: Ask) -> list[dict[str, str]]:
@@ -1017,38 +1047,49 @@ def ask_json(ask: Ask) -> dict[str, Any]:
     return shown
 
 
-# --- workspace results (no filenames in request URLs or telemetry) ---
+# --- files in chats (montybot.attachments) ---
+
+INLINE_TYPES = ('image/png', 'image/jpeg', 'image/gif', 'image/webp')
+"""Shown in the page as they are; any other file is only ever downloaded, so a page or a script in one never runs."""
 
 
-class FileDownload(BaseModel):
-    path: str = Field(min_length=1, max_length=1024)
-
-
-@auth.signed_in
-async def list_files(request: Request, user: User) -> Response:
-    files, truncated = await resources_of(request).workspaces.files(user.id).list_results()
-    return JSONResponse(
-        {'files': files, 'truncated': truncated, 'max_download_bytes': MAX_DOWNLOAD_BYTES},
-        headers={'Cache-Control': 'no-store'},
-    )
-
-
-@auth.signed_in
-async def download_file(request: Request, user: User) -> Response:
-    headers = {'Cache-Control': 'no-store'}
-    # Bound JSON too; never echo invalid paths through validation responses.
-    body = bytearray()
+@auth.signed_in_upload
+async def upload_attachment(request: Request, user: User) -> Response:
+    """POST the file's bytes, named in `X-Filename` (percent-encoded), with its `Content-Type`. Kept for the user's
+    next message (`NewMessage.attachments`); one never sent is deleted after a day."""
+    limit = attachments.MAX_FILE_BYTES
+    data = bytearray()
     async for chunk in request.stream():
-        if len(body) + len(chunk) > 8192:
-            return JSONResponse({'detail': 'request too large'}, status_code=413, headers=headers)
-        body.extend(chunk)
-    try:
-        path = FileDownload.model_validate_json(body).path
-        data = await resources_of(request).workspaces.files(user.id).read_result(path)
-    except FileTooLarge:
-        return JSONResponse({'detail': 'file exceeds the 20 MiB download limit'}, status_code=413, headers=headers)
-    except (OSError, ValueError):
-        return JSONResponse({'detail': 'file unavailable'}, status_code=404, headers=headers)
-    headers['Content-Disposition'] = "attachment; filename*=UTF-8''" + quote(download_name(path), safe='')
-    headers['X-Content-Type-Options'] = 'nosniff'
-    return Response(data, media_type='application/octet-stream', headers=headers)
+        data.extend(chunk)
+        if len(data) > limit:
+            return JSONResponse({'detail': f'Files can be up to {limit >> 20} MB.'}, status_code=413)
+    if not data:
+        return JSONResponse({'detail': 'That file is empty.'}, status_code=400)
+    name = unquote(request.headers['x-filename'], errors='replace')
+    async with resources_of(request).pool.connection() as connection:
+        attachment = await attachments.upload(
+            connection, user.id, name, request.headers.get('content-type', ''), bytes(data)
+        )
+    return JSONResponse(attachment.json(), status_code=201)
+
+
+@auth.signed_in
+async def read_attachment(request: Request, user: User) -> Response:
+    """A file of the user's chats. An image comes as itself, for the page to show, unless `?download`."""
+    async with resources_of(request).pool.connection() as connection:
+        found = await attachments.read(connection, user.id, str(request.path_params['attachment_id']))
+    if found is None:
+        return NOT_FOUND
+    attachment, data = found
+    shown = attachment.kind == 'image' and attachment.media_type in INLINE_TYPES  # a picture, by its bytes
+    inline = shown and 'download' not in request.query_params
+    disposition = 'inline' if inline else 'attachment'
+    headers = {
+        # A file never changes once kept, and its id is new each time.
+        'Cache-Control': 'private, max-age=31536000, immutable',
+        'Content-Disposition': f"{disposition}; filename*=UTF-8''{quote(attachment.name, safe='')}",
+        'Content-Security-Policy': "default-src 'none'; sandbox",
+        'X-Content-Type-Options': 'nosniff',
+    }
+    media_type = attachment.media_type if inline else 'application/octet-stream'
+    return Response(data, media_type=media_type, headers=headers)

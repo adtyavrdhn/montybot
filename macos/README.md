@@ -44,7 +44,7 @@ MONTY_TEST_SERVER=http://127.0.0.1:8000 swift test           # and the journeys,
 
 The journeys sign up a new person each and go through what a person does: a chat and its reply, a question, signing
 in through the live view and approving an order, stopping, notifications from other chats, drafts, sign-out, an
-ended session, schedules, files, and the races found in review (double sends, answers closed elsewhere, leaving a
+ended session, schedules, attachments, and the races found in review (double sends, answers closed elsewhere, leaving a
 chat mid-send, double takeovers, navigating away mid sign-in).
 
 ## Look at it
@@ -104,6 +104,10 @@ Decisions from review:
   ⌘↩ hands back. Typing goes through macOS text input, so accents and input methods work; ⌘V pastes from the Mac.
   With VoiceOver, the remote page reads like a web page: the server sends its outline (headings, text, fields,
   buttons, with where they are; passwords only as a count), and activating an item clicks it.
+- Files go in the chat: drop them on it, paste them (⌘V: a screenshot, or files copied in Finder), or pick them with
+  the paperclip. Each uploads at once, as a chip above the message box (a thumbnail for pictures), and goes with the
+  next message; up to 10 a message, 20 MB each. Files on messages (yours, and those Monty shares) open or save from
+  the chat: pictures and PDFs open in Preview, anything else is saved where you choose.
 - Watching Monty's browser opens it beside the chat; it can fill the window (⇧⌘F, or double-click it), and from there
   the whole screen.
 - Chats can be renamed and deleted from the chat's ⋯ menu, the File menu, the sidebar (right-click, swipe, ⌫) or

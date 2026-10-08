@@ -9,6 +9,7 @@ dependencies = [
     "httpx>=0.27",
     "itsdangerous>=2.2",
     "logfire[httpx,system-metrics]>=4.41",
+    "pillow>=11",
     "playwright>=1.63",
     "psycopg[binary,pool]>=3.3",
     "pydantic>=2.11",
@@ -28,7 +29,6 @@ montybot = "montybot.cli:main"
 [dependency-groups]
 dev = [
     "anyio>=4.4",
-    "pillow>=11",
     "playwright>=1.63",
     "pyright>=1.1.400",
     "pytest>=8.3",

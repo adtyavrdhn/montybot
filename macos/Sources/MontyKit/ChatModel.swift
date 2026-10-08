@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 @preconcurrency import OpenTelemetryApi
+import UniformTypeIdentifiers
 
 /// Something to tell the user about what they just did, shown once above the composer.
 public struct ChatNotice: Equatable, Sendable {
@@ -9,6 +10,33 @@ public struct ChatNotice: Equatable, Sendable {
 
     public static func error(_ text: String) -> ChatNotice { ChatNotice(text: text, isError: true) }
     public static func info(_ text: String) -> ChatNotice { ChatNotice(text: text, isError: false) }
+}
+
+/// A file the user is adding to their next message: on its way to the server, there, or refused (and why).
+public struct PendingAttachment: Equatable, Identifiable, Sendable {
+    public enum State: Equatable, Sendable {
+        case uploading
+        case uploaded(Attachment)
+        case failed(String)
+    }
+
+    public let id: UUID
+    public let name: String
+    public let mediaType: String
+    public let size: Int
+    /// An image's bytes, for its thumbnail; nil for anything else.
+    public let image: Data?
+    public var state: State
+
+    public var uploaded: Attachment? {
+        if case .uploaded(let file) = state { return file }
+        return nil
+    }
+    public var isUploading: Bool { state == .uploading }
+    public var error: String? {
+        if case .failed(let why) = state { return why }
+        return nil
+    }
 }
 
 /// One chat as the user sees it: its messages, the run in progress, what the bot asks, and the composer.
@@ -34,8 +62,9 @@ public final class ChatModel {
     public private(set) var loadError: String?
     /// The live stream dropped; updates come from polling until it reconnects.
     public private(set) var reconnecting = false
-    /// A message the user sent that the server has not stored yet.
+    /// A message the user sent that the server has not stored yet, and the files that went with it.
     public private(set) var pendingMessage: String?
+    public private(set) var pendingFiles: [Attachment] = []
     public private(set) var sending = false
     public private(set) var answering = false
     public private(set) var stopping = false
@@ -45,8 +74,10 @@ public final class ChatModel {
     public private(set) var live: LiveSession?
     /// Shown once above the composer, then cleared by the view.
     public var notice: ChatNotice?
-    /// A message the user wrote while Monty worked: it is sent once the task is done (as T3 Code queues a follow-up).
+    /// A message the user wrote while Monty worked: it is sent once the task is done (as T3 Code queues a follow-up),
+    /// with the files they added to it.
     public private(set) var queued: String?
+    public private(set) var queuedAttachments: [PendingAttachment] = []
     /// The user is saying why not to the open approval (from its card, or the Task menu).
     public var denying = false
     /// Answering the open question or approval failed (offline, the server's error): shown in its card.
@@ -79,16 +110,26 @@ public final class ChatModel {
         didSet { if browserExpanded, !watching { watching = true } }  // which clears this again if there is nothing to watch
     }
 
+    /// The files the user is adding to their next message, in the order they added them. Kept with the chat's draft
+    /// (in the app, by chat), so they stay with this chat while the user looks elsewhere.
+    public var attachments: [PendingAttachment] {
+        get { app?.draftAttachments[draftKey] ?? [] }
+        set { if !closed { app?.draftAttachments[draftKey] = newValue.isEmpty ? nil : newValue } }
+    }
+    /// A file is still on its way to the server: the message waits for it.
+    public var isUploading: Bool { attachments.contains(where: \.isUploading) }
+
     public var ask: Ask? { run?.status == .waiting ? run?.ask : nil }
     public var isWorking: Bool { pendingMessage != nil || run?.status.isWorking == true }
     public var isActive: Bool { pendingMessage != nil || run?.status.isActive == true }
-    public var canSend: Bool {
-        !sending && !isActive && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
+    public var canSend: Bool { !sending && !isActive && hasSomethingToSend }
     /// Monty is working (not asking): what the user writes now can wait for it, and go when it is done.
     public var canQueue: Bool {
-        threadId != nil && isActive && pendingMessage == nil && !sending && ask == nil && queued == nil
-            && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        threadId != nil && isActive && pendingMessage == nil && !sending && ask == nil && queued == nil && hasSomethingToSend
+    }
+    /// Words, or a file that is uploaded, and no file still uploading.
+    private var hasSomethingToSend: Bool {
+        !isUploading && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachments.contains { $0.uploaded != nil })
     }
     /// There is a run on the server to stop (not just a message on its way).
     public var canStop: Bool { run?.status.isActive == true && !stopping }
@@ -128,7 +169,8 @@ public final class ChatModel {
     /// stands in for it.
     public var lastTask: String? {
         if let prompt = run?.prompt, !prompt.isEmpty { return prompt }
-        return messages.last(where: { $0.role == .user })?.text
+        let text = messages.last(where: { $0.role == .user })?.text
+        return text?.isEmpty == false ? text : nil  // files alone can't be sent again: they went with that message
     }
 
     private weak var app: AppModel?
@@ -181,6 +223,7 @@ public final class ChatModel {
             if let pending = pendingMessage, let pendingRun,
                detail.run?.id == pendingRun || detail.messages.contains(where: { $0.role == .user && $0.text == pending }) {
                 pendingMessage = nil  // the server shows the sent message now
+                pendingFiles = []
                 self.pendingRun = nil
             }
             apply(detail.run)
@@ -354,53 +397,71 @@ public final class ChatModel {
 
     // MARK: sending
 
-    /// Sends the draft. A new chat is created by its first message.
+    /// Sends the draft, with its files. A new chat is created by its first message.
     public func send() async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
+        let files = attachments
         draft = ""
-        guard await !submit(text) else { return }
+        attachments = []
+        guard await !submit(text, files: files.compactMap(\.uploaded)) else { return }
         // Nothing the user wrote is lost: back in the box (before anything typed since), or in this chat's saved
-        // draft if it closed meanwhile.
+        // draft if it closed meanwhile; the files too, before any added since.
         if !closed {
             let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
             draft = typed.isEmpty ? text : text + "\n\n" + typed
+            attachments = files + attachments
         } else {
-            app?.keepDraft(text, for: draftKey, owner: owner, signOuts: signOuts)
+            if !text.isEmpty { app?.keepDraft(text, for: draftKey, owner: owner, signOuts: signOuts) }
+            keepAttachments(files)
         }
     }
 
-    /// Sends `text` as the user's next message; false if the server did not take it.
-    private func submit(_ text: String, retry: Bool = false) async -> Bool {
+    /// Files that didn't go, back in this chat's draft (it may be closed): ahead of any added since.
+    private func keepAttachments(_ files: [PendingAttachment]) {
+        guard let app, !files.isEmpty, owner == app.userId, signOuts == app.signOuts else { return }
+        app.draftAttachments[draftKey] = files + (app.draftAttachments[draftKey] ?? [])
+    }
+
+    /// Sends `text` and `files` as the user's next message; false if the server did not take it.
+    private func submit(_ text: String, files: [Attachment] = [], retry: Bool = false) async -> Bool {
         guard app != nil, !sending, !isActive, !closed else { return false }
-        return await telemetry.action(threadId == nil ? "new chat" : "send message", ids.merging(["monty.retry": .bool(retry)]) { $1 }) { span in
+        let attributes: [String: AttributeValue?] = ["monty.retry": .bool(retry), "monty.attachments.count": .int(files.count),
+                                                     "monty.attachments.size": .int(files.reduce(0) { $0 + $1.size })]
+        return await telemetry.action(threadId == nil ? "new chat" : "send message", ids.merging(attributes) { $1 }) { span in
             span.content("monty.message", text)
-            let sent = await submitting(text, span)
+            let sent = await submitting(text, files, span)
             span.set("monty.sent", sent)
             return sent
         }
     }
 
-    private func submitting(_ text: String, _ span: TraceSpan) async -> Bool {
+    private func submitting(_ text: String, _ files: [Attachment], _ span: TraceSpan) async -> Bool {
         guard let app else { return false }
         sending = true
         pendingMessage = text
+        pendingFiles = files
         defer { sending = false }
         do {
             let name = app.squirrelName
+            let ids = files.map(\.id)
             let created = threadId == nil
-                ? try await client.startThread(text, squirrelName: name)
-                : try await client.send(text, to: threadId!, squirrelName: name)
+                ? try await client.startThread(text, attachments: ids, squirrelName: name)
+                : try await client.send(text, to: threadId!, attachments: ids, squirrelName: name)
             span.set("monty.thread_id", created.threadId)
             span.set("monty.run_id", created.runId)
             app.taskSent()
             guard !closed else { app.refreshThreads(); return true }
             if threadId == nil {
-                // What the user typed while it sent belongs to this chat now, not to the next new one.
+                // What the user typed (and attached) while it sent belongs to this chat now, not to the next new one.
+                let added = attachments
                 app.drafts["new"] = nil
+                app.draftAttachments["new"] = nil
                 threadId = created.threadId
                 app.drafts[created.threadId] = draft
-                title = String(text.split(separator: "\n").first ?? Substring(text))
+                attachments = added
+                let line = text.split(separator: "\n").first.map(String.init) ?? ""
+                title = line.isEmpty ? files.first?.name ?? "" : line
                 app.chatCreated(self)
             }
             pendingRun = created.runId
@@ -411,6 +472,7 @@ public final class ChatModel {
             return true
         } catch let error as APIError {
             pendingMessage = nil
+            pendingFiles = []
             span.fail(error)
             if error == .signedOut { app.sessionEnded(); return false }
             if closed { return false }
@@ -418,45 +480,62 @@ public final class ChatModel {
             return false
         } catch {
             pendingMessage = nil
+            pendingFiles = []
             return false
         }
     }
 
-    /// Keeps the message box's text to send when the task is done.
+    /// Keeps the message box's text, and its files, to send when the task is done.
     public func queue() {
         guard canQueue else { return }
         queued = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        queuedAttachments = attachments
         draft = ""
+        attachments = []
     }
 
     /// Takes the queued message back into the message box, to change it or send it later.
     public func unqueue() {
         guard let text = queued else { return }
-        queued = nil
+        let files = queuedAttachments
+        dropQueued()
         let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        draft = typed.isEmpty ? text : text + "\n\n" + typed
+        draft = typed.isEmpty ? text : text.isEmpty ? typed : text + "\n\n" + typed
+        attachments = files + attachments
     }
 
     /// Doesn't send the queued message after all.
-    public func dropQueued() { queued = nil }
+    public func dropQueued() {
+        queued = nil
+        queuedAttachments = []
+    }
 
     /// The task ended: a queued message goes now if it ended well; otherwise it comes back to the box, as what it
     /// followed up on didn't happen.
     private func sendQueued() async {
         guard let text = queued, !isActive, !closed else { return }
-        queued = nil
+        let files = queuedAttachments
+        dropQueued()
         if run?.status == .done {
-            if await !submit(text) { unqueueAfterFailure(text) }
+            guard await !submit(text, files: files.compactMap(\.uploaded)) else { return }
+            if closed {
+                if !text.isEmpty { app?.keepDraft(text, for: draftKey, owner: owner, signOuts: signOuts) }
+                keepAttachments(files)
+            } else {
+                keepQueued(text, files)
+            }
         } else {
             let why = run?.status == .stopped ? "the task was stopped" : "\(app?.montyName ?? "Monty") couldn't finish the task"
-            keep(text)
+            keepQueued(text, files)
             notice = .info("Your next message wasn't sent, because \(why). It's back in the message box.")
         }
     }
 
-    private func unqueueAfterFailure(_ text: String) {
-        guard !draft.contains(text) else { return }  // submit puts what it couldn't send back itself
-        keep(text)
+    /// A queued message that didn't go, back where the user can use it: its text as `keep` puts it, its files in the
+    /// message box.
+    private func keepQueued(_ text: String, _ files: [PendingAttachment]) {
+        if !text.isEmpty { keep(text) }
+        attachments = files + attachments
     }
 
     /// Sends the last task again, as it was.
@@ -478,7 +557,96 @@ public final class ChatModel {
     /// The messages to show: the stored ones, then the one being sent.
     public var shownMessages: [ChatMessage] {
         guard let pendingMessage else { return messages }
-        return messages + [ChatMessage(role: .user, text: pendingMessage)]
+        return messages + [ChatMessage(role: .user, text: pendingMessage, files: pendingFiles)]
+    }
+
+    // MARK: attaching files
+
+    public static let maxAttachments = 10
+    public static let maxAttachmentBytes = 20 * 1024 * 1024
+    public static let maxMessageBytes = 50 * 1024 * 1024
+
+    /// Adds files from the Mac (picked, dropped or pasted) to the next message; each starts uploading at once. What
+    /// can't be attached (a folder, too large, one too many) is said in one notice, and the rest still go.
+    public func attach(contentsOf urls: [URL]) {
+        var refused: [String] = []
+        for url in urls {
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .contentTypeKey, .nameKey])
+            let name = values?.name ?? url.lastPathComponent
+            if values?.isDirectory == true { refused.append("“\(name)” is a folder: attach the files in it instead."); continue }
+            if let why = refusal(name: name, size: values?.fileSize ?? 0) { refused.append(why); continue }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else {
+                refused.append("Couldn't read “\(name)”.")
+                continue
+            }
+            let type = values?.contentType ?? UTType(filenameExtension: url.pathExtension)
+            add(data, name: name, mediaType: type?.preferredMIMEType ?? "application/octet-stream", refused: &refused)
+        }
+        refuse(refused)
+    }
+
+    /// Adds a file the app has as bytes (a pasted image) to the next message.
+    public func attach(_ data: Data, name: String, mediaType: String) {
+        var refused: [String] = []
+        add(data, name: name, mediaType: mediaType, refused: &refused)
+        refuse(refused)
+    }
+
+    public func removeAttachment(_ id: PendingAttachment.ID) {
+        attachments.removeAll { $0.id == id }
+    }
+
+    private func add(_ data: Data, name: String, mediaType: String, refused: inout [String]) {
+        guard !closed, app != nil else { return }
+        if let why = refusal(name: name, size: data.count) { refused.append(why); return }
+        let isImage = UTType(mimeType: mediaType)?.conforms(to: .image) == true
+        let file = PendingAttachment(id: UUID(), name: name, mediaType: mediaType, size: data.count, image: isImage ? data : nil, state: .uploading)
+        attachments.append(file)
+        upload(file, data)
+    }
+
+    /// Why a file can't be added to the message as it is now, in words; nil if it can.
+    private func refusal(name: String, size: Int) -> String? {
+        let kept = attachments.filter { $0.error == nil }
+        let limit = ByteCountFormatter.string(fromByteCount: Int64(Self.maxAttachmentBytes), countStyle: .file)
+        if kept.count >= Self.maxAttachments { return "A message can have up to \(Self.maxAttachments) files." }
+        if size > Self.maxAttachmentBytes { return "“\(name)” is too large to attach: files can be up to \(limit)." }
+        if kept.reduce(0, { $0 + $1.size }) + size > Self.maxMessageBytes {
+            let total = ByteCountFormatter.string(fromByteCount: Int64(Self.maxMessageBytes), countStyle: .file)
+            return "“\(name)” didn't fit: a message's files can add up to \(total). Send these first."
+        }
+        return nil
+    }
+
+    /// What couldn't be attached, said once (names stay out of telemetry: this notice is never reported).
+    private func refuse(_ reasons: [String]) {
+        guard !reasons.isEmpty, !closed else { return }
+        var unique: [String] = []
+        for reason in reasons where !unique.contains(reason) { unique.append(reason) }
+        notice = .error(unique.prefix(3).joined(separator: " "))
+    }
+
+    /// Uploads the file; its chip says how that went, in whichever chat's draft it is by then. An image the server
+    /// took is kept in memory, for the sent message to show it without fetching it again.
+    private func upload(_ file: PendingAttachment, _ data: Data) {
+        let client = client, telemetry = telemetry
+        Task { [weak app = self.app] in
+            let state: PendingAttachment.State = await telemetry.action("attach file", ["monty.file.size": .int(file.size)]) { span in
+                do {
+                    return .uploaded(try await client.upload(data: data, name: file.name, mediaType: file.mediaType))
+                } catch let error as APIError {
+                    span.fail(error)
+                    if error == .signedOut { app?.sessionEnded() }
+                    return .failed(error.localizedDescription)
+                } catch {
+                    return .failed(error.localizedDescription)
+                }
+            }
+            if case .uploaded(let uploaded) = state, file.image != nil { app?.remember(data, for: uploaded) }
+            app?.attachmentChanged(file.id, to: state)
+        }
     }
 
     // MARK: answering
@@ -660,8 +828,10 @@ public final class ChatModel {
     /// The chat is no longer on screen: stop everything it was doing, for good.
     public func close() {
         if let text = queued {  // not sent: it waits in the chat's message box for the user
-            queued = nil
-            app?.keepDraft(text, for: draftKey, owner: owner, signOuts: signOuts)
+            let files = queuedAttachments
+            dropQueued()
+            if !text.isEmpty { app?.keepDraft(text, for: draftKey, owner: owner, signOuts: signOuts) }
+            keepAttachments(files)
         }
         closed = true
         stopFollowing()

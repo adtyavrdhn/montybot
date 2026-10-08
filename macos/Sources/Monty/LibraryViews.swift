@@ -1,7 +1,5 @@
-import AppKit
 import MontyKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// A library page: a title, a sentence on what it is, then its items in one card, or a calm empty state.
 struct Page<Items: RandomAccessCollection, Row: View>: View where Items.Element: Identifiable {
@@ -123,66 +121,6 @@ struct SchedulesView: View {
             Button("Delete schedule", role: .destructive) { if let deleting { Task { await app.delete(deleting) } } }
         } message: {
             Text("\(app.montyName) stops running it. Its chat stays.")
-        }
-    }
-}
-
-struct FilesView: View {
-    @Environment(AppModel.self) private var app
-    @State private var saving: String?
-
-    var body: some View {
-        Page(
-            title: "Files",
-            subtitle: "What \(app.montyName) downloaded or made for you. Save a file to keep it on your Mac.",
-            items: app.files?.files,
-            emptyIcon: "doc.on.doc",
-            emptyTitle: "No files yet",
-            emptyText: "Ask \(app.montyName) to download something, like your invoices, and it will be here."
-        ) { file in
-            let tooLarge = file.size > (app.files?.maxDownloadBytes ?? .max)
-            HStack(spacing: 12) {
-                Image(nsImage: NSWorkspace.shared.icon(for: UTType(filenameExtension: (file.name as NSString).pathExtension) ?? .data))
-                    .resizable()
-                    .frame(width: 22, height: 22)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(file.name).font(.system(size: 13, weight: .medium)).lineLimit(1).truncationMode(.middle)
-                    HStack(spacing: 6) {
-                        if !file.shownFolder.isEmpty { Text(file.shownFolder).font(.mono(11)) }
-                        Text(ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file))
-                        if tooLarge {
-                            Text("· Too large to download (over \(ByteCountFormatter.string(fromByteCount: Int64(app.files?.maxDownloadBytes ?? 0), countStyle: .file)))")
-                        }
-                    }
-                    .font(.system(size: 11))
-                    .foregroundStyle(Palette.onSurfaceVariant)
-                }
-                Spacer()
-                if saving == file.path { ProgressView().controlSize(.small) }
-                Button("Save…") { save(file) }
-                    .buttonStyle(.monty(.outline, small: true))
-                    .disabled(tooLarge || saving != nil)
-                    .accessibilityLabel("Save \(file.name)")
-            }
-        }
-    }
-
-    private func save(_ file: WorkspaceFile) {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = file.name
-        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        saving = file.path
-        Task {
-            defer { saving = nil }
-            guard let downloaded = await app.download(file) else { return }
-            do {
-                try downloaded.data.write(to: url)
-                NSWorkspace.shared.activateFileViewerSelecting([url])
-            } catch {
-                app.libraryError = "Couldn't save \(file.name): \(error.localizedDescription)"
-            }
         }
     }
 }

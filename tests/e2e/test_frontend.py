@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 from playwright.sync_api import Page, Route, expect, sync_playwright
@@ -21,13 +23,12 @@ USER = '44444444-4444-4444-4444-444444444444'
 @dataclass(kw_only=True)
 class MockAPI:
     signed_in: bool = False
-    messages: list[dict[str, str]] = field(default_factory=list)
+    messages: list[dict[str, object]] = field(default_factory=list)
     run: dict[str, object] | None = None
     sites: list[dict[str, str]] = field(default_factory=list)
     schedules: list[dict[str, object]] = field(default_factory=list)
-    files: list[dict[str, object]] = field(default_factory=list)
-    files_truncated: bool = False
-    download_status: int = 200
+    uploads: dict[str, dict[str, object]] = field(default_factory=dict)  # by id, as `POST /api/attachments` made them
+    upload_status: int = 201
     thread_status: str | None = None
     telemetry: bool = False  # whether the server sends telemetry to Logfire
     include_content: bool = False
@@ -46,6 +47,9 @@ class MockAPI:
             self.calls.append((method, path, None))
             self.exported.append((path, request.post_data or ''))
             route.fulfill(status=200, body='{}', content_type='application/json')
+            return
+        if path == '/api/attachments' and method == 'POST':  # the file's own bytes, not JSON
+            self.upload(route)
             return
         body = request.post_data_json if request.post_data else None
         self.calls.append((method, path, body))
@@ -83,23 +87,17 @@ class MockAPI:
             result = [listed] if self.messages else []
         elif path == '/api/threads' and method == 'POST':
             assert isinstance(body, dict)
+            files = [self.uploads[i] for i in body.get('attachments', [])]
             self.messages = [
-                {'role': 'user', 'text': body['text']},
+                {'role': 'user', 'text': body['text'], **({'files': files} if files else {})},
                 {'role': 'assistant', 'text': 'Here are the options.'},
             ]
             result = {'thread_id': THREAD, 'run_id': RUN}
             status = 201
         elif path == f'/api/threads/{THREAD}':
             result = {'title': 'Compare flights to Lisbon', 'messages': self.messages, 'run': self.run}
-        elif path == '/api/files':
-            result = {'files': self.files, 'truncated': self.files_truncated, 'max_download_bytes': 20 * 1024 * 1024}
-        elif path == '/api/files/download':
-            route.fulfill(
-                status=self.download_status,
-                body='local report',
-                content_type='text/plain',
-                headers={'Content-Disposition': "attachment; filename*=UTF-8''report%20ready.txt"},
-            )
+        elif path.startswith('/api/attachments/'):
+            route.fulfill(body=PIXEL, content_type='image/png')  # every file is a picture here
             return
         elif path == '/api/sign-ins':
             result = self.sites
@@ -158,6 +156,22 @@ class MockAPI:
         else:
             status = 404
         route.fulfill(status=status, body=json.dumps(result), content_type='application/json')
+
+    def upload(self, route: Route) -> None:
+        request = route.request
+        data = request.post_data_buffer or b''
+        name = unquote(request.headers['x-filename'])
+        media_type = request.headers['content-type']
+        self.calls.append(('POST', '/api/attachments', {'name': name, 'media_type': media_type, 'size': len(data)}))
+        if self.upload_status != 201:
+            route.fulfill(status=self.upload_status, body='{"detail": "That is not a file Monty can take."}',
+                          content_type='application/json')  # fmt: skip
+            return
+        kind = 'image' if media_type.startswith('image/') else 'pdf' if media_type == 'application/pdf' else 'file'
+        attachment = {'id': f'{len(self.uploads):08d}-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'name': name,
+                      'media_type': media_type, 'kind': kind, 'size': len(data)}  # fmt: skip
+        self.uploads[str(attachment['id'])] = attachment
+        route.fulfill(status=201, body=json.dumps(attachment), content_type='application/json')
 
 
 @pytest.fixture
@@ -439,61 +453,131 @@ def streaming_chat(page: Page, mock: MockAPI) -> None:
     assert page.evaluate('window.eventSources[0].url') == '/api/runs/run/events'
 
 
+PIXEL = base64.b64decode(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+)
+
+
+def drop(page: Page, target: str, files: list[tuple[str, str, str]], *, finish: bool = True) -> None:
+    """Drags files (name, media type, text) over `target`, as from the user's desktop, and drops them there."""
+    page.evaluate(
+        """([target, files, finish]) => {
+            const data = new DataTransfer();
+            for (const [name, type, text] of files) data.items.add(new File([text], name, { type }));
+            const on = document.querySelector(target);
+            on.dispatchEvent(new DragEvent('dragenter', { dataTransfer: data, bubbles: true }));
+            on.dispatchEvent(new DragEvent('dragover', { dataTransfer: data, bubbles: true, cancelable: true }));
+            if (finish) on.dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }));
+        }""",
+        [target, files, finish],
+    )
+
+
 @pytest.mark.parametrize('width', [1440, 390, 320])
-def test_files_navigation_and_download(frontend: tuple[Page, MockAPI], width: int) -> None:
+def test_files_are_attached_by_picking_dropping_and_pasting(frontend: tuple[Page, MockAPI], width: int) -> None:
     page, mock = frontend
     page.set_viewport_size({'width': width, 'height': 844})
-    mock.files = [
-        {'path': '/work/downloads/report <ready>.txt', 'size': 12},
-        {'path': 'large.zip', 'size': 20 * 1024 * 1024 + 1},
+    workspace(page, mock)
+    page.set_input_files(
+        '#file-input',
+        files=[
+            {'name': 'receipt.png', 'mimeType': 'image/png', 'buffer': PIXEL},
+            {'name': 'Quarterly report with a long name.pdf', 'mimeType': 'application/pdf', 'buffer': b'%PDF-1.4'},
+        ],
+    )
+    drop(page, '#messages', [('budget.xlsx', 'application/vnd.ms-excel', 'cells')])
+    expect(page.locator('#drop-zone')).to_be_hidden()
+    page.locator('#message').evaluate(
+        """(box) => {
+            const data = new DataTransfer();
+            data.items.add(new File(['png'], 'image.png', { type: 'image/png' }));
+            box.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+        }"""
+    )
+    chips = page.locator('#attachments li')
+    expect(chips).to_have_count(4)
+    expect(chips.nth(0)).to_contain_text('receipt.png')
+    expect(chips.nth(0)).to_contain_text('Monty sees it')
+    expect(chips.nth(0).locator('img')).to_have_count(1)  # a preview of the picture
+    expect(chips.nth(1).locator('.file-badge')).to_have_text('PDF')
+    expect(chips.nth(2)).to_contain_text('Monty opens it with code')
+    expect(chips.nth(3)).to_contain_text(re.compile(r'Pasted image [\d.]+\.png'))
+    uploads = [body for method, path, body in mock.calls if path == '/api/attachments']
+    assert [u['name'] for u in uploads if isinstance(u, dict)][:3] == [  # names stay as they were
+        'receipt.png',
+        'Quarterly report with a long name.pdf',
+        'budget.xlsx',
     ]
-    workspace(page, mock)
-    if width < 900:
-        page.click('#menu-button')
-    page.click('#open-files')
-    expect(page.locator('#files')).to_be_visible()
-    expect(page.locator('#layout')).not_to_be_visible()
-    expect(page.locator('#open-files')).to_have_attribute('aria-current', 'page')
-    expect(page.locator('#file-list li')).to_have_count(2)
-    expect(page.locator('#file-list li').first).to_have_text('downloads/report <ready>.txt (12 bytes)Download')
-    expect(page.locator('#file-list li').last).to_contain_text('large.zip (20.0 MB)')
-    expect(page.locator('#file-list ready')).to_have_count(0)
-    buttons = page.locator('#file-list').get_by_role('button', name='Download', exact=True)
-    expect(buttons.nth(1)).to_be_disabled()
-    with page.expect_download() as downloaded:
-        buttons.first.click()
-    assert downloaded.value.suggested_filename == 'report ready.txt'
-    assert ('POST', '/api/files/download', {'path': '/work/downloads/report <ready>.txt'}) in mock.calls
-    expect(buttons.first).to_be_enabled()
     no_overflow(page)
-    mock.files = []
-    page.click('#refresh-files')
-    expect(page.locator('#files-status')).to_contain_text('No files yet')
-    expect(page.locator('#file-list li')).to_have_count(0)
-    mock.files_truncated = True
-    page.click('#refresh-files')
-    expect(page.locator('#files-status')).to_contain_text('partial list')
-    page.locator('#files .back').click()
-    expect(page.locator('#composer')).to_be_visible()
-    expect(page.locator('#files')).not_to_be_visible()
-    expect(page.locator('#send')).to_be_enabled()
+
+    page.get_by_role('button', name='Remove budget.xlsx').click()
+    expect(chips).to_have_count(3)
+    page.click('#send')  # no text: the files are the message
+    expect(page.locator('#attachments')).to_be_hidden()
+    sent = next(body for method, path, body in mock.calls if path == '/api/threads' and method == 'POST')
+    assert isinstance(sent, dict) and sent['text'] == '' and len(sent['attachments']) == 3
+    message = page.locator('.msg.user')
+    expect(message).to_have_class(re.compile('files-only'))
+    expect(message.locator('a.file-image img')).to_have_count(2)
+    card = message.locator('a.file-card')
+    expect(card).to_contain_text('Quarterly report with a long name.pdf')
+    expect(card).to_have_attribute('href', re.compile(r'^/api/attachments/[0-9a-f-]+\?download$'))
+    no_overflow(page)
 
 
-@pytest.mark.parametrize(
-    ('status', 'message'),
-    [(404, 'File unavailable'), (413, '20 MB download limit')],
-)
-def test_download_errors_are_recoverable(frontend: tuple[Page, MockAPI], status: int, message: str) -> None:
+def test_a_dragged_file_shows_where_to_drop_it(frontend: tuple[Page, MockAPI]) -> None:
     page, mock = frontend
-    mock.files = [{'path': 'report.txt', 'size': 12}]
-    mock.download_status = status
     workspace(page, mock)
-    page.click('#open-files')
-    download = page.locator('#file-list').get_by_role('button', name='Download')
-    download.click()
-    expect(page.locator('#files-status')).to_contain_text(message)
-    expect(download).to_be_enabled()
-    expect(page.locator('#files')).to_be_visible()
+    drop(page, '#messages', [('notes.txt', 'text/plain', 'eggs')], finish=False)
+    expect(page.locator('#drop-zone')).to_be_visible()
+    expect(page.locator('#drop-zone')).to_contain_text('Drop files to attach')
+    page.evaluate(
+        "window.dispatchEvent(new DragEvent('dragleave', { dataTransfer: (() => { const d = new DataTransfer(); d.items.add(new File(['x'], 'x.txt')); return d; })() }))"
+    )
+    expect(page.locator('#drop-zone')).to_be_hidden()
+    page.evaluate("location.hash = '#/schedules'")
+    expect(page.locator('#schedules')).to_be_visible()
+    drop(page, '#schedules', [('notes.txt', 'text/plain', 'eggs')])  # not on the chat: nothing is attached
+    expect(page.locator('#drop-zone')).to_be_hidden()
+    assert not any(path == '/api/attachments' for _, path, _ in mock.calls)
+
+
+def test_a_file_that_cannot_be_attached_says_why_and_is_not_sent(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    workspace(page, mock)
+    mock.upload_status = 400
+    page.set_input_files('#file-input', files=[{'name': 'odd.bin', 'mimeType': '', 'buffer': b'x'}])
+    expect(page.locator('#attachments li.failed')).to_contain_text('That is not a file Monty can take.')
+    page.set_input_files('#file-input', files=[{'name': 'empty.txt', 'mimeType': 'text/plain', 'buffer': b''}])
+    expect(page.locator('#attachments li.failed').nth(1)).to_contain_text('This file is empty')
+    page.click('#send')  # only files that failed, and no text: nothing to send
+    expect(page.locator('#message')).to_be_focused()
+    page.fill('#message', 'Compare flights to Lisbon')
+    page.click('#send')
+    expect(page.locator('.msg.user')).to_have_text('Compare flights to Lisbon')
+    sent = next(body for method, path, body in mock.calls if path == '/api/threads' and method == 'POST')
+    assert isinstance(sent, dict) and 'attachments' not in sent
+    expect(page.locator('#attachments li')).to_have_count(2)  # still there, to remove
+
+
+def test_files_monty_shared_show_with_its_reply(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.signed_in = True
+    mock.messages = [
+        {'role': 'user', 'text': 'Make me a report'},
+        {'role': 'assistant', 'text': 'Here it is.', 'files': [
+            {'id': '00000000-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'name': 'report.csv', 'media_type': 'text/csv', 'kind': 'text', 'size': 2048},
+            {'id': '00000001-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'name': 'chart.png', 'media_type': 'image/png', 'kind': 'image', 'size': 68},
+            {'id': '00000002-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'name': 'fake.png', 'media_type': 'image/png', 'kind': 'file', 'size': 4},
+        ]},
+    ]  # fmt: skip
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    reply = page.locator('.msg.assistant')
+    expect(reply).to_contain_text('Here it is.')
+    expect(reply.locator('a.file-card').first).to_contain_text('report.csv2.0 KB')
+    expect(reply.locator('a.file-card').first).to_have_attribute('download', 'report.csv')
+    expect(reply.locator('a.file-image img')).to_have_attribute('alt', 'chart.png')
+    expect(reply.locator('a.file-card')).to_have_count(2)  # a "picture" the server found is none: a download
 
 
 @pytest.mark.parametrize('width', [1440, 390])
@@ -564,7 +648,7 @@ def test_sse_snapshots_error_recovery_and_committed_reply(frontend: tuple[Page, 
     assert not any(method == 'POST' for method, _, _ in mock.calls)
 
 
-@pytest.mark.parametrize('destination', ['#/new', '#/files', '#/schedules', '#/sign-ins'])
+@pytest.mark.parametrize('destination', ['#/new', '#/integrations', '#/schedules', '#/sign-ins'])
 def test_navigation_discards_sse_draft_and_late_events(frontend: tuple[Page, MockAPI], destination: str) -> None:
     page, mock = frontend
     streaming_chat(page, mock)
@@ -681,7 +765,7 @@ def test_chat_list_shows_which_chats_need_you(frontend: tuple[Page, MockAPI]) ->
     workspace(page, mock)
     expect(page.locator('#threads .badge')).to_have_text('Needs you')
     mock.thread_status = None
-    page.click('#open-files')  # any navigation reloads the list
+    page.click('#open-schedules')  # any navigation reloads the list
     expect(page.locator('#threads .badge')).to_have_count(0)
 
 
@@ -753,7 +837,7 @@ def test_the_chat_list_keeps_focus_and_marks_no_chat_on_other_pages(frontend: tu
     page.evaluate('loadThreads()')  # as the 15-second refresh does, with a new badge
     expect(page.locator('#threads .badge')).to_have_text('Needs you')
     expect(page.locator('#threads button').first).to_be_focused()
-    page.click('#open-files')
+    page.click('#open-schedules')
     expect(page.locator('#threads button.current')).to_have_count(0)
 
 
