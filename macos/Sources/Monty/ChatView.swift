@@ -167,29 +167,37 @@ struct ChatView: View {
                 .onChange(of: chat.ask?.id) { if atBottom { scrollToEnd(scroller) } else if chat.ask != nil { missed = true } }
                 .onChange(of: chat.preview?.text) { if atBottom { scroller.scrollTo("end", anchor: .bottom) } }
             }
-            // What Monty asks takes the message box's place, as in T3 Code: the user answers where they type.
-            Group {
-                if let ask = chat.ask {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let notice = chat.notice { NoticeBar(notice: notice) { chat.notice = nil } }
-                        AskCard(chat: chat, ask: ask)
-                            .id(ask.id)
-                            .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
-                        // What the user had written, or queued, stays in sight under the card, for after.
-                        if chat.queued != nil || !chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Composer(chat: chat)
+            HStack(alignment: .bottom, spacing: 2) {
+                // Monty keeps you company by the composer, reacting as the task goes. A new chat gets a fresh squirrel.
+                MontySquirrel(mood: mood, size: 112, layoutHeight: 52)
+                    .padding(.leading, -30)
+                    .padding(.trailing, -18)
+                    .padding(.bottom, -8)
+                    .id(chat.threadId)
+                // What Monty asks takes the message box's place, as in T3 Code: the user answers where they type.
+                Group {
+                    if let ask = chat.ask {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let notice = chat.notice { NoticeBar(notice: notice) { chat.notice = nil } }
+                            AskCard(chat: chat, ask: ask)
+                                .id(ask.id)
+                                .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
+                            // What the user had written, or queued, stays in sight under the card, for after.
+                            if chat.queued != nil || !chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Composer(chat: chat)
+                            }
                         }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else {
+                        Composer(chat: chat).transition(.opacity)
                     }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                } else {
-                    Composer(chat: chat).transition(.opacity)
                 }
+                .motion(.spring(response: 0.38, dampingFraction: 0.88), value: chat.ask?.id)
             }
-            .motion(.spring(response: 0.38, dampingFraction: 0.88), value: chat.ask?.id)
-                .frame(maxWidth: Metrics.readingWidth)
-                .padding(.horizontal, Metrics.gutter)
-                .padding(.bottom, 16)
-                .frame(maxWidth: .infinity)
+            .frame(maxWidth: Metrics.readingWidth)
+            .padding(.horizontal, Metrics.gutter)
+            .padding(.bottom, 16)
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -719,7 +727,7 @@ struct NewTaskView: View {
         VStack(spacing: 0) {
             Spacer()
             VStack(alignment: .leading, spacing: 0) {
-                MontyMark(mood: .idle, size: 34).padding(.leading, -12).padding(.bottom, 6)
+                MontySquirrel(mood: .idle, size: 168, layoutHeight: 120).padding(.leading, -42).padding(.bottom, -6)
                 Text("What should Monty do?")
                     .font(.system(size: 22, weight: .semibold))
                     .accessibilityAddTraits(.isHeader)
