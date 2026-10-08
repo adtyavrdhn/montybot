@@ -732,6 +732,27 @@ struct JourneyTests {
         #expect(app.route != .chat(b))  // gone: skipped
     }
 
+    @Test func anEarlierReplyKeepsWhatMontyDid() async throws {
+        let app = try await person()
+        let chat = try await say("Find the three cheapest flights to Lisbon next Friday at \(try site("flights"))", in: app)
+        try await eventually("the first reply") { chat.run?.status == .done }
+        let browsed = chat.run?.activity ?? []
+        try #require(!browsed.isEmpty, "the scripted flights task opened no pages")
+        let reply = try #require(chat.messages.lastIndex { $0.role == .assistant })
+        chat.draft = "Say hello"
+        await chat.send()
+        try await eventually("the second reply") { chat.run?.status == .done && chat.messages.count > reply + 1 }
+
+        let id = try #require(chat.threadId)
+        app.open(.chat(nil))
+        app.open(.chat(id))  // read again from the server
+        let reopened = try #require(app.chat)
+        try await eventually("the chat to load") { reopened.messages.count == chat.messages.count }
+        let past = try #require(reopened.pastSteps[reply], "the first reply's steps")
+        #expect(past.activity == browsed)
+        #expect(past.summary.hasPrefix("Worked for "))
+    }
+
     @Test func theChatListSaysWhatAChatWaitsFor() async throws {
         let app = try await person()
         let chat = try await say("Tell me when a delivery slot opens at \(try site("slots"))", in: app)

@@ -175,6 +175,40 @@ public struct ThreadDetail: Codable, Equatable, Sendable {
     public let title: String
     public let messages: [ChatMessage]
     public let run: Run?
+    /// What Monty did for each earlier reply (the latest run's steps are in `run`); older servers don't say.
+    public let steps: [PastSteps]?
+}
+
+/// The steps of an earlier run, shown folded under its reply: `after` is the reply's position in the messages.
+public struct PastSteps: Codable, Equatable, Sendable {
+    public let after: Int
+    public let activity: [String]
+    let startedAt: String?
+    let completedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case after, activity
+        case startedAt = "started_at"
+        case completedAt = "completed_at"
+    }
+
+    public init(after: Int, activity: [String]) {
+        self.after = after
+        self.activity = activity
+        startedAt = nil
+        completedAt = nil
+    }
+
+    /// The steps as a person reads them (pages of one site as one step).
+    public var steps: [String] { ChatModel.grouped(activity) }
+
+    /// "Worked for 1m 3s · 5 steps", or just the steps when the server doesn't say when.
+    public var summary: String {
+        let count = "\(steps.count) step\(steps.count == 1 ? "" : "s")"
+        guard let started = startedAt.flatMap(ThreadSummary.date), let completed = completedAt.flatMap(ThreadSummary.date)
+        else { return count }
+        return "Worked for \(spoken(completed.timeIntervalSince(started))) · \(count)"
+    }
 }
 
 public struct Created: Codable, Equatable, Sendable {

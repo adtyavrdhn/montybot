@@ -175,6 +175,7 @@ public final class ChatModel {
             loadError = nil
             title = detail.title
             messages = detail.messages
+            pastSteps = Dictionary((detail.steps ?? []).map { ($0.after, $0) }) { first, _ in first }
             if let pending = pendingMessage, let pendingRun,
                detail.run?.id == pendingRun || detail.messages.contains(where: { $0.role == .user && $0.text == pending }) {
                 pendingMessage = nil  // the server shows the sent message now
@@ -465,6 +466,9 @@ public final class ChatModel {
         let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         draft = typed.isEmpty || typed == task ? task : task + "\n\n" + typed
     }
+
+    /// What Monty did for each earlier reply, by the reply's position in `messages`.
+    public private(set) var pastSteps: [Int: PastSteps] = [:]
 
     /// The messages to show: the stored ones, then the one being sent.
     public var shownMessages: [ChatMessage] {

@@ -101,8 +101,9 @@ struct ChatView: View {
                                     text: "When a schedule runs, Monty reports here. You can also write to Monty below."
                                 )
                             }
-                            ForEach(Array(chat.shownMessages.enumerated()), id: \.offset) { _, message in
+                            ForEach(Array(chat.shownMessages.enumerated()), id: \.offset) { index, message in
                                 MessageView(message: message).transition(.arrive)
+                                if let past = chat.pastSteps[index] { PastStepsView(steps: past) }
                             }
                             if let text = chat.preview?.text, !text.isEmpty, chat.isWorking {
                                 MessageView(message: ChatMessage(role: .assistant, text: text), draft: true)
@@ -407,31 +408,7 @@ struct StepsView: View {
             .accessibilityValue(expandable ? (expanded ? "Shown" : "Hidden") : "")
 
             if !shown.isEmpty {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(shown.enumerated()), id: \.offset) { index, step in
-                        let live = working && index == shown.count - 1
-                        HStack(alignment: .top, spacing: 10) {
-                            VStack(spacing: 0) {
-                                Circle()
-                                    .fill(live ? Palette.onSurfaceVariant : Palette.outlineHover)
-                                    .frame(width: 5, height: 5)
-                                    .padding(.top, 6)
-                                if index < shown.count - 1 { Rectangle().fill(Palette.outline).frame(width: 1).frame(maxHeight: .infinity) }
-                            }
-                            .frame(width: 6)
-                            .padding(.leading, 2)
-                            Text(step)
-                                .font(.mono(12))
-                                .foregroundStyle(live ? Palette.onSurface : Palette.onSurfaceVariant)
-                                .lineLimit(2)
-                                .padding(.bottom, index < shown.count - 1 ? 6 : 0)
-                            Spacer(minLength: 0)
-                        }
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .padding(.top, 6)
-                .transition(.opacity)
+                StepList(steps: shown, liveLast: working).padding(.top, 6).transition(.opacity)
             }
             if chat.reconnecting {
                 Text("Connection lost. Reconnecting…")
@@ -441,6 +418,72 @@ struct StepsView: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: steps.count)
+    }
+}
+
+/// Steps as a line down the side, oldest first; the last one stands out while Monty is on it.
+struct StepList: View {
+    let steps: [String]
+    var liveLast = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                let live = liveLast && index == steps.count - 1
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(spacing: 0) {
+                        Circle()
+                            .fill(live ? Palette.onSurfaceVariant : Palette.outlineHover)
+                            .frame(width: 5, height: 5)
+                            .padding(.top, 6)
+                        if index < steps.count - 1 { Rectangle().fill(Palette.outline).frame(width: 1).frame(maxHeight: .infinity) }
+                    }
+                    .frame(width: 6)
+                    .padding(.leading, 2)
+                    Text(step)
+                        .font(.mono(12))
+                        .foregroundStyle(live ? Palette.onSurface : Palette.onSurfaceVariant)
+                        .lineLimit(2)
+                        .padding(.bottom, index < steps.count - 1 ? 6 : 0)
+                    Spacer(minLength: 0)
+                }
+                .fixedSize(horizontal: false, vertical: true)  // inside the chat's scroll view: no window to stretch
+            }
+        }
+    }
+}
+
+/// What Monty did for an earlier reply: folded, as "Worked for 1m 3s · 5 steps", to open.
+struct PastStepsView: View {
+    let steps: PastSteps
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                    .motion(.spring(response: 0.3, dampingFraction: 0.8), value: expanded)
+                    .frame(width: 16, height: 18, alignment: .leading)
+                    .accessibilityHidden(true)
+                Text(steps.summary).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(Palette.onSurfaceVariant)
+            .frame(minHeight: 24)
+            .contentShape(Rectangle())
+            .wrappedInButton(enabled: true) { withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() } }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(steps.summary), what Monty did")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityValue(expanded ? "Shown" : "Hidden")
+            .accessibilityAction { expanded.toggle() }
+            if expanded {
+                StepList(steps: steps.steps).padding(.top, 6).transition(.opacity)
+            }
+        }
     }
 }
 

@@ -516,6 +516,19 @@ async def list_activity(connection: Connection, user_id: str, run_id: str) -> li
     return [row['text'] for row in await cursor.fetchall()]
 
 
+async def list_thread_activity(connection: Connection, user_id: str, thread_id: str) -> dict[str, list[str]]:
+    """Every run's steps in a thread, by run id, oldest first."""
+    cursor = await connection.execute(
+        'SELECT a.run_id, a.text FROM montybot.activity a JOIN montybot.runs r ON r.id = a.run_id '
+        'WHERE r.thread_id = %s AND r.user_id = %s ORDER BY a.id',
+        (thread_id, user_id),
+    )
+    steps: dict[str, list[str]] = {}
+    for row in await cursor.fetchall():
+        steps.setdefault(str(row['run_id']), []).append(row['text'])
+    return steps
+
+
 # --- rows ---
 
 

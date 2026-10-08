@@ -293,24 +293,40 @@ async def read_thread(request: Request, user: User) -> Response:
         runs = await store.list_runs(connection, user.id, thread.id)
         asks = await store.list_answered_asks(connection, user.id, thread.id)
         run_json = None if not runs else await run_view(connection, user, runs[-1])
-    messages = chat_messages(runs, asks)
-    return JSONResponse({'id': thread.id, 'title': thread.title, 'messages': messages, 'run': run_json})
+        activity = await store.list_thread_activity(connection, user.id, thread.id)
+    messages, replies = chat_messages(runs, asks)
+    # What Monty did for each earlier reply (the latest run's steps are in `run`): `after` is the reply's position in
+    # `messages`, where an app shows them folded.
+    steps = [
+        {
+            'after': replies[run.id],
+            'activity': activity[run.id],
+            'started_at': run.started_at.isoformat() if run.started_at else None,
+            'completed_at': run.completed_at.isoformat() if run.completed_at else None,
+        }
+        for run in runs[:-1]
+        if run.id in replies and activity.get(run.id)
+    ]
+    return JSONResponse({'id': thread.id, 'title': thread.title, 'messages': messages, 'run': run_json, 'steps': steps})
 
 
-def chat_messages(runs: list[Run], asks: list[Ask]) -> list[dict[str, str]]:
-    """The chat as the user sees it. Each run is their message, what Monty asked them and how they answered, and
-    Monty's reply once the run has finished. `event` lines record approvals and hand-offs."""
+def chat_messages(runs: list[Run], asks: list[Ask]) -> tuple[list[dict[str, str]], dict[str, int]]:
+    """The chat as the user sees it, and where each run's reply is in it, by run id. Each run is their message, what
+    Monty asked them and how they answered, and Monty's reply once the run has finished. `event` lines record
+    approvals and hand-offs."""
     asks_of_run: dict[str, list[Ask]] = {}
     for ask in asks:
         asks_of_run.setdefault(ask.run_id, []).append(ask)
     shown: list[dict[str, str]] = []
+    replies: dict[str, int] = {}
     for run in runs:
         shown.append({'role': 'user', 'text': run.prompt})
         for ask in asks_of_run.get(run.id, []):
             shown.extend(ask_messages(ask))
         if run.output:
+            replies[run.id] = len(shown)
             shown.append({'role': 'assistant', 'text': run.output})
-    return shown
+    return shown, replies
 
 
 def ask_messages(ask: Ask) -> list[dict[str, str]]:
