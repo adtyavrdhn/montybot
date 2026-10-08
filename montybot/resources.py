@@ -123,6 +123,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
         lease=lease,
         idle_timeout=settings.browser_idle_timeout_seconds,
         max_open_browsers=settings.browser_max_open,
+        keep_open=settings.browser_keep_open,
         share_browser=isinstance(new_backend(), TabsBackend),  # a closed backend: making one starts nothing
         detour=Detour(route=mac_route(pool, tunnels), new_backend=routed) if routed and tunnels else None,
     )

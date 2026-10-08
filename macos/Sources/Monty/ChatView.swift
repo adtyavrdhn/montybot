@@ -35,7 +35,7 @@ struct ChatView: View {
                         .foregroundStyle(.secondary)
                         .help("Sites see this Mac's internet connection. You can turn this off in Settings.")
                 }
-                if chat.isActive {
+                if chat.run != nil {
                     Button { chat.watching.toggle() } label: {
                         Label(chat.watching ? "Hide Monty's browser" : "Watch Monty's browser", systemImage: "macwindow")
                     }
@@ -56,7 +56,7 @@ struct ChatView: View {
                 }
             }
         }
-        .inspector(isPresented: Binding(get: { chat.watching && chat.isActive }, set: { chat.watching = $0 })) {
+        .inspector(isPresented: Binding(get: { chat.watching }, set: { chat.watching = $0 })) {
             BrowserPanel(chat: chat)
                 .inspectorColumnWidth(min: 280, ideal: 340, max: 720)
         }

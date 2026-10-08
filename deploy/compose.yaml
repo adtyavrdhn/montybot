@@ -91,7 +91,7 @@ services:
       # Chrome over our own CDP pipe (montybot/browser/cdp.md). Roll back to Playwright with
       # BROWSER_BACKEND=montybot.engines:chromium_server in /opt/montybot/.env.
       BROWSER_BACKEND: ${BROWSER_BACKEND:-montybot.engines:chromium_cdp_server}
-      BROWSER_MAX_OPEN: ${BROWSER_MAX_OPEN:-2}
+      BROWSER_MAX_OPEN: ${BROWSER_MAX_OPEN:-8}
       BROWSER_EGRESS_SOCKET: /run/browser-egress/proxy.sock
       CLAUDE_CODE_CREDENTIALS: file
       CLAUDE_CODE_AUTH_FILE: /data/claude-code/auth.json
