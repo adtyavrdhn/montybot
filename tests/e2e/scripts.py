@@ -7,14 +7,18 @@ same messages run against a real model with MONTYBOT_TEST_MODEL.
 
 from __future__ import annotations
 
+import io
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from PIL import Image
 from pydantic_ai.messages import (
+    BinaryContent,
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    TextContent,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -28,6 +32,8 @@ class Turn:
     prompt: str
     returns: list[ToolReturnPart]
     instructions: str = ''
+    seen: list[str] = field(default_factory=list[str])
+    """Each thing the user sent in the whole conversation, as the model got it (`seen_in`)."""
 
     @property
     def last(self) -> str:
@@ -228,6 +234,20 @@ def show_file(turn: Turn) -> ModelResponse:
     return say(turn.last)
 
 
+def describe_files(turn: Turn) -> ModelResponse:
+    """Says what the model was given: everything the user sent in the conversation, one line each."""
+    return say('\n'.join(turn.seen))
+
+
+def share_report(turn: Turn) -> ModelResponse:
+    """Makes a file with code, then gives it to the user."""
+    if not turn.called('run_code'):
+        return run("from pathlib import Path\nPath('/work/report.csv').write_text('item,total\\neggs,3\\n')")
+    if not turn.called('share_file'):
+        return call('share_file', path='report.csv')
+    return say(f'Here is your report. ({turn.result_of("share_file")})')
+
+
 def fail(turn: Turn) -> ModelResponse:
     raise RuntimeError('the model provider is down')
 
@@ -402,7 +422,33 @@ SCRIPTS: dict[str, Script] = {
     'Download my last three invoices from': total_invoices,
     'Total my last three invoices with pandas from': total_invoices_with_pandas,
     'Show me my files and the file': show_file,
+    'Describe what I attached': describe_files,
+    'Make me a report': share_report,
 }
+
+
+def seen_in(messages: list[ModelMessage]) -> list[str]:
+    """What the user sent, as the model got it, one line each (newlines as `\\n`): `text: ...`, `note: ...` for a
+    file's note, `file text: ...` for a text file's contents, and `<media type> <width>x<height>` or `<media type> <bytes> bytes` for a file it sees."""
+    seen: list[str] = []
+    for message in messages:
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if not isinstance(part, UserPromptPart):
+                continue
+            for item in [part.content] if isinstance(part.content, str) else part.content:
+                if isinstance(item, str):
+                    seen.append(f'text: {item}')
+                elif isinstance(item, TextContent):
+                    is_note = isinstance(item.metadata, dict) and 'attachment' in item.metadata
+                    seen.append(f'note: {item.content}' if is_note else f'file text: {item.content}')
+                elif isinstance(item, BinaryContent) and item.is_image:
+                    with Image.open(io.BytesIO(item.data)) as image:
+                        seen.append(f'{item.media_type} {image.width}x{image.height}')
+                elif isinstance(item, BinaryContent):
+                    seen.append(f'{item.media_type} {len(item.data)} bytes')
+    return [line.replace('\n', '\\n') for line in seen]  # one line each, whatever a file's text holds
 
 
 def current_turn(messages: list[ModelMessage]) -> Turn:
@@ -412,11 +458,9 @@ def current_turn(messages: list[ModelMessage]) -> Turn:
         for i, m in enumerate(messages)
         if isinstance(m, ModelRequest) and any(isinstance(p, UserPromptPart) for p in m.parts)
     )
-    prompt = next(
-        str(p.content)
-        for p in messages[start].parts
-        if isinstance(p, UserPromptPart)  # pyright: ignore[reportAttributeAccessIssue]
-    )
+    content = next(p.content for p in messages[start].parts if isinstance(p, UserPromptPart))  # pyright: ignore[reportAttributeAccessIssue]
+    # A message with files is a list: the text first, if there is any.
+    prompt = content if isinstance(content, str) else next((c for c in content if isinstance(c, str)), '')
     returns = [
         part
         for message in messages[start:]
@@ -426,7 +470,7 @@ def current_turn(messages: list[ModelMessage]) -> Turn:
     ]
     latest = messages[-1]
     instructions = (latest.instructions or '') if isinstance(latest, ModelRequest) else ''
-    return Turn(prompt=prompt, returns=returns, instructions=instructions)
+    return Turn(prompt=prompt, returns=returns, instructions=instructions, seen=seen_in(messages))
 
 
 def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:

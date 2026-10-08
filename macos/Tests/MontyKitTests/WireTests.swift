@@ -255,6 +255,76 @@ import Testing
         #expect(body == ["connected": false])
     }
 
+    @Test func anUploadSaysWhatItIs() throws {
+        let json = #"{"id": "a1", "name": "photo.png", "media_type": "image/png", "size": 12345, "kind": "image"}"#
+        let file = try JSONDecoder().decode(Attachment.self, from: Data(json.utf8))
+        #expect(file == Attachment(id: "a1", name: "photo.png", mediaType: "image/png", size: 12345, kind: .image))
+        #expect(file.isImage && !file.isPDF)
+        let later = #"{"id": "a2", "name": "x.bin", "media_type": "application/x-new", "size": 1, "kind": "something-new"}"#
+        #expect(try JSONDecoder().decode(Attachment.self, from: Data(later.utf8)).kind == .file)  // not an error
+        // Named and typed a PNG, but the server found its bytes are not a picture: a file to save, not to show.
+        #expect(!Attachment(id: "a3", name: "fake.png", mediaType: "image/png", size: 4, kind: .file).isImage)
+        #expect(Attachment(id: "a4", name: "old.png", mediaType: "image/png", size: 4).isImage)  // a server that doesn't say
+    }
+
+    @Test func messagesCarryTheirFiles() throws {
+        let json = #"""
+        {"id": "t", "title": "Receipt", "messages": [
+            {"role": "user", "text": "", "files": [{"id": "a1", "name": "receipt.pdf", "media_type": "application/pdf", "size": 2048}]},
+            {"role": "assistant", "text": "Here's the summary.", "files": [{"id": "a2", "name": "summary.csv", "media_type": "text/csv", "size": 99}]},
+            {"role": "event", "text": "You approved: Pay"}],
+         "run": null}
+        """#
+        let messages = try JSONDecoder().decode(ThreadDetail.self, from: Data(json.utf8)).messages
+        #expect(messages[0].text.isEmpty)  // files alone
+        #expect(messages[0].files == [Attachment(id: "a1", name: "receipt.pdf", mediaType: "application/pdf", size: 2048)])
+        #expect(messages[0].files.first?.isPDF == true && messages[0].files.first?.kind == nil)
+        #expect(messages[1].files.map(\.name) == ["summary.csv"])
+        #expect(messages[2].files.isEmpty)  // no key: no files, as from older servers
+        #expect(messages[2] == ChatMessage(role: .event, text: "You approved: Pay"))
+    }
+
+    @Test func anUploadIsTheFileItself() throws {
+        let client = APIClient(baseURL: URL(string: "https://monty.test")!)
+        let bytes = Data([0x89, 0x50, 0x4E, 0x47, 0, 1, 2])
+        let request = client.uploadRequest(data: bytes, name: "Façade plan #2.png", mediaType: "image/png")
+        #expect(request.httpMethod == "POST" && request.url?.path == "/api/attachments")
+        #expect(request.httpBody == bytes)  // not JSON, not multipart
+        #expect(request.value(forHTTPHeaderField: "Content-Type") == "image/png")
+        #expect(request.value(forHTTPHeaderField: "X-Filename") == "Fa%C3%A7ade%20plan%20%232.png")
+        let unknown = client.uploadRequest(data: Data(), name: "notes", mediaType: "")
+        #expect(unknown.value(forHTTPHeaderField: "Content-Type") == "application/octet-stream")
+    }
+
+    @Test func messagesNameTheirFilesByIdOnlyWhenThereAreSome() throws {
+        func body(_ attachments: [String]) throws -> [String: AnyHashable] {
+            let data = try JSONEncoder().encode(APIClient.MessageBody("", attachments, nil))
+            return try #require(try JSONSerialization.jsonObject(with: data) as? [String: AnyHashable])
+        }
+        #expect(try body(["a1", "a2"])["attachments"] == AnyHashable(["a1", "a2"]))
+        #expect(try body(["a1"])["text"] == AnyHashable(""))
+        #expect(try body([])["attachments"] == nil)  // as before, for older servers
+    }
+
+    @Test func theFilesPageIsGoneAndOpensANewTaskInstead() {
+        #expect(Route(stored: "files") == nil)  // kept from before: the app falls back to a new task
+        for route in [Route.chat(nil), .chat("t"), .schedules, .signIns, .integrations, .memory] {
+            #expect(Route(stored: route.stored) == route)
+        }
+    }
+
+    @MainActor @Test func aFileTooLargeIsNotUploaded() {
+        let id = "monty-test-\(UUID().uuidString)"
+        let app = AppModel(serverURL: URL(string: "http://127.0.0.1:9")!, cookies: .sharedCookieStorage(forGroupContainerIdentifier: id),
+                           defaults: UserDefaults(suiteName: id)!)
+        app.open(.chat(nil))
+        let chat = app.chat!
+        chat.attach(Data(count: ChatModel.maxAttachmentBytes + 1), name: "huge.mov", mediaType: "video/quicktime")
+        #expect(chat.attachments.isEmpty)
+        #expect(chat.notice?.isError == true && chat.notice?.text.contains("too large") == true)
+        #expect(!chat.canSend)
+    }
+
     @Test func durationsReadAtAGlance() {
         #expect(spoken(0) == "0s" && spoken(12.9) == "12s" && spoken(63) == "1m 3s" && spoken(7500) == "2h 5m")
         #expect(spoken(-3) == "0s")  // a server clock a little ahead

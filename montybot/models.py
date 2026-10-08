@@ -46,6 +46,26 @@ class Run:
     completed_at: datetime | None = None
 
 
+AttachmentKind = Literal['image', 'pdf', 'text', 'file']
+"""How the model reads a file: it sees an image or a PDF, reads a text file, and opens any other with its code."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class Attachment:
+    """A file in a chat: one the user attached to their message, or one Monty shared with its reply."""
+
+    id: str
+    name: str
+    media_type: str
+    kind: AttachmentKind
+    size: int
+    path: str | None = None
+    """Where the run's code sees the user's file, once the run has started."""
+
+    def json(self) -> dict[str, str | int]:
+        return {'id': self.id, 'name': self.name, 'media_type': self.media_type, 'kind': self.kind, 'size': self.size}
+
+
 @dataclass(frozen=True, kw_only=True)
 class Schedule:
     id: str

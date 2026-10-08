@@ -302,10 +302,9 @@ struct MontyCommands: Commands {
             .disabled(app.user == nil || app.isTakingOver || app.threads.isEmpty)
             Group {
                 Button("Schedules") { show(.schedules) }.keyboardShortcut("1", modifiers: [.command, .shift])
-                Button("Files") { show(.files) }.keyboardShortcut("2", modifiers: [.command, .shift])
-                Button("Saved Sign-ins") { show(.signIns) }.keyboardShortcut("3", modifiers: [.command, .shift])
-                Button("Memory") { show(.memory) }.keyboardShortcut("4", modifiers: [.command, .shift])
-                Button("Integrations") { show(.integrations) }.keyboardShortcut("5", modifiers: [.command, .shift])
+                Button("Saved Sign-ins") { show(.signIns) }.keyboardShortcut("2", modifiers: [.command, .shift])
+                Button("Memory") { show(.memory) }.keyboardShortcut("3", modifiers: [.command, .shift])
+                Button("Integrations") { show(.integrations) }.keyboardShortcut("4", modifiers: [.command, .shift])
             }
             .disabled(app.user == nil || app.isTakingOver)
             Divider()

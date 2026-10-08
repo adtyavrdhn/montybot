@@ -7,18 +7,16 @@ in with the keyboard, give it back, approve the order.
 
 from __future__ import annotations
 
-import asyncio
+import io
 import re
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import pytest
 from conftest import App
+from PIL import Image
 from playwright.sync_api import FloatRect, Page, expect, sync_playwright
 from sites.shop import Shop
-
-from montybot.workspaces import Workspaces, save_download
 
 
 @pytest.fixture
@@ -157,35 +155,28 @@ def test_repeated_enter_creates_one_chat_and_preserves_a_new_draft(app: App, per
     expect(person.locator('#threads li')).to_have_count(1)
 
 
-@pytest.mark.u5
-def test_files_panel_downloads_browser_and_generated_csv(app: App, person: Page, workspaces_dir: Path) -> None:
+@pytest.mark.scripted
+def test_attach_files_and_see_them_in_the_chat(app: App, person: Page) -> None:
     sign_up(person, app)
-    user = person.request.get(f'{app.url}/api/me').json()
-    downloaded = b'item,total\neggs,3\n'
-    generated = b'total\n3\n'
-
-    async def prepare() -> None:
-        files = Workspaces(workspaces_dir).files(user['id'])
-        await save_download(files, 'export.csv', downloaded)
-        async with files.lock:
-            await files.write_bytes(PurePosixPath('/work/generated.csv'), generated)
-
-    # Sync Playwright already owns an event loop on this thread.
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        executor.submit(lambda: asyncio.run(prepare())).result()
-    if person.locator('#menu-button').is_visible():
-        person.click('#menu-button')
-    person.get_by_role('button', name='Files', exact=True).click()
-    expect(person.locator('#files')).to_be_visible()
-    expect(person.locator('#layout')).to_be_hidden()
-    expect(person.locator('#file-list li')).to_have_count(2)
-    for path, content in [('downloads/export.csv', downloaded), ('generated.csv', generated)]:
-        row = person.locator('#file-list li').filter(has_text=path)  # shown without /work/, where code sees them
-        with person.expect_download() as pending:
-            row.get_by_role('button', name='Download', exact=True).click()
-        download = pending.value
-        assert download.suggested_filename == path.rsplit('/', 1)[-1]
-        saved = download.path()
-        assert saved is not None and Path(saved).read_bytes() == content
-    person.get_by_role('button', name='Back to chat', exact=True).click()
-    expect(person.locator('#layout')).to_be_visible()
+    picture = io.BytesIO()
+    Image.new('RGB', (64, 48), (200, 30, 120)).save(picture, format='PNG')
+    person.set_input_files(
+        '#file-input',
+        files=[
+            {'name': 'receipt.png', 'mimeType': 'image/png', 'buffer': picture.getvalue()},
+            {'name': 'totals.csv', 'mimeType': 'text/csv', 'buffer': b'item,total\neggs,3\n'},
+        ],
+    )
+    expect(person.locator('#attachments li')).to_have_count(2)
+    expect(person.locator('#attachments li').last).to_contain_text('Monty reads it')  # uploaded
+    send(person, 'Describe what I attached')
+    reply = person.locator('.msg.assistant')
+    expect(reply).to_contain_text('image/png 64x48')
+    expect(reply).to_contain_text('file text: <file name="totals.csv">')
+    image = person.locator('.msg.user a.file-image img')
+    expect(image).to_have_attribute('alt', 'receipt.png')
+    person.wait_for_function('document.querySelector(".msg.user a.file-image img").naturalWidth === 64')
+    with person.expect_download() as pending:
+        person.locator('.msg.user a.file-card').click()
+    saved = pending.value.path()
+    assert pending.value.suggested_filename == 'totals.csv' and Path(saved).read_bytes() == b'item,total\neggs,3\n'

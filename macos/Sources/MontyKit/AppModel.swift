@@ -6,7 +6,6 @@ public enum Route: Hashable, Sendable {
     /// A chat; nil is a new one.
     case chat(String?)
     case schedules
-    case files
     case signIns
     case integrations
     case memory
@@ -16,17 +15,16 @@ public enum Route: Hashable, Sendable {
         switch self {
         case .chat(let id): "chat:" + (id ?? "")
         case .schedules: "schedules"
-        case .files: "files"
         case .signIns: "signIns"
         case .integrations: "integrations"
         case .memory: "memory"
         }
     }
 
+    /// nil for a page there is no longer ("files", from before files moved into the chats): a new task opens instead.
     init?(stored: String) {
         switch stored {
         case "schedules": self = .schedules
-        case "files": self = .files
         case "signIns": self = .signIns
         case "integrations": self = .integrations
         case "memory": self = .memory
@@ -55,7 +53,7 @@ public struct Notice: Equatable, Sendable {
     public var askId: String? = nil
 }
 
-/// The whole app's state: who is signed in, their chats, the open page, and their schedules, files and so on.
+/// The whole app's state: who is signed in, their chats, the open page, and their schedules, memories and so on.
 @MainActor
 @Observable
 public final class AppModel {
@@ -83,7 +81,6 @@ public final class AppModel {
     public private(set) var offline = false
 
     public private(set) var schedules: [Schedule]?
-    public private(set) var files: FileList?
     public private(set) var savedSites: [SavedSite]?
     public private(set) var memories: [Memory]?
     public private(set) var integrations: Integrations?
@@ -115,6 +112,12 @@ public final class AppModel {
     public var drafts: [String: String] = [:] {
         didSet { if let id = persistedUser { defaults.set(drafts.filter { !$0.value.isEmpty }, forKey: "drafts.\(id)") } }
     }
+    /// The files the user is adding to their next message in each chat ("new" for a new one), as `drafts`. Not kept
+    /// after they quit: the server forgets uploads that were never sent within a day.
+    public var draftAttachments: [String: [PendingAttachment]] = [:]
+    /// Files in chats already fetched (or just uploaded), by id, so a picture is fetched once.
+    @ObservationIgnored private var attachmentCache: [String: Data] = [:]
+    @ObservationIgnored private var attachmentCacheBytes = 0
     /// A chat the user asked to delete or rename, from wherever they asked (sidebar, toolbar, menu): the window asks
     /// them to confirm, or for the new title.
     public var deleting: ThreadSummary?
@@ -434,6 +437,9 @@ public final class AppModel {
         known = [:]
         notified = []
         drafts = [:]
+        draftAttachments = [:]
+        attachmentCache = [:]
+        attachmentCacheBytes = 0
         answerDrafts = [:]
         deleting = nil
         renaming = nil
@@ -448,7 +454,6 @@ public final class AppModel {
         pinned = []
         squirrelName = ""
         schedules = nil
-        files = nil
         savedSites = nil
         memories = nil
         integrations = nil
@@ -520,7 +525,6 @@ public final class AppModel {
             chat = model
             if let id { Task { await telemetry.action("open chat", ["monty.thread_id": .string(id)]) { _ in await model.load() } } }
         case .schedules: Task { await telemetry.action("open schedules") { _ in await loadSchedules() } }
-        case .files: Task { await telemetry.action("open files") { _ in await loadFiles() } }
         case .signIns: Task { await telemetry.action("open saved sign-ins") { _ in await loadSavedSites() } }
         case .integrations: Task { await telemetry.action("open integrations") { _ in await loadIntegrations() } }
         case .memory: Task { await telemetry.action("open memory") { _ in await loadMemories() } }
@@ -607,7 +611,6 @@ public final class AppModel {
         switch route {
         case .chat: Task { await chat?.refresh() }
         case .schedules: Task { await loadSchedules() }
-        case .files: Task { await loadFiles() }
         case .signIns: Task { await loadSavedSites() }
         case .integrations: Task { await loadIntegrations() }
         case .memory: Task { await loadMemories() }
@@ -627,6 +630,7 @@ public final class AppModel {
 
     func chatVanished(_ id: String) {
         drafts[id] = nil
+        draftAttachments[id] = nil
         unseen.remove(id)
         pinned.removeAll { $0 == id }
         chatSeen?(id)
@@ -912,10 +916,9 @@ public final class AppModel {
         chatVanished(thread.id)
     }
 
-    // MARK: schedules, files, saved sign-ins, memory
+    // MARK: schedules, saved sign-ins, memory
 
     public func loadSchedules() async { schedules = await library { try await self.client.schedules() } ?? schedules }
-    public func loadFiles() async { files = await library { try await self.client.files() } ?? files }
     public func loadSavedSites() async { savedSites = await library { try await self.client.savedSites() } ?? savedSites }
     public func loadMemories() async { memories = await library { try await self.client.memories() } ?? memories }
 
@@ -1016,10 +1019,48 @@ public final class AppModel {
         return true
     }
 
-    /// The file's name and path stay on the Mac; its size may go.
-    public func download(_ file: WorkspaceFile) async -> (data: Data, name: String)? {
-        await telemetry.action("download file", ["monty.file.size": .int(file.size)]) { _ in
-            await library { try await self.client.download(file.path) }
+    // MARK: files in chats
+
+    /// A file in a chat, to open or save: from memory if it was fetched (or uploaded) already. Its name stays on the
+    /// Mac; its size may go.
+    public func download(_ file: Attachment) async -> Data? {
+        if let data = attachmentCache[file.id] { return data }
+        let data = await telemetry.action("download attachment", ["monty.file.size": .int(file.size)]) { _ in
+            await act("Couldn't get the file") { try await self.client.attachment(id: file.id) }
+        }
+        if let data { remember(data, for: file) }
+        return data
+    }
+
+    /// An image in a chat, for its thumbnail: quietly (no span, nothing said if it fails, as for any picture that
+    /// doesn't load).
+    public func picture(_ file: Attachment) async -> Data? {
+        if let data = attachmentCache[file.id] { return data }
+        let data = try? await Telemetry.$quiet.withValue(true) { try await client.attachment(id: file.id) }
+        if let data { remember(data, for: file) }
+        return data
+    }
+
+    /// Keeps a file's bytes in memory, up to a limit: past it, everything kept is forgotten (the simplest bound; a
+    /// picture still on screen stays drawn, and anything else is fetched again when asked for).
+    func remember(_ data: Data, for file: Attachment) {
+        guard attachmentCache[file.id] == nil, data.count <= Self.attachmentCacheLimit / 4 else { return }
+        if attachmentCacheBytes + data.count > Self.attachmentCacheLimit {
+            attachmentCache = [:]
+            attachmentCacheBytes = 0
+        }
+        attachmentCache[file.id] = data
+        attachmentCacheBytes += data.count
+    }
+
+    static let attachmentCacheLimit = 128 * 1024 * 1024
+
+    /// An upload finished (or failed): its chip says so, in whichever chat's draft it is now.
+    func attachmentChanged(_ id: UUID, to state: PendingAttachment.State) {
+        for (key, files) in draftAttachments {
+            guard let index = files.firstIndex(where: { $0.id == id }) else { continue }
+            draftAttachments[key]?[index].state = state
+            return
         }
     }
 

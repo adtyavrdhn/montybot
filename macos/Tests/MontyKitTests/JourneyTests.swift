@@ -252,18 +252,40 @@ struct JourneyTests {
         #expect(app.schedules == [])
     }
 
-    @Test func downloadedFilesCanBeSaved() async throws {
+    @Test func attachedFilesGoWithTheMessage() async throws {
         let app = try await person()
-        let chat = try await say("Download my last three invoices from \(try site("invoices"))", in: app)
-        try await eventually("the reply", seconds: 60) { chat.run?.status == .done || chat.run?.status == .failed }
-        #expect(chat.run?.status == .done)
-        await app.loadFiles()
-        let files = try #require(app.files?.files)
-        #expect(files.count >= 3)
-        let file = try #require(files.first)
-        let downloaded = try #require(await app.download(file))
-        #expect(downloaded.data.count == file.size)
-        #expect(downloaded.name == file.name)
+        let chat = try #require(app.chat)
+        let list = Data("eggs\nmilk\n".utf8)
+        // A 1×1 PNG, as a pasted screenshot would be.
+        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="))
+        chat.attach(list, name: "shopping list.txt", mediaType: "text/plain")
+        chat.attach(png, name: "Pasted image.png", mediaType: "image/png")
+        #expect(chat.isUploading && !chat.canSend)  // the message waits for its files
+        try await eventually("the uploads") { !chat.isUploading }
+        #expect(chat.attachments.map(\.uploaded?.kind) == [.text, .image])
+        #expect(chat.canSend)  // files alone are a message
+
+        await chat.send()
+        #expect(chat.attachments.isEmpty)
+        let id = try #require(chat.threadId)
+        let sent = try #require(try await app.client.thread(id).messages.first { $0.role == .user })
+        #expect(sent.text.isEmpty)
+        // In the order they were uploaded, which (uploading side by side) need not be the order they were added in.
+        #expect(Set(sent.files.map(\.name)) == ["shopping list.txt", "Pasted image.png"])
+        let text = try #require(sent.files.first { $0.name == "shopping list.txt" })
+        let picture = try #require(sent.files.first { $0.isImage })
+        #expect(text.size == list.count && picture.size == png.count)
+        #expect(try await app.client.attachment(id: text.id) == list)
+        #expect(await app.download(picture) == png)
+        try await eventually("the reply") { chat.run?.status.isActive == false }
+
+        // With words too, straight through the client.
+        let again = try await app.client.upload(data: list, name: "list.txt", mediaType: "text/plain")
+        #expect(again.kind == .text && again.size == list.count && again.name == "list.txt")
+        _ = try await app.client.send("Here it is again", to: id, attachments: [again.id])
+        await chat.refresh()
+        let latest = try #require(chat.messages.last { $0.role == .user })
+        #expect(latest.text == "Here it is again" && latest.files.map(\.id) == [again.id])
     }
 
     @Test func aFailedRunSaysSoAndFreesTheChat() async throws {
@@ -310,7 +332,7 @@ struct JourneyTests {
         app.open(.chat(nil))
         app.chat?.draft = "my next task"
         await sending.value
-        app.open(.files)
+        app.open(.memory)
         app.open(.chat(nil))
         #expect(app.chat?.draft == "my next task")
         await app.loadThreads()
