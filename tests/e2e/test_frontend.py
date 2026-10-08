@@ -1118,6 +1118,7 @@ def test_a_chat_connects_a_listed_mcp_server_in_one_click(frontend: tuple[Page, 
     assert ('POST', '/api/integrations/servers', {'name': 'PostHog', 'url': 'https://mcp.posthog.com/mcp',
             'headers': {}}) in mock.calls  # fmt: skip
     page.get_by_role('button', name="I've connected it").click()
+    expect(page.locator('#ask')).to_be_hidden()  # the answer went: wait for it before reading the calls
     assert ('POST', '/api/asks/ask', {'connected': True}) in mock.calls
 
 
