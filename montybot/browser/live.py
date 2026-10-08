@@ -62,6 +62,14 @@ class Tab:
     title: str
     active: bool
     """The tab the frames show and the input goes to."""
+    closable: bool = False
+    """The user may close it: any tab but the run's own, which the agent carries on in."""
+    loading: bool = False
+    """The active tab is loading a page. Other tabs always say False."""
+    can_go_back: bool | None = None
+    can_go_forward: bool | None = None
+    """Whether the active tab has history that way; None when the engine cannot tell (WebDriver). Other tabs say
+    False."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -191,6 +199,37 @@ class OutlineSource(Protocol):
     reader. Chromium's does."""
 
     async def outline(self) -> Outline: ...
+
+
+PageCommand = Literal['back', 'forward', 'reload', 'stop']
+"""A browser's own buttons for the active tab."""
+
+
+@runtime_checkable
+class ControlsSource(Protocol):
+    """A `FrameSource` with a browser's controls: back, forward, reload and stop, and opening and closing tabs.
+    Chromium's and Servo's have them; the polled source does not, and the app refuses them there."""
+
+    async def command(self, command: PageCommand) -> None:
+        """Do `command` in the active tab. Nothing to go back or forward to raises `ActionFailed`; an engine that
+        cannot stop a load raises `ActionFailed` too."""
+        ...
+
+    async def new_tab(self) -> None:
+        """Open a blank tab and make it active."""
+        ...
+
+    async def close_tab(self, tab_id: str) -> None:
+        """Close `tab_id`; if it was active, the tab next to it becomes active. The run's own tab and unknown ids
+        raise `ActionFailed`, so the run always keeps its tab."""
+        ...
+
+
+def neighbour(tab_ids: list[str], closing: str) -> str | None:
+    """The tab that becomes active when `closing` closes, as in a browser: the one after it, else the one before."""
+    index = tab_ids.index(closing)
+    rest = tab_ids[index + 1 :] + tab_ids[:index][::-1]
+    return rest[0] if rest else None
 
 
 @runtime_checkable

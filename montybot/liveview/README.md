@@ -16,6 +16,7 @@ user's browser                     live view app (this package)              bro
 | `wire.py` | The WebSocket messages, both ways |
 | `chromium.py` | `CdpFrameSource`: `Page.startScreencast` for frames, `Input.dispatch*Event` for input, popups followed |
 | `webdriver.py` | `WebDriverFrameSource`: polled Take Screenshot for frames, Perform Actions for input, windows followed |
+| `page_state.py` | `PageState`: the active tab's loading state and history, and back, forward, reload and stop, over CDP |
 | `polling.py` | `PollingFrameSource`: any `BrowserBackend`, from `screenshot()` and `act()` |
 | `auth.py` | `Authenticator`, and `StubAuthenticator` standing in for the web app's sign-in (#8) |
 | `handoffs.py` | `Handoffs` (find a hand-off, report the give-back), and `InMemoryHandoffs` standing in for #4 and the run |
@@ -50,6 +51,13 @@ user's browser                     live view app (this package)              bro
 - **The address bar** (`navigate {url}`) opens an address in the active tab. The app checks it first with
   `refuse_url`: only http and https, and in montybot only public addresses, the same rule the agent's `goto` has. A
   refused address gets an `error` and the connection stays.
+- **The browser's buttons** (`back`, `forward`, `reload`, `stop`, `new_tab`, `close_tab {tab_id}`) are for sources that
+  are a `ControlsSource` (Chromium, Servo); `hello {controls}` says so, and elsewhere each gets an `error`. None needs
+  `refuse_url`: back and forward only revisit the tab's own history, reload repeats its page, and a new tab is blank
+  until the user types an address there, which arrives as a checked `navigate`. The run's own tab cannot be closed (the
+  backend works in it; it never follows popups), so the user always has at least one tab; closing the active tab
+  shows the one after it, else the one before. Each tab says whether it is `closable` and, for the active one, whether
+  it is `loading` and `can_go_back` and `can_go_forward` (left out when the engine cannot tell: Servo).
 
 ## The WebSocket
 
@@ -59,8 +67,8 @@ JSON header (`seq`, `width`, `height` in CSS pixels, `mime`), then the image. Se
 ```
 page -> server   mouse_down {x, y, button}  mouse_move {x, y}  mouse_up {x, y, button}  click {x, y}
                  type {text}  press {key, modifiers}  scroll {delta_x, delta_y, x?, y?}  switch_tab {tab_id}  navigate {url}
-                 viewport {width, height}  give_back
-server -> page   hello {handoff_id, reason}  tabs {tabs}  error {message}  ended {given_back}  + binary frames
+                 viewport {width, height}  give_back  back  forward  reload  stop  new_tab  close_tab {tab_id}
+server -> page   hello {handoff_id, reason, controls}  tabs {tabs}  error {message}  ended {given_back}  + binary frames
 ```
 
 The web app (#8) can embed `/handoff/{id}` in an iframe (set `frame_ancestors`) or talk to the WebSocket itself.

@@ -16,15 +16,18 @@ from montybot.browser.contract import (
     Selector,
     Type,
 )
-from montybot.browser.live import Frame, Outline, OutlineItem, Tab, Tabs
+from montybot.browser.live import Frame, Outline, OutlineItem, Tab, Tabs, neighbour
 from montybot.liveview.activity import Activity
 from montybot.liveview.keys import key_for
 from montybot.liveview.wire import (
     ClientMessage,
+    CloseTab,
+    Command,
     Ended,
     ErrorMessage,
     GiveBackRequest,
     Hello,
+    NewTab,
     OutlineRequest,
     ServerMessage,
     SwitchTab,
@@ -59,6 +62,12 @@ AT = Point(x=10.5, y=20)
         ViewportSize(width=390, height=700),
         GiveBackRequest(),
         OutlineRequest(),
+        Command(kind='back'),
+        Command(kind='forward'),
+        Command(kind='reload'),
+        Command(kind='stop'),
+        NewTab(),
+        CloseTab(tab_id='2'),
     ],
 )
 def test_client_messages_round_trip(message: ClientMessage) -> None:
@@ -79,6 +88,8 @@ def test_client_messages_round_trip(message: ClientMessage) -> None:
         '{"kind": "press", "key": "a", "modifiers": ["Hyper"]}',
         '{"kind": "type"}',
         '{"kind": "switch_tab", "tab_id": 3}',
+        '{"kind": "close_tab"}',
+        '{"kind": "go_back"}',
         '{"kind": "viewport", "width": 390}',
         '{"kind": "viewport", "width": 0, "height": 700}',
         '{"kind": "viewport", "width": 390, "height": 1e9}',
@@ -101,7 +112,23 @@ def test_the_live_view_only_clicks_points_and_types_at_the_caret() -> None:
     'message',
     [
         Hello(handoff_id='h1', reason='Please sign in'),
+        Hello(handoff_id='h1', reason='Please sign in', controls=True),
         Tabs(tabs=(Tab(tab_id='1', url='http://a.test/', title='A', active=True),)),
+        Tabs(
+            tabs=(
+                Tab(tab_id='1', url='http://a.test/', title='A', active=False, can_go_back=False, can_go_forward=False),
+                Tab(
+                    tab_id='2',
+                    url='about:blank',
+                    title='',
+                    active=True,
+                    closable=True,
+                    loading=True,
+                    can_go_back=True,
+                    can_go_forward=False,
+                ),
+            )
+        ),
         ErrorMessage(message='servo does not support press'),
         Ended(given_back=True),
         Outline(
@@ -122,6 +149,18 @@ def test_the_live_view_only_clicks_points_and_types_at_the_caret() -> None:
 )
 def test_server_messages_round_trip(message: ServerMessage) -> None:
     assert decode_server(encode_server(message)) == message
+
+
+def test_an_engine_that_cannot_tell_its_history_leaves_it_out() -> None:
+    text = encode_server(Tabs(tabs=(Tab(tab_id='1', url='', title='', active=True),)))
+    assert 'can_go_back' not in text and 'can_go_forward' not in text
+
+
+def test_closing_a_tab_activates_the_one_after_it_else_the_one_before() -> None:
+    assert neighbour(['1', '2', '3'], '2') == '3'
+    assert neighbour(['1', '2', '3'], '3') == '2'
+    assert neighbour(['1', '2', '3'], '1') == '2'
+    assert neighbour(['1'], '1') is None
 
 
 def test_frames_round_trip() -> None:

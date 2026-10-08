@@ -7,9 +7,15 @@ JSON header of that length (`seq`, `width`, `height`, `mime`), then the image.
     page -> server   mouse_down {x, y, button}   mouse_move {x, y}   mouse_up {x, y, button}   click {x, y}
                      type {text}   press {key, modifiers}   scroll {delta_x, delta_y, x?, y?}   navigate {url}
                      switch_tab {tab_id}   viewport {width, height}   give_back {}   outline {}
-    server -> page   hello {handoff_id, reason}   tabs {tabs: [{tab_id, url, title, active}]}   error {message}
-                     ended {given_back}   outline {title, available, items: [{role, name, x, y, width, height, ...}]}
+                     back {}   forward {}   reload {}   stop {}   new_tab {}   close_tab {tab_id}
+    server -> page   hello {handoff_id, reason, controls}   error {message}   ended {given_back}
+                     tabs {tabs: [{tab_id, url, title, active, closable, loading, can_go_back?, can_go_forward?}]}
+                     outline {title, available, items: [{role, name, x, y, width, height, ...}]}
                      and binary frames
+
+`controls` says whether the browser has back, forward, reload, stop and opening and closing tabs
+(`montybot.browser.live.ControlsSource`); without them the page disables those buttons. A tab leaves out
+`can_go_back` and `can_go_forward` when the engine cannot tell.
 
 `outline` is for a user who drives with a screen reader: what is on the page, in reading order, with where each item
 is (`montybot.browser.live.Outline`). The page asks for it; the server answers once per request.
@@ -36,7 +42,7 @@ from montybot.browser.contract import (
     Scroll,
     Type,
 )
-from montybot.browser.live import Frame, LiveInput, Outline, Tab, Tabs
+from montybot.browser.live import Frame, LiveInput, Outline, PageCommand, Tab, Tabs
 
 MAX_MESSAGE = 64 * 1024
 """The longest text message the server accepts from the page, in characters."""
@@ -63,6 +69,26 @@ class SwitchTab:
 
 
 @dataclass(frozen=True, kw_only=True)
+class Command:
+    """A browser button for the active tab: back, forward, reload or stop. The `kind` is the command."""
+
+    kind: PageCommand
+
+
+@dataclass(frozen=True, kw_only=True)
+class NewTab:
+    """Open a blank tab, ready for an address."""
+
+    kind: Literal['new_tab'] = 'new_tab'
+
+
+@dataclass(frozen=True, kw_only=True)
+class CloseTab:
+    tab_id: str
+    kind: Literal['close_tab'] = 'close_tab'
+
+
+@dataclass(frozen=True, kw_only=True)
 class ViewportSize:
     """The room the page has for the picture, in CSS pixels. Sent when the page connects and when it resizes."""
 
@@ -78,13 +104,15 @@ class GiveBackRequest:
     kind: Literal['give_back'] = 'give_back'
 
 
-ClientMessage = LiveInput | SwitchTab | ViewportSize | GiveBackRequest | OutlineRequest
+ClientMessage = LiveInput | SwitchTab | ViewportSize | GiveBackRequest | OutlineRequest | Command | NewTab | CloseTab
 
 
 @dataclass(frozen=True, kw_only=True)
 class Hello:
     handoff_id: str
     reason: str
+    controls: bool = False
+    """The browser takes `Command`, `NewTab` and `CloseTab`."""
     kind: Literal['hello'] = 'hello'
 
 
@@ -150,6 +178,12 @@ def decode_client(text: str) -> ClientMessage:
             return OutlineRequest()
         case 'navigate':
             return Navigate(url=_str(data, 'url'))
+        case 'back' | 'forward' | 'reload' | 'stop' as command:
+            return Command(kind=cast(PageCommand, command))
+        case 'new_tab':
+            return NewTab()
+        case 'close_tab':
+            return CloseTab(tab_id=_str(data, 'tab_id'))
         case _:
             raise WireError('unknown kind')
 
@@ -175,13 +209,13 @@ def encode_client(message: ClientMessage) -> str:
             data = {'kind': message.kind, 'delta_x': delta_x, 'delta_y': delta_y}
             if at is not None:
                 data |= {'x': at.x, 'y': at.y}
-        case SwitchTab(tab_id=tab_id):
+        case SwitchTab(tab_id=tab_id) | CloseTab(tab_id=tab_id):
             data = {'kind': message.kind, 'tab_id': tab_id}
         case Navigate(url=url):
             data = {'kind': message.kind, 'url': url}
         case ViewportSize(width=width, height=height):
             data = {'kind': message.kind, 'width': width, 'height': height}
-        case GiveBackRequest() | OutlineRequest():
+        case GiveBackRequest() | OutlineRequest() | Command() | NewTab():
             data = {'kind': message.kind}
     return json.dumps(data)
 
@@ -192,13 +226,10 @@ def encode_client(message: ClientMessage) -> str:
 def encode_server(message: ServerMessage) -> str:
     data: dict[str, object]
     match message:
-        case Hello(handoff_id=handoff_id, reason=reason):
-            data = {'kind': message.kind, 'handoff_id': handoff_id, 'reason': reason}
+        case Hello(handoff_id=handoff_id, reason=reason, controls=controls):
+            data = {'kind': message.kind, 'handoff_id': handoff_id, 'reason': reason, 'controls': controls}
         case Tabs(tabs=tabs):
-            data = {
-                'kind': 'tabs',
-                'tabs': [{'tab_id': t.tab_id, 'url': t.url, 'title': t.title, 'active': t.active} for t in tabs],
-            }
+            data = {'kind': 'tabs', 'tabs': [_tab_json(t) for t in tabs]}
         case ErrorMessage(message=text):
             data = {'kind': message.kind, 'message': text}
         case Ended(given_back=given_back):
@@ -212,7 +243,9 @@ def decode_server(text: str) -> ServerMessage:
     data = _object(text)
     match data.get('kind'):
         case 'hello':
-            return Hello(handoff_id=_str(data, 'handoff_id'), reason=_str(data, 'reason'))
+            return Hello(
+                handoff_id=_str(data, 'handoff_id'), reason=_str(data, 'reason'), controls=data.get('controls') is True
+            )
         case 'tabs':
             tabs = data.get('tabs')
             if not isinstance(tabs, list):
@@ -311,5 +344,32 @@ def _tab(data: object) -> Tab:
         raise WireError('a tab must be an object')
     tab = cast(dict[str, object], data)
     return Tab(
-        tab_id=_str(tab, 'tab_id'), url=_str(tab, 'url'), title=_str(tab, 'title'), active=tab.get('active') is True
+        tab_id=_str(tab, 'tab_id'),
+        url=_str(tab, 'url'),
+        title=_str(tab, 'title'),
+        active=tab.get('active') is True,
+        closable=tab.get('closable') is True,
+        loading=tab.get('loading') is True,
+        can_go_back=_optional_bool(tab, 'can_go_back'),
+        can_go_forward=_optional_bool(tab, 'can_go_forward'),
     )
+
+
+def _tab_json(tab: Tab) -> dict[str, object]:
+    data: dict[str, object] = {
+        'tab_id': tab.tab_id,
+        'url': tab.url,
+        'title': tab.title,
+        'active': tab.active,
+        'closable': tab.closable,
+        'loading': tab.loading,
+    }
+    for key, value in (('can_go_back', tab.can_go_back), ('can_go_forward', tab.can_go_forward)):
+        if value is not None:
+            data[key] = value
+    return data
+
+
+def _optional_bool(data: dict[str, object], key: str) -> bool | None:
+    value = data.get(key)
+    return value if isinstance(value, bool) else None
