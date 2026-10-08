@@ -221,6 +221,38 @@ h1, h2 { letter-spacing: -.045em; font-weight: 600; line-height: 1.15; }
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
 
+/* Integrations: connections, the apps to connect, and an MCP server of your own. */
+.section-title { font-size: 1.1rem; margin: 40px 0 0; letter-spacing: -.02em; }
+.app-logo { position: relative; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; background: var(--lavender); color: var(--accent); font-weight: 700; overflow: hidden; }
+.app-logo img { position: absolute; inset: 6px; width: 28px; height: 28px; object-fit: contain; background: var(--lavender); }
+.connection { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.connection > span:nth-child(2) { min-width: 0; }
+.badge.connected { background: #e3f3eb; color: var(--good); }
+.badge.needs_sign_in, .badge.broken { background: #fff0f4; color: var(--bad); }
+#app-search { margin-top: 16px; }
+.app-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin: 16px 0 8px; }
+.app-card { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); min-width: 0; }
+.app-card > span:nth-child(2) { flex: 1; min-width: 0; }
+.app-card strong { display: block; font-size: .92rem; }
+.app-card small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--muted); font-size: .76rem; line-height: 1.4; }
+.app-card button { flex-shrink: 0; font-size: .8rem; padding: .4em .8em; }
+.server-form { max-width: 560px; margin-top: 8px; }
+.server-form label:first-child { margin-top: 0; }
+.header-fields { display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; }
+.server-form button[type="submit"] { margin-top: 4px; }
+.connect-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.connect-head strong { font-size: 1.05rem; }
+.connect-note { color: var(--muted); font-size: .85rem; }
+.connect-note:empty { display: none; }
+/* The page a sign-in comes back to (`api.returned_page`). */
+body.returned { overflow: auto; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.returned-card { max-width: 420px; text-align: center; }
+.returned-card .monty-mark { margin-bottom: 16px; }
+@media (max-width: 600px) {
+  .header-fields { grid-template-columns: 1fr; gap: 0; }
+  .app-grid { grid-template-columns: 1fr; }
+}
+
 /* Workspace paths may be long, especially on a phone. */
 #file-list span { min-width: 0; overflow-wrap: anywhere; }
 #file-list button { flex-shrink: 0; }

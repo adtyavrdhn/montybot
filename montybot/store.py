@@ -352,6 +352,15 @@ async def list_answered_asks(connection: Connection, user_id: str, thread_id: st
     return [ask_from(row) for row in await cursor.fetchall()]
 
 
+async def open_connect_asks(connection: Connection, user_id: str) -> list[Ask]:
+    """The user's unanswered asks to connect a service, from any of their runs."""
+    cursor = await connection.execute(
+        f"SELECT {ASK_COLUMNS} FROM montybot.asks WHERE user_id = %s AND kind = 'connect' AND answer IS NULL",
+        (user_id,),
+    )
+    return [ask_from(row) for row in await cursor.fetchall()]
+
+
 async def close_open_asks(connection: Connection, run_id: str) -> None:
     """Close what a finished run still asks, so a late answer (from an old notification) is refused."""
     await connection.execute(

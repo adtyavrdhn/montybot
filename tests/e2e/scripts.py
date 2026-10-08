@@ -49,7 +49,7 @@ class Turn:
 Script = Callable[[Turn], ModelResponse]
 
 
-def call(tool: str, **args: object) -> ModelResponse:
+def call(tool: str, /, **args: object) -> ModelResponse:
     return ModelResponse(parts=[ToolCallPart(tool_name=tool, args=args)])
 
 
@@ -308,7 +308,52 @@ def my_schedules(turn: Turn) -> ModelResponse:
     return say(turn.last)
 
 
+def my_linear(turn: Turn) -> ModelResponse:
+    """ "yo what's on my linear": connect Linear if it is not, then read the issues."""
+    if not turn.called('connect_integration'):
+        return call('connect_integration', service='Linear', reason='Connect Linear so I can look up your issues.')
+    connected = turn.result_of('connect_integration')
+    if 'is connected' not in connected:
+        return say(connected)
+    if not turn.called('list_integration_tools'):
+        return call('list_integration_tools', integration='linear', search='list issues')
+    if not turn.called('call_integration_tool'):
+        return call('call_integration_tool', integration='linear', tool='LINEAR_LIST_LINEAR_ISSUES', arguments={})
+    return say(turn.last)
+
+
+def new_linear_issue(turn: Turn) -> ModelResponse:
+    """ "Create a Linear issue called X": a tool that changes something, so the user approves it first."""
+    if not turn.called('call_integration_tool'):
+        title = turn.prompt.removeprefix('Create a Linear issue called ').strip()
+        return call(
+            'call_integration_tool', integration='linear', tool='LINEAR_CREATE_LINEAR_ISSUE', arguments={'title': title}
+        )
+    return say(turn.last)
+
+
+def my_notes(turn: Turn) -> ModelResponse:
+    """ "What notes are in mcp:<server>": the user's own MCP server."""
+    key = turn.prompt.split()[-1].rstrip('?')
+    if not turn.called('list_integration_tools'):
+        return call('list_integration_tools', integration=key)
+    if not turn.called('call_integration_tool'):
+        return call('call_integration_tool', integration=key, tool='list_notes', arguments={})
+    return say(f'Your notes: {turn.last}')
+
+
+def acme_wiki(turn: Turn) -> ModelResponse:
+    """A service no app is offered for: the chat offers to add an MCP server for it."""
+    if not turn.called('connect_integration'):
+        return call('connect_integration', service='Acme Wiki', reason='Add your Acme Wiki so I can search it.')
+    return say(turn.result_of('connect_integration'))
+
+
 SCRIPTS: dict[str, Script] = {
+    "yo what's on my linear": my_linear,
+    'Search my Acme Wiki': acme_wiki,
+    'Create a Linear issue called': new_linear_issue,
+    'What notes are in': my_notes,
     'Every Monday at 9, fill my cart at': schedule(
         name='Weekly groceries',
         cron='0 9 * * 1',

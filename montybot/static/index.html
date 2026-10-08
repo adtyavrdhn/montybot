@@ -63,6 +63,7 @@
         <div class="drawer-tools">
           <button id="open-files" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6Zm8 0v5h4"/></svg> Files</button>
           <button id="open-signins" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="4"/><path d="m11 12 8 8 3-3-3-3-2 2"/></svg> Saved browser data</button>
+          <button id="open-integrations" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v4m6-4v4M7 7h10v4a5 5 0 0 1-10 0Zm5 9v5"/></svg> Integrations</button>
           <button id="open-schedules" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16m-12 4h3"/></svg> Schedules</button>
           <button id="enable-notifications" class="link" hidden><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9Zm4 12h4"/></svg> <span id="notifications-label">Notify me when Monty needs me</span></button>
           <button id="signout" class="link">Sign out</button>
@@ -112,6 +113,38 @@
           <p class="muted">Sites with saved cookies or storage, not verified sign-ins. Forget removes a host and its subdomains.</p>
           <ul id="signin-list" aria-label="Saved sites"></ul>
           <p class="page-note">When a site needs you to sign in, Monty will offer browser takeover in your chat.</p>
+        </div>
+      </section>
+      <section id="integrations" class="page" aria-labelledby="integrations-title" hidden>
+        <div class="page-content">
+          <button class="secondary back">Back to chat</button>
+          <div class="page-heading"><span class="page-symbol" aria-hidden="true">⌁</span><h2 id="integrations-title" tabindex="-1">Integrations</h2></div>
+          <p class="muted">Connect the apps you use, and Monty can work in them for you. It asks before it changes anything.</p>
+          <p id="integrations-status" role="status"></p>
+          <h3 class="section-title">Connected</h3>
+          <ul id="connection-list" aria-label="Your connections"></ul>
+          <div id="apps-section" hidden>
+            <h3 class="section-title">Apps</h3>
+            <label for="app-search" class="sr-only">Search apps</label>
+            <input id="app-search" type="search" placeholder="Search apps: Linear, GitHub, Gmail…" autocomplete="off">
+            <div id="app-list" class="app-grid" aria-label="Apps you can connect"></div>
+          </div>
+          <h3 class="section-title">Add an MCP server</h3>
+          <p class="muted">Any MCP server that speaks streamable HTTP. Leave the header empty if it signs you in itself.</p>
+          <form id="server-form" class="server-form">
+            <label for="server-name">Name</label>
+            <input id="server-name" maxlength="60" placeholder="My notes" required>
+            <label for="server-url">Server address</label>
+            <input id="server-url" type="url" maxlength="2000" placeholder="https://example.com/mcp" required>
+            <div class="header-fields">
+              <div><label for="server-header-name">Header (optional)</label>
+              <input id="server-header-name" maxlength="100" placeholder="Authorization" autocomplete="off"></div>
+              <div><label for="server-header-value">Value</label>
+              <input id="server-header-value" type="password" maxlength="4000" placeholder="Bearer …" autocomplete="off"></div>
+            </div>
+            <p id="server-error" class="error" role="alert"></p>
+            <button type="submit" id="add-server">Add server</button>
+          </form>
         </div>
       </section>
       <section id="schedules" class="page" aria-labelledby="schedules-title" hidden>

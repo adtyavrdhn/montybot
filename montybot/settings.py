@@ -86,6 +86,14 @@ class Settings(BaseSettings):
     """Email: `smtp://user:password@host:25`, `smtp+starttls://...:587` or `smtps://...:465`. Unset: no email."""
     mail_from: str = 'Monty <montybot@example.com>'
 
+    composio_api_key: SecretStr | None = None
+    """Composio (montybot.integrations.composio): one-click connections to apps such as Linear, GitHub and Gmail.
+    Unset: users can still add their own MCP servers."""
+    composio_url: str = 'https://backend.composio.dev'
+    composio_user_prefix: str = 'montybot:'
+    """Each user is `<prefix><user id>` in Composio. A Composio project shared with other apps must give each its own
+    prefix: Monty never lists, uses or removes a connection outside it."""
+
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
     history_limit: int = 40

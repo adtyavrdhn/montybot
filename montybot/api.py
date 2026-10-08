@@ -9,6 +9,7 @@ import asyncio
 import base64
 import binascii
 import contextlib
+import html
 import json
 import logging
 import re
@@ -23,13 +24,14 @@ from urllib.parse import quote, urlsplit
 import logfire
 from pydantic import AfterValidator, BaseModel, Field, StrictBool, StringConstraints
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from montybot import approvals, auth, schedules, store, streaming, workflows
 from montybot.browser.contract import (
     BrowserError,
 )
 from montybot.browser.state import BLANK_URL, BrowserState
+from montybot.integrations import IntegrationError, mcp
 from montybot.memory import delete_memory, list_memories
 from montybot.models import ACTIVE, Ask, Run, Schedule, User
 from montybot.notifications import TakenEndpoint, add_subscription, remove_subscription, send_email
@@ -79,6 +81,8 @@ class Answer(BaseModel):
     done: StrictBool | None = None
     """For a hand-off: the user hands the browser back."""
     note: str | None = Field(default=None, max_length=2_000)
+    connected: StrictBool | None = None
+    """For a connect ask: true once they have connected it (the run checks), false for not now."""
 
 
 async def hashed(secret: str) -> str:
@@ -360,6 +364,10 @@ def ask_messages(ask: Ask) -> list[dict[str, str]]:
             return [{'role': 'event', 'text': f'{verdict}: {ask.prompt}'}]
         case 'handoff':
             return [{'role': 'event', 'text': f'You took over the browser: {ask.prompt}'}]
+        case 'connect':
+            name = ask.integration.get('name', 'it')
+            verdict = f'You connected {name}' if answer.get('connected') else f'You chose not to connect {name}'
+            return [{'role': 'event', 'text': verdict}]
 
 
 @auth.signed_in
@@ -477,6 +485,10 @@ async def answer_ask(request: Request, user: User) -> Response:
             if not body.done:
                 return JSONResponse({'detail': 'answer with done: true when you hand the browser back'}, 422)
             value = {'done': True, 'note': body.note or ''}
+        case 'connect':
+            if body.connected is None:
+                return JSONResponse({'detail': 'answer with connected: true or false'}, status_code=422)
+            value = {'connected': body.connected}
     if not await approvals.answer(resources, user.id, ask.id, value):
         return JSONResponse({'detail': 'That was answered already.'}, status_code=409)
     return JSONResponse({'ok': True})
@@ -740,6 +752,179 @@ async def remove_memory(request: Request, user: User) -> Response:
     return JSONResponse({'ok': True}) if deleted else NOT_FOUND
 
 
+# --- integrations: apps through Composio, and the user's own MCP servers (montybot.integrations) ---
+
+HEADER_NAME = re.compile(r'^[A-Za-z0-9!#$%&\'*+.^_`|~-]{1,100}$')
+"""An HTTP header name (RFC 9110 token)."""
+
+
+def check_headers(headers: dict[str, str]) -> dict[str, str]:
+    if len(headers) > 10:
+        raise ValueError('at most 10 headers')
+    for name, value in headers.items():
+        if HEADER_NAME.fullmatch(name) is None or name.lower() in ('host', 'content-length', 'content-type'):
+            raise ValueError('not a header you can set')
+        if len(value) > 4_000 or any(ch in value for ch in '\r\n\0'):
+            raise ValueError('not a header value')
+    return headers
+
+
+class NewServer(BaseModel):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=60)]
+    url: str = Field(min_length=8, max_length=2_000)
+    headers: Annotated[dict[str, str], AfterValidator(check_headers)] = Field(default_factory=dict)
+    """Such as `{"Authorization": "Bearer ..."}`. Left empty for a server with an OAuth sign-in."""
+
+
+APPS_FAILED = 'Connecting apps is not working right now. Please try again in a little while.'
+
+
+def apps_failed(error: IntegrationError) -> Response:
+    logger.warning('Composio failed: %s', error)
+    return JSONResponse({'detail': APPS_FAILED}, status_code=502)
+
+
+@auth.signed_in
+async def list_integrations(request: Request, user: User) -> Response:
+    """The user's connections, apps and MCP servers, and whether this server can connect apps at all."""
+    integrations = resources_of(request).integrations
+    try:
+        connections = await integrations.connections(user.id)
+    except IntegrationError as error:
+        return apps_failed(error)
+    return JSONResponse(
+        {'apps_available': integrations.composio is not None, 'connections': [c.json() for c in connections]},
+        headers={'Cache-Control': 'no-store'},
+    )
+
+
+@auth.signed_in
+async def list_apps(request: Request, user: User) -> Response:
+    """Every app the user can connect with one click."""
+    try:
+        apps = await resources_of(request).integrations.catalog()
+    except IntegrationError as error:
+        return apps_failed(error)
+    return JSONResponse(
+        [
+            {
+                'slug': a.slug,
+                'name': a.name,
+                'logo': a.logo,
+                'description': a.description,
+                'categories': list(a.categories),
+            }
+            for a in apps
+        ]
+    )
+
+
+@auth.signed_in
+async def connect_app(request: Request, user: User) -> Response:
+    """POST. Where the user signs in to the app (`url`), to open in a new window. Composio sends them back to
+    `/integrations/composio/callback`, which wakes any chat waiting for the app."""
+    try:
+        url = await resources_of(request).integrations.connect_link(user.id, str(request.path_params['slug']))
+    except IntegrationError as error:
+        return apps_failed(error)
+    return JSONResponse({'url': url})
+
+
+@auth.signed_in
+async def disconnect_app(request: Request, user: User) -> Response:
+    try:
+        removed = await resources_of(request).integrations.disconnect(user.id, str(request.path_params['account_id']))
+    except IntegrationError as error:
+        return apps_failed(error)
+    return JSONResponse({'ok': True}) if removed else NOT_FOUND
+
+
+@auth.signed_in
+async def add_server(request: Request, user: User) -> Response:
+    """POST. Adds the server once it answers as an MCP server. One with an OAuth sign-in comes back with `sign_in_url`
+    for the user to open; it is ready once they have signed in."""
+    body = NewServer.model_validate_json(await request.body())
+    resources = resources_of(request)
+    try:
+        connection, sign_in_url = await resources.integrations.add_server(
+            user.id, name=body.name, url=body.url, headers=body.headers
+        )
+    except mcp.NameTaken:
+        return JSONResponse({'detail': f'You have a server called {body.name} already.'}, status_code=409)
+    except (IntegrationError, ValueError) as error:
+        return JSONResponse({'detail': str(error)}, status_code=400)
+    if sign_in_url is None:
+        await approvals.connected(resources, user.id, provider='mcp')
+    return JSONResponse({'connection': connection.json(), 'sign_in_url': sign_in_url}, status_code=201)
+
+
+@auth.signed_in
+async def sign_in_server(request: Request, user: User) -> Response:
+    """POST. Where the user signs in to their server (again)."""
+    url = await resources_of(request).integrations.sign_in_link(user.id, str(request.path_params['server_id']))
+    return JSONResponse({'url': url}) if url else NOT_FOUND
+
+
+@auth.signed_in
+async def remove_server(request: Request, user: User) -> Response:
+    removed = await resources_of(request).integrations.remove_server(user.id, str(request.path_params['server_id']))
+    return JSONResponse({'ok': True}) if removed else NOT_FOUND
+
+
+# The pages a sign-in comes back to. Not tied to the web app's session: on a Mac the user signs in in their own
+# browser. Only the state counts: signed by us (Composio), or one we stored and use once (MCP OAuth).
+
+
+async def composio_callback(request: Request) -> Response:
+    resources = resources_of(request)
+    try:
+        user_id, toolkit, connected = await resources.integrations.composio_returned(
+            request.query_params.get('state', '')
+        )
+    except IntegrationError as error:
+        return returned_page(False, str(error))
+    try:
+        name = next((a.name for a in await resources.integrations.catalog() if a.slug == toolkit), toolkit)
+    except IntegrationError:
+        name = toolkit  # only its name is missing; the connection is what counts
+    if not connected:
+        return returned_page(False, f'{name} was not connected. Go back to Monty and try again.')
+    await approvals.connected(resources, user_id, provider='composio', key=toolkit)
+    return returned_page(True, f'{name} is connected. You can close this window and go back to Monty.')
+
+
+async def mcp_callback(request: Request) -> Response:
+    resources = resources_of(request)
+    query = request.query_params
+    if 'error' in query or 'code' not in query:
+        return returned_page(False, 'The sign-in was not finished. Go back to Monty and try again.')
+    try:
+        user_id, connection = await resources.integrations.server_signed_in(
+            query.get('state', ''), query['code'], query.get('iss')
+        )
+    except IntegrationError as error:
+        return returned_page(False, str(error))
+    await approvals.connected(resources, user_id, provider='mcp')
+    return returned_page(True, f'{connection.name} is connected. You can close this window and go back to Monty.')
+
+
+def returned_page(ok: bool, text: str) -> Response:
+    """Tells the user how the sign-in went. Opened from the web app, it tells the app (on a same-origin
+    BroadcastChannel: the app cut the window's `opener`, so the sign-in pages could not reach the app) and closes."""
+    title = 'Connected' if ok else 'Not connected'
+    body = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title} | Monty</title><link rel="stylesheet" href="/static/app.css"></head>
+<body class="returned"><main class="returned-card"><span class="monty-mark" aria-hidden="true">m<span>•</span></span>
+<h1>{title}</h1><p>{html.escape(text)}</p></main>
+<script>
+if ('BroadcastChannel' in window) new BroadcastChannel('montybot-integrations').postMessage({{ ok: {'true' if ok else 'false'} }});
+{'setTimeout(() => window.close(), 1500);' if ok else ''}
+</script></body></html>"""
+    headers = {'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer'}
+    return HTMLResponse(body, status_code=200 if ok else 400, headers=headers)
+
+
 # --- the apps' own telemetry (`montybot/observability.py`) ---
 
 OTLP_TYPES = ('application/json', 'application/x-protobuf')
@@ -820,8 +1005,13 @@ def schedule_json(schedule: Schedule, paused: bool, last: Run | None, now: datet
 
 
 def ask_json(ask: Ask) -> dict[str, Any]:
-    """A hand-off's id stays on the server: the live view finds it from the signed-in user's open ask."""
-    return {'id': ask.id, 'kind': ask.kind, 'prompt': ask.prompt}
+    """A hand-off's id stays on the server: the live view finds it from the signed-in user's open ask. A connect ask
+    says what to connect (`integration`: `provider`, `key`, `name`, `logo`, and `server_id` to sign in to a server
+    again)."""
+    shown: dict[str, Any] = {'id': ask.id, 'kind': ask.kind, 'prompt': ask.prompt}
+    if ask.kind == 'connect':
+        shown['integration'] = ask.integration
+    return shown
 
 
 # --- workspace results (no filenames in request URLs or telemetry) ---

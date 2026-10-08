@@ -19,13 +19,19 @@ const CONTENT = ['text', 'answer', 'reason', 'prompt', 'error_message'];
 const PARAMETERS = {
   threads: 'thread_id', runs: 'run_id', asks: 'ask_id', schedules: 'schedule_id', memories: 'memory_id', 'sign-ins': 'site',
 };
+// Under /api/integrations/: the app after `apps` (but not the word `accounts`), and the ids after `accounts` and
+// `servers`. Composio's account ids look like words (`ca_OmfoGFIzpmEu`), so they are named, not guessed at.
+const INTEGRATIONS = { apps: 'app', accounts: 'account_id', servers: 'server_id' };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TOKEN = /^(?=.*\d)[^/]{16,}$|^[^/]{32,}$/;  // long, and with a digit or very long: an id of some kind
 const URLISH = /\b(?:https?:\/\/|blob:|data:)[^\s"'<>`()]+|(?<![\w/.])\/(?:api|live|static)\/[^\s"'<>`()]*/g;
 const URL_KEYS = ['http.url', 'url.full', 'http.referrer', 'logfire.page.url.full'];
 const PATH_KEYS = ['http.target', 'url.path', 'logfire.page.url.path'];
 const DROPPED_KEYS = ['url.query', 'url.fragment'];
-const PAGES = { '': '/new', '#': '/new', '#/new': '/new', '#/files': '/files', '#/sign-ins': '/sign-ins', '#/schedules': '/schedules' };
+const PAGES = {
+  '': '/new', '#': '/new', '#/new': '/new', '#/files': '/files', '#/sign-ins': '/sign-ins', '#/integrations': '/integrations',
+  '#/schedules': '/schedules',
+};
 const ERROR_LEVEL = 17;  // Logfire's `error`
 
 let includeContent = false;
@@ -36,8 +42,10 @@ export function routePath(path) {
   path = path.split(/[?#]/)[0];
   if (/^\/live(\/|$)/.test(path)) return '/live/*';  // hand-off ids and links
   const parts = path.split('/');
+  const integrations = parts[1] === 'api' && parts[2] === 'integrations';
   return parts.map((part, i) => {
-    const name = parts[i - 2] === 'api' && PARAMETERS[parts[i - 1]];
+    const name = (parts[i - 2] === 'api' && PARAMETERS[parts[i - 1]])
+      || (integrations && i > 3 && part !== 'accounts' && INTEGRATIONS[parts[i - 1]]);
     if (part && name) return `{${name}}`;
     return UUID.test(part) || TOKEN.test(part) ? '{id}' : part;
   }).join('/');

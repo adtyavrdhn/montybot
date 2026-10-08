@@ -31,6 +31,7 @@ WHAT = {
     'question': 'Monty has a question for you.',
     'approval': 'Monty needs your approval before it goes on.',
     'handoff': 'Monty needs you to take over its browser for a moment.',
+    'connect': 'Monty needs you to connect an app to carry on.',
     'finished': 'Monty finished a scheduled task.',
     'failed': 'Monty could not finish a scheduled task.',
     'found': 'Monty found what you asked it to watch for.',
