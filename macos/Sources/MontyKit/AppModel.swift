@@ -153,6 +153,9 @@ public final class AppModel {
         didSet { if let id = persistedUser { defaults.set(squirrelName, forKey: "squirrelName.\(id)") } }
     }
     public static let squirrelNameLimit = 24
+    /// What the app calls the user's own Monty, the one that works, asks and remembers for them: the name they gave
+    /// their squirrel, "Monty" until they pick one. Plain "Monty" is the product (the app, its server, signing in).
+    public var montyName: String { squirrelName.isEmpty ? "Monty" : squirrelName }
     /// Chats that finished while the user was not looking at them, until they open them.
     public private(set) var unseen: Set<String> = [] {
         didSet { if let id = persistedUser { defaults.set(Array(unseen), forKey: "unseen.\(id)") } }
@@ -759,7 +762,7 @@ public final class AppModel {
                 guard let detail = try? await client.thread(thread.id) else { untold(thread, before); continue }
                 guard let ask = detail.run?.ask, notified.insert(ask.id).inserted else { continue }
                 let kind = Notice.Kind(rawValue: ask.kind.rawValue) ?? .approval  // a kind not known yet: no reply box
-                let notice = Notice(kind: kind, threadId: thread.id, title: Self.headline(for: ask.kind), body: ask.prompt, askId: ask.id)
+                let notice = Notice(kind: kind, threadId: thread.id, title: Self.headline(for: ask.kind, from: montyName), body: ask.prompt, askId: ask.id)
                 notify(notice)
                 noticePosted(notice, run: detail.run?.id, ask: ask.id)
             } else if thread.status == nil, before?.isActive == true, !looking {
@@ -768,10 +771,10 @@ public final class AppModel {
                 let notice: Notice
                 switch run.status {
                 case .done:
-                    let reply = run.output ?? detail.messages.last(where: { $0.role == .assistant })?.text ?? "Monty finished."
+                    let reply = run.output ?? detail.messages.last(where: { $0.role == .assistant })?.text ?? "\(montyName) finished."
                     notice = Notice(kind: .finished, threadId: thread.id, title: thread.title.readableTitle, body: Self.plain(reply))
                 case .failed:
-                    notice = Notice(kind: .finished, threadId: thread.id, title: thread.title.readableTitle, body: "Monty couldn't finish this task.")
+                    notice = Notice(kind: .finished, threadId: thread.id, title: thread.title.readableTitle, body: "\(montyName) couldn't finish this task.")
                 default:
                     continue  // stopped: the user did that themselves
                 }
@@ -792,13 +795,14 @@ public final class AppModel {
         }
     }
 
-    public nonisolated static func headline(for kind: AskKind) -> String {
+    /// The title of an ask: what `monty` (`montyName`) wants from the user.
+    public nonisolated static func headline(for kind: AskKind, from monty: String) -> String {
         switch kind {
-        case .question: return "Monty has a question"
-        case .approval: return "Monty needs your OK"
-        case .handoff: return "Monty needs you in the browser"
-        case .connect: return "Monty needs an app connected"
-        case .other: return "Monty needs you"
+        case .question: return "\(monty) has a question"
+        case .approval: return "\(monty) needs your OK"
+        case .handoff: return "\(monty) needs you in the browser"
+        case .connect: return "\(monty) needs an app connected"
+        case .other: return "\(monty) needs you"
         }
     }
 

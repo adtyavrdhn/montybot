@@ -12,7 +12,7 @@ struct IntegrationsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Integrations").font(.system(size: 20, weight: .semibold)).accessibilityAddTraits(.isHeader)
-                Text("Connect the apps you use, and Monty can work in them for you. It asks before it changes anything.")
+                Text("Connect the apps you use, and \(app.montyName) can work in them for you. It asks before it changes anything.")
                     .font(.system(size: 13)).foregroundStyle(Palette.onSurfaceVariant).padding(.top, 4)
                 if let error = app.libraryError, app.integrations != nil {
                     NoticeBar(notice: .error(error)) { app.libraryError = nil }.padding(.top, 16)
@@ -47,7 +47,7 @@ struct IntegrationsView: View {
         .confirmationDialog("Remove \(removing?.name ?? "")?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
             Button("Remove", role: .destructive) { if let removing { Task { await app.remove(removing) } } }
         } message: {
-            Text("Monty will no longer be able to use it. You can connect it again later.")
+            Text("\(app.montyName) will no longer be able to use it. You can connect it again later.")
         }
     }
 
@@ -62,7 +62,7 @@ struct IntegrationsView: View {
     @ViewBuilder private func connected(_ connections: [Connection]) -> some View {
         if connections.isEmpty {
             EmptyState(icon: "puzzlepiece.extension", title: "Nothing connected yet",
-                       text: "Connect an app below, or ask Monty about one in a chat.").card(padding: 0)
+                       text: "Connect an app below, or ask \(app.montyName) about one in a chat.").card(padding: 0)
         } else {
             VStack(spacing: 0) {
                 ForEach(Array(connections.enumerated()), id: \.element.id) { index, connection in
