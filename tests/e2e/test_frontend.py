@@ -1076,8 +1076,8 @@ def test_a_chat_asks_to_connect_an_app(frontend: tuple[Page, MockAPI], connected
         page.get_by_role('button', name="I've connected it").click()
     else:
         page.get_by_role('button', name='Not now').click()
+    expect(page.locator('#ask')).to_be_hidden()  # the answer went: wait for it before reading the calls
     assert ('POST', '/api/asks/ask', {'connected': connected}) in mock.calls
-    expect(page.locator('#ask')).to_be_hidden()
 
 
 def test_a_service_without_an_app_offers_an_mcp_server(frontend: tuple[Page, MockAPI]) -> None:
