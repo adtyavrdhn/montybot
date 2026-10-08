@@ -21,7 +21,13 @@ DOMAIN=$DOMAIN sh ~/montybot-release/deploy/bootstrap.sh
 rm -rf /opt/montybot/src && mv ~/montybot-release /opt/montybot/src
 echo "$COMMIT" > /opt/montybot/src/COMMIT
 cd /opt/montybot/src/deploy
-compose() { sudo --preserve-env=COMPOSE_PROFILES,MONTY_URL,COMMIT docker compose --env-file /opt/montybot/.env "$@"; }
+# VM-only overrides, such as a browser engine being tried out, live outside src/ so a deploy keeps them (README).
+export COMPOSE_FILE=compose.yaml
+if [ -f /opt/montybot/compose.local.yaml ]; then
+    COMPOSE_FILE=compose.yaml:/opt/montybot/compose.local.yaml
+    echo "With the VM's own overrides, /opt/montybot/compose.local.yaml"
+fi
+compose() { sudo --preserve-env=COMPOSE_PROFILES,COMPOSE_FILE,MONTY_URL,COMMIT docker compose --env-file /opt/montybot/.env "$@"; }
 
 . /opt/montybot/.env
 # With MONTY_EXECUTION_KEY, the agent's code runs on the hosted Monty sandboxes (MONTY_URL in .env overrides the URL),
