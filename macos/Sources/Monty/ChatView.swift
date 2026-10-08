@@ -179,9 +179,10 @@ struct ChatView: View {
                     if let ask = chat.ask {
                         VStack(alignment: .leading, spacing: 8) {
                             if let notice = chat.notice { NoticeBar(notice: notice) { chat.notice = nil } }
-                            AskCard(chat: chat, ask: ask)
-                                .id(ask.id)
-                                .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
+                            BoundedHeight {
+                                AskCard(chat: chat, ask: ask).id(ask.id)
+                            }
+                            .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
                             // What the user had written, or queued, stays in sight under the card, for after.
                             if chat.queued != nil || !chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                 Composer(chat: chat)
@@ -445,6 +446,24 @@ struct StepsView: View {
 
 // MARK: - what Monty asks
 
+/// Its content at its own height, up to `limit`, and scrolling beyond: what sits under the chat can never ask for
+/// more height than the window has. (A card measured at the column's narrowest once claimed thousands of points, and
+/// the whole window was laid out taller than itself: an empty sidebar, an empty browser panel, the chat cut off.)
+struct BoundedHeight<Content: View>: View {
+    var limit: CGFloat = 320
+    @ViewBuilder let content: Content
+    @State private var height: CGFloat = 120
+
+    var body: some View {
+        ScrollView(.vertical) {
+            content.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollIndicators(.automatic)
+        .frame(height: min(height, limit))
+    }
+}
+
 struct AskCard: View {
     @Bindable var chat: ChatModel
     let ask: Ask
@@ -536,7 +555,6 @@ struct AskCard: View {
                 Text("You sign in on the page yourself, and Monty waits until you're done. Password managers can't fill it in: copy your password and paste it with ⌘V. Afterwards Monty stays signed in to this site; you can remove it in Saved sign-ins.")
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.onSurfaceVariant)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -818,7 +836,21 @@ struct BrowserPanel: View {
                 .aspectRatio(16 / 10, contentMode: .fit)
                 .onTapGesture(count: 2) { chat.browserExpanded = true }
                 .help("Double-click to make it fill the window")
-            if let activity = chat.activity {
+            if chat.ask?.kind == .handoff {
+                // Monty is stopped at a sign-in: what the user came to the browser for is to do it.
+                Button { Task { await chat.takeOver() } } label: {
+                    HStack(spacing: 6) {
+                        if chat.takingOver { ProgressView().controlSize(.mini).tint(Palette.onLink) }
+                        Text("Take over the browser")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.primary)
+                .disabled(chat.takingOver)
+                Text("Monty is waiting for you to sign in on this page.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.onSurfaceVariant)
+            } else if let activity = chat.activity {
                 Text(activity).font(.mono(12)).foregroundStyle(Palette.onSurfaceVariant).lineLimit(2)
             }
             Spacer()

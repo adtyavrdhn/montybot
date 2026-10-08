@@ -85,6 +85,9 @@ enum Tour {
         if let shop = site["shop"], let chat = await say("Order eggs from \(shop)") {
             await wait { chat.ask?.kind == .handoff }
             await snap("ask-handoff")
+            chat.watching = true  // the browser beside a hand-off, as the dogfood found it laid out taller than the window
+            await snap("ask-handoff-watching")
+            chat.watching = false
             chat.browserExpanded = true
             await snap("browser-expanded")
             chat.browserExpanded = false
@@ -199,6 +202,11 @@ enum Tour {
         try? bitmap.representation(using: .png, properties: [:])?.write(to: directory.appending(path: "\(name).png"))
 
         var lines = ["# \(name): window \(Int(window.frame.width))×\(Int(window.frame.height)), \(NSApp.effectiveAppearance.name.rawValue)"]
+        // The layout asking for more room than the window has is laid out larger than it and shown clipped: an empty
+        // sidebar, the chat's bottom out of sight.
+        let needs = window.contentMinSize, has = window.contentView?.frame.size ?? window.frame.size  // under the title bar too
+        let tooBig = needs.height > has.height + 1 || needs.width > has.width + 1
+        lines.append("# layout needs \(Int(needs.width))×\(Int(needs.height)) of \(Int(has.width))×\(Int(has.height))\(tooBig ? ": TOO BIG FOR THE WINDOW" : "")")
         if let app = current {
             lines.append("# model: " + app.threads.map { "\($0.title.prefix(20))=\($0.status?.rawValue ?? "-")" }.joined(separator: ", "))
         }
@@ -212,8 +220,15 @@ enum Tour {
         while !FileManager.default.fileExists(atPath: answer.path), Date() < deadline {
             try? await Task.sleep(for: .milliseconds(100))  // the main thread stays free to answer the reader
         }
-        lines.append((try? String(contentsOf: answer, encoding: .utf8))
-            ?? "(no accessibility dump: run the tour with scripts/tour.sh, on an unlocked Mac)")
+        let tree = try? String(contentsOf: answer, encoding: .utf8)
+        lines.append(tree ?? "(no accessibility dump: run the tour with scripts/tour.sh, on an unlocked Mac)")
+        // Anything laid out well outside the window: the content was laid out larger than the window, and clipped.
+        let outside = (tree ?? "").split(separator: "\n").filter { line in
+            guard let at = line.range(of: #"@-?\d+,-?\d+"#, options: .regularExpression) else { return false }
+            let y = Int(line[at].dropFirst().split(separator: ",")[1]) ?? 0
+            return y < -60 || y > Int(window.frame.height) + 60
+        }
+        if !outside.isEmpty { lines.insert("# LAID OUT OUTSIDE THE WINDOW: \(outside.count) elements", at: 2) }
         try? FileManager.default.removeItem(at: want)
         try? FileManager.default.removeItem(at: answer)
         try? lines.joined(separator: "\n").write(to: directory.appending(path: "\(name).txt"), atomically: true, encoding: .utf8)
