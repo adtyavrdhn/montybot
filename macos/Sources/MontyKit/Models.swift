@@ -198,28 +198,34 @@ public struct Ask: Codable, Equatable, Identifiable, Sendable {
 // MARK: integrations: apps through Composio, and the user's own MCP servers
 
 /// What a chat asks the user to connect: an app (`composio`, `key` its slug), their own server to sign in to again
-/// (`mcp` with `serverId`), or (`mcp` without one) an MCP server for a service no app is offered for.
+/// (`mcp` with `serverId`), a known MCP server to add (`mcp` with `url`, such as PostHog's), or (`mcp` with neither)
+/// an MCP server for a service no app is offered for.
 public struct Offer: Codable, Equatable, Sendable {
     public let provider: String
     public let key: String
     public let name: String
     public let logo: String
     public let serverId: String?
+    /// The address of a known MCP server to add; older servers don't send it.
+    public let url: String?
 
     enum CodingKeys: String, CodingKey {
-        case provider, key, name, logo
+        case provider, key, name, logo, url
         case serverId = "server_id"
     }
 
-    public init(provider: String, key: String, name: String, logo: String = "", serverId: String? = nil) {
+    public init(provider: String, key: String, name: String, logo: String = "", serverId: String? = nil, url: String? = nil) {
         self.provider = provider
         self.key = key
         self.name = name
         self.logo = logo
         self.serverId = serverId
+        self.url = url
     }
 
     public var isApp: Bool { provider == "composio" }
+    /// A known MCP server Monty adds in one click, rather than one the user adds by hand.
+    public var isPreset: Bool { provider == "mcp" && serverId == nil && url != nil }
 }
 
 /// One of the user's connections.
@@ -257,19 +263,61 @@ public struct Integrations: Codable, Equatable, Sendable {
     }
 }
 
-/// An app the user can connect in one click.
+/// An integration the user can connect in one click: an app through Composio, or a known MCP server (`mcp`, with its
+/// `url` and `host`). Featured ones have a `kind` (chat, code, issues…) and come first, in the order to show them.
+/// Older servers send only the slug, name, logo, description and categories: all apps, none featured.
 public struct CatalogApp: Codable, Equatable, Identifiable, Sendable {
+    public let key: String
     public let slug: String
     public let name: String
     public let logo: String
     public let description: String
     public let categories: [String]
-    public var id: String { slug }
+    public let kind: String?
+    /// The kind as a heading says it: "Chat", "Issues & projects".
+    public let kindLabel: String?
+    public let featured: Bool
+    /// `composio` or `mcp`.
+    public let provider: String
+    /// A known MCP server's address and host (its connection's `detail`); nil for an app.
+    public let url: String?
+    public let host: String?
+    public var id: String { key }
 
-    /// Whether `query` is in its name, slug, description or categories.
+    enum CodingKeys: String, CodingKey {
+        case key, slug, name, logo, description, categories, kind, featured, provider, url, host
+        case kindLabel = "kind_label"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let slug = try container.decodeIfPresent(String.self, forKey: .slug)
+        key = try container.decodeIfPresent(String.self, forKey: .key) ?? slug ?? container.decode(String.self, forKey: .slug)
+        self.slug = slug ?? key
+        name = try container.decode(String.self, forKey: .name)
+        logo = try container.decodeIfPresent(String.self, forKey: .logo) ?? ""
+        description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
+        categories = try container.decodeIfPresent([String].self, forKey: .categories) ?? []
+        kind = try container.decodeIfPresent(String.self, forKey: .kind)
+        kindLabel = try container.decodeIfPresent(String.self, forKey: .kindLabel)
+        featured = try container.decodeIfPresent(Bool.self, forKey: .featured) ?? false
+        provider = try container.decodeIfPresent(String.self, forKey: .provider) ?? "composio"
+        url = try container.decodeIfPresent(String.self, forKey: .url)
+        host = try container.decodeIfPresent(String.self, forKey: .host)
+    }
+
+    public var isApp: Bool { provider == "composio" }
+
+    /// Whether `connection` is this one: the same app, or a server at this preset's host.
+    public func matches(_ connection: Connection) -> Bool {
+        isApp ? connection.isApp && connection.key == key : !connection.isApp && host != nil && connection.detail == host
+    }
+
+    /// Whether `query` is in its name, key, description, kind or categories.
     public func matches(_ query: String) -> Bool {
         let query = query.trimmingCharacters(in: .whitespaces)
-        return query.isEmpty || ([name, slug, description] + categories).contains { $0.localizedCaseInsensitiveContains(query) }
+        return query.isEmpty
+            || ([name, key, description, kindLabel ?? ""] + categories).contains { $0.localizedCaseInsensitiveContains(query) }
     }
 }
 

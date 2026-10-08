@@ -830,23 +830,12 @@ async def list_integrations(request: Request, user: User) -> Response:
 
 @auth.signed_in
 async def list_apps(request: Request, user: User) -> Response:
-    """Every app the user can connect with one click."""
+    """What the Integrations page lists (`montybot.integrations.catalog.entries`): the integrations people use most,
+    by kind, then every other app the user can connect with one click."""
     try:
-        apps = await resources_of(request).integrations.catalog()
+        return JSONResponse(await resources_of(request).integrations.listing())
     except IntegrationError as error:
         return apps_failed(error)
-    return JSONResponse(
-        [
-            {
-                'slug': a.slug,
-                'name': a.name,
-                'logo': a.logo,
-                'description': a.description,
-                'categories': list(a.categories),
-            }
-            for a in apps
-        ]
-    )
 
 
 @auth.signed_in

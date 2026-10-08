@@ -353,6 +353,35 @@ import Testing
         #expect(APIError.server(status: 409, detail: "that was answered already").localizedDescription == "That was answered already.")
         #expect(APIError.server(status: 500, detail: nil).localizedDescription.contains("server had a problem"))
     }
+
+    @Test func featuredIntegrationsAndKnownMcpServers() throws {
+        let json = #"""
+        [{"key": "posthog", "slug": "posthog", "name": "PostHog", "logo": "https://posthog.com/logo.png", "description": "Product analytics",
+          "categories": ["analytics"], "kind": "analytics", "kind_label": "Analytics", "featured": true, "provider": "mcp",
+          "url": "https://mcp.posthog.com/mcp", "host": "mcp.posthog.com"},
+         {"key": "linear", "slug": "linear", "name": "Linear", "logo": "", "description": "Issue tracking", "categories": [],
+          "kind": "issues", "kind_label": "Issues & projects", "featured": true, "provider": "composio", "url": null, "host": null}]
+        """#
+        let apps = try JSONDecoder().decode([CatalogApp].self, from: Data(json.utf8))
+        let posthog = apps[0], linear = apps[1]
+        #expect(posthog.key == "posthog" && posthog.featured && !posthog.isApp && posthog.kindLabel == "Analytics")
+        #expect(posthog.url == "https://mcp.posthog.com/mcp" && posthog.host == "mcp.posthog.com")
+        #expect(linear.isApp && linear.kind == "issues" && linear.url == nil && linear.matches("projects"))
+        // A connection is an entry's when it is the same app, or a server at the preset's host.
+        func connection(_ key: String, _ provider: String, _ detail: String) throws -> Connection {
+            let json = #"{"id": "x", "key": "\#(key)", "provider": "\#(provider)", "name": "N", "detail": "\#(detail)", "logo": "", "state": "connected"}"#
+            return try JSONDecoder().decode(Connection.self, from: Data(json.utf8))
+        }
+        #expect(posthog.matches(try connection("mcp:posthog", "mcp", "mcp.posthog.com")))
+        #expect(!posthog.matches(try connection("mcp:other", "mcp", "other.example.com")))
+        #expect(linear.matches(try connection("linear", "composio", "Issue tracking")))
+        #expect(!linear.matches(try connection("mcp:linear", "mcp", "mcp.linear.app")))
+        // A chat offering the known server carries its address, to add it in one click.
+        let ask = #"{"id": "a", "kind": "connect", "prompt": "Connect PostHog", "integration": {"provider": "mcp", "key": "posthog", "name": "PostHog", "logo": "", "url": "https://mcp.posthog.com/mcp"}}"#
+        let offer = try #require(try JSONDecoder().decode(Ask.self, from: Data(ask.utf8)).integration)
+        #expect(offer == Offer(provider: "mcp", key: "posthog", name: "PostHog", url: "https://mcp.posthog.com/mcp"))
+        #expect(offer.isPreset && !offer.isApp)
+    }
 }
 
 @Suite struct MarkdownTests {

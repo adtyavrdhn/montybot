@@ -25,7 +25,7 @@ from typing import Any, Literal
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from montybot.db import Pool
-from montybot.integrations import egress, mcp, oauth
+from montybot.integrations import catalog, egress, mcp, oauth
 from montybot.integrations.base import IntegrationError, Tool
 from montybot.integrations.composio import Composio, Toolkit
 from montybot.settings import Settings
@@ -73,12 +73,16 @@ class Offer:
 
     provider: Provider
     key: str
-    """The app's slug, or empty for an MCP server the user has yet to add."""
+    """The app's slug, or the listed MCP server's key (`posthog`), or empty for an MCP server the user has yet to
+    find and add."""
     name: str
     logo: str = ''
+    url: str = ''
+    """A listed MCP server's address (`catalog.FEATURED`): the chat adds it, and the user signs in, in one click."""
 
     def json(self) -> dict[str, str]:
-        return {'provider': self.provider, 'key': self.key, 'name': self.name, 'logo': self.logo}
+        shown = {'provider': self.provider, 'key': self.key, 'name': self.name, 'logo': self.logo}
+        return {**shown, 'url': self.url} if self.url else shown
 
 
 def normalized(text: str) -> str:
@@ -147,6 +151,10 @@ class Integrations:
             return []
         return sorted((await self.composio.catalog()).values(), key=lambda app: app.name.lower())
 
+    async def listing(self) -> list[dict[str, object]]:
+        """What the Integrations page lists (`catalog.entries`): MCP servers there even without Composio."""
+        return catalog.entries(await self.composio.catalog() if self.composio is not None else {})
+
     async def offer(self, user_id: str, service: str) -> Connection | Offer:
         """For a service the model named ("linear", "Linear issues"): the user's connection to it if they have one,
         else what they can connect for it."""
@@ -154,12 +162,20 @@ class Integrations:
         for connection in await self.connections(user_id):
             if wanted in (normalized(connection.key.removeprefix(MCP_PREFIX)), normalized(connection.name)):
                 return connection
+        if (preset := catalog.mcp_preset(service)) is not None:
+            # Added already, under a name of the user's own: the same server, whatever it is called.
+            for connection in await self.connections(user_id):
+                if connection.provider == 'mcp' and connection.detail == preset.host:
+                    return connection
+            return Offer(
+                provider='mcp', key=preset.key, name=preset.name, logo=f'{catalog.LOGOS}{preset.key}', url=preset.url
+            )
         if self.composio is not None:
-            catalog = await self.composio.catalog()
-            exact = next((a for a in catalog.values() if wanted in (normalized(a.slug), normalized(a.name))), None)
+            apps = await self.composio.catalog()
+            exact = next((a for a in apps.values() if wanted in (normalized(a.slug), normalized(a.name))), None)
             # "Linear issues" is Linear: the longest app name the words start with, of three letters or more.
             starts = [
-                a for a in catalog.values() if len(normalized(a.name)) >= 3 and wanted.startswith(normalized(a.name))
+                a for a in apps.values() if len(normalized(a.name)) >= 3 and wanted.startswith(normalized(a.name))
             ]
             app = exact or max(starts, key=lambda a: len(normalized(a.name)), default=None)
             if app is not None:

@@ -31,7 +31,6 @@ const state = {
   offlineNoticed: false,  // a background refresh has told the user they are offline, since the server last answered
   takeoverEnd: null,  // ends the open live view's span
   takeoverClosedBy: null,  // why the app closed the live view, for that span
-  connections: [],  // the user's integrations, as the Integrations page last loaded them
   serverName: null,  // a name for the add-server form, from a chat's "Add an MCP server"
   pending: [],  // the files in the composer, for the next message: see `addFiles`
 };
@@ -693,7 +692,13 @@ function connectCard(ask) {
   const done = button("I've connected it", 'secondary', () => answer(ask, { connected: true }));
   done.hidden = true;
   const started = (text) => { done.hidden = false; note.textContent = text; };
-  if (offered.provider === 'composio') {
+  if (offered.provider === 'mcp' && offered.url) {
+    row.append(button(`Connect ${name}`, 'good', async () => {
+      const signingIn = await connectPreset(offered);
+      started(signingIn ? `Finish signing in to ${name} in the window that opened. Monty carries on once you have.`
+        : `${name} is connected.`);
+    }));
+  } else if (offered.provider === 'composio') {
     row.append(button(`Connect ${name}`, 'good', async () => {
       await openSignIn('connect app', { app: offered.key }, () => (
         api(`/api/integrations/apps/${encodeURIComponent(offered.key)}/connect`, { method: 'POST', body: {} })));
@@ -734,7 +739,8 @@ function logo(url, name) {
 async function openSignIn(action, attributes, request) {
   // A sign-in happens in a window of its own. It is opened now, in the click, as a window opened after the request
   // would be blocked; and it is cut from this page (`opener`), as the sign-in pages are other sites. The page they
-  // come back to tells this one on a BroadcastChannel.
+  // come back to tells this one on a BroadcastChannel. No address means nothing to sign in to (a server that is
+  // ready as added): the window closes, and this page shows what changed. Says whether a sign-in opened.
   const popup = window.open('about:blank', '_blank');
   if (popup) popup.opener = null;
   let link;
@@ -744,20 +750,39 @@ async function openSignIn(action, attributes, request) {
     if (popup) popup.close();
     throw error;
   }
+  if (!link.url) {
+    if (popup) popup.close();
+    await signInsChanged();
+    return false;
+  }
   const target = new URL(link.url, location.href);
   if (!['http:', 'https:'].includes(target.protocol)) {  // never a javascript: or other address, whoever sent it
     if (popup) popup.close();
     throw new Error('Monty sent a sign-in address this page cannot open.');
   }
   if (popup) popup.location.href = target.href; else location.assign(target.href);  // pop-ups blocked: go there instead
+  return true;
+}
+
+async function connectPreset(listed) {
+  // A listed MCP server (PostHog): added under its own name, then signed in to, from the one click.
+  return openSignIn('connect mcp server', { app: listed.key }, async () => {
+    const created = await api('/api/integrations/servers', {
+      method: 'POST', body: { name: listed.name, url: listed.url, headers: {} },
+    });
+    return { url: created.sign_in_url };
+  });
+}
+
+async function signInsChanged() {
+  // What is connected changed, and a waiting chat may carry on.
+  if (location.hash === '#/integrations') await loadIntegrations();
+  else if (!$('layout').hidden && state.threadId) await loadChat();
 }
 
 if ('BroadcastChannel' in window) {
-  new BroadcastChannel('montybot-integrations').addEventListener('message', () => {
-    // A sign-in finished in another window: what is connected changed, and a waiting chat may carry on.
-    if (location.hash === '#/integrations') reportUnlessOffline(loadIntegrations());
-    else if (!$('layout').hidden && state.threadId) reportUnlessOffline(loadChat());
-  });
+  // A sign-in finished in another window.
+  new BroadcastChannel('montybot-integrations').addEventListener('message', () => reportUnlessOffline(signInsChanged()));
 }
 
 function askIds(ask) {
@@ -1119,13 +1144,18 @@ window.addEventListener('drop', (event) => {
 
 // --- integrations: apps through Composio, and the user's own MCP servers ---
 
-let apps = null;  // the catalog of apps, once loaded: it changes rarely
+let listing = null;  // what the page lists (`catalog.entries`), once loaded: it changes rarely
+let moreAppsOpen = null;  // whether the user opened or closed More apps; until they do, open if one is connected
+let moreConnected = false;
+const STATES = { connected: 'Connected', needs_sign_in: 'Needs you to sign in', broken: 'Not working' };
+const SIGNING_IN = 'Finish signing in in the window that opened. This page updates when you have.';
 
 async function openIntegrations() {
   $('integrations-title').focus();
   if (state.serverName) {
     $('server-name').value = state.serverName;
     state.serverName = null;
+    showServerForm(true);
   }
   await loadIntegrations();
 }
@@ -1135,70 +1165,171 @@ async function loadIntegrations() {
   let data;
   try {
     data = await api('/api/integrations');
-    if (data.apps_available && !apps) apps = await api('/api/integrations/apps');
+    if (!listing) listing = await api('/api/integrations/apps');
   } catch (error) {
     if (error.name !== 'AbortError') $('integrations-status').textContent = error.message;
     return;
   }
   $('integrations-status').textContent = '';
-  state.connections = data.connections;
-  renderConnections(data.connections);
-  $('apps-section').hidden = !data.apps_available;
-  if (data.apps_available) renderApps();
+  renderIntegrations(listing, data.connections);
 }
 
-function renderConnections(connections) {
-  const states = { connected: 'Connected', needs_sign_in: 'Needs you to sign in', broken: 'Not working' };
-  $('connection-list').replaceChildren(...(connections.length ? connections.map((c) => {
-    const about = element('span', '', 'connection');
-    const words = element('span');
-    words.append(element('strong', c.name), element('span', c.detail, 'list-detail'));
-    about.append(logo(c.logo, c.name), words, element('span', states[c.state] || c.state, `badge ${c.state}`));
-    const actions = element('span', '', 'list-actions');
-    if (c.provider === 'composio' && c.state !== 'connected') {
-      actions.append(button('Reconnect', 'secondary', () => connectApp(c.key)));
-    }
-    if (c.provider === 'mcp' && c.state === 'needs_sign_in') {
-      actions.append(button('Sign in', 'good', () => openSignIn('sign in to mcp server', {}, () => (
-        api(`/api/integrations/servers/${c.id}/sign-in`, { method: 'POST', body: {} })))));
-    }
-    actions.append(button('Remove', 'bad', async () => {
-      if (!confirm(`Remove ${c.name}? Monty will no longer be able to use it.`)) return;
-      const path = c.provider === 'composio' ? `/api/integrations/apps/accounts/${encodeURIComponent(c.id)}`
-        : `/api/integrations/servers/${c.id}`;
-      await telemetry.span('remove integration', { provider: c.provider }, () => api(path, { method: 'DELETE' }));
-      await loadIntegrations();
-    }));
-    const item = element('li');
-    item.append(about, actions);
-    return item;
-  }) : [element('li', 'Nothing connected yet. Connect an app below, or ask Monty about one in a chat.')]));
+function renderIntegrations(entries, connections) {
+  // Each listed integration is drawn with the user's connection to it: an app's account by its key, a listed MCP
+  // server by its host. The user's other servers are under Custom; an account for an app no longer listed stays
+  // under More apps, where it can still be disconnected.
+  const unmatched = [...connections];
+  const take = (matches) => {
+    const index = unmatched.findIndex(matches);
+    return index < 0 ? null : unmatched.splice(index, 1)[0];
+  };
+  const rows = entries.map((entry) => ({
+    entry,
+    connection: take((c) => (entry.provider === 'mcp' ? c.provider === 'mcp' && Boolean(entry.host)
+      && c.detail === entry.host : c.provider === 'composio' && c.key === entry.key)),
+  }));
+  const kinds = new Map();
+  for (const row of rows.filter((r) => r.entry.featured)) {
+    if (!kinds.has(row.entry.kind)) kinds.set(row.entry.kind, []);
+    kinds.get(row.entry.kind).push(row);
+  }
+  $('integration-groups').replaceChildren(...[...kinds].map(([kind, group]) => {
+    const section = element('section', '', 'integration-group');
+    const title = element('h3', group[0].entry.kind_label, 'group-title');
+    title.id = `integrations-${kind}`;
+    title.append(' ', element('span', '', 'group-count'));
+    const list = element('ul', '', 'integration-list');
+    list.setAttribute('aria-labelledby', title.id);
+    list.append(...group.map(integrationRow));
+    section.setAttribute('aria-labelledby', title.id);
+    section.append(title, list);
+    return section;
+  }));
+  for (const old of $('custom-list').querySelectorAll(':scope > li:not(#add-server-row)')) old.remove();
+  $('add-server-row').before(...unmatched.filter((c) => c.provider === 'mcp').map((connection) => (
+    integrationRow({ entry: null, connection }))));
+  const more = [...rows.filter((r) => !r.entry.featured),
+    ...unmatched.filter((c) => c.provider !== 'mcp').map((connection) => ({ entry: null, connection }))];
+  $('more-list').replaceChildren(...more.map(integrationRow));
+  moreConnected = more.some((r) => r.connection);
+  filterIntegrations();
 }
 
-function renderApps() {
-  const query = $('app-search').value.trim().toLowerCase();
-  const connected = new Set((state.connections || []).filter((c) => c.provider === 'composio' && c.state === 'connected')
-    .map((c) => c.key));
-  const shown = apps.filter((a) => !query || [a.name, a.slug, a.description, ...a.categories].join(' ').toLowerCase()
-    .includes(query));
-  $('app-list').replaceChildren(...(shown.length ? shown.map((a) => {
-    const card = element('div', '', 'app-card');
-    const words = element('span');
-    words.append(element('strong', a.name), element('small', a.description));
-    const action = connected.has(a.slug) ? element('span', 'Connected', 'badge connected')
-      : button('Connect', 'secondary', () => connectApp(a.slug));
-    card.append(logo(a.logo, a.name), words, action);
-    return card;
-  }) : [element('p', `No app matches “${$('app-search').value.trim()}”. If it has an MCP server, add it below.`, 'muted')]));
+function integrationRow({ entry, connection }) {
+  // A logo, the name with how its connection is doing, a line about it, and what can be done with it.
+  const name = entry ? entry.name : connection.name;
+  const detail = (entry && entry.description) || (connection && connection.detail) || '';
+  const item = element('li', '', connection ? 'integration-row' : 'integration-row available');
+  const heading = element('span', '', 'integration-name');
+  heading.append(element('strong', name));
+  if (connection) heading.append(element('span', STATES[connection.state] || connection.state, `badge ${connection.state}`));
+  const about = element('span', detail, 'integration-detail');
+  about.title = detail;  // the whole of it, where the line is cut short
+  const words = element('span', '', 'integration-words');
+  words.append(heading, about);
+  const summary = element('span', '', 'integration-about');
+  summary.append(logo((entry && entry.logo) || (connection && connection.logo), name), words);
+  item.append(summary, integrationActions(entry, connection, name));
+  item.dataset.search = [name, entry ? entry.key : connection.key, detail, (entry && entry.kind_label) || '']
+    .join(' ').toLowerCase();
+  return item;
+}
+
+function integrationActions(entry, connection, name) {
+  const actions = element('span', '', 'list-actions');
+  const add = (text, className, onClick) => {
+    const made = button(text, className, onClick);
+    made.setAttribute('aria-label', `${text} ${name}`);  // each row has one: say which
+    actions.append(made);
+  };
+  if (!connection) add('Connect', 'secondary', () => connectEntry(entry));
+  else if (connection.state === 'needs_sign_in') add('Sign in', 'good', () => reconnect(connection));
+  else if (connection.state !== 'connected') add('Reconnect', 'secondary', () => reconnect(connection));
+  if (connection) {
+    const verb = connection.state === 'connected' ? 'Disconnect' : 'Remove';
+    add(verb, 'secondary', () => removeConnection(connection, `${verb} ${name}?`));
+  }
+  return actions;
+}
+
+function filterIntegrations() {
+  // Search narrows every group, and a group with nothing left is hidden. More apps is open while searching.
+  const typed = $('integration-search').value.trim();
+  const query = typed.toLowerCase();
+  let matches = 0;
+  const filter = (list) => {
+    let shown = 0;
+    for (const row of list.querySelectorAll(':scope > li[data-search]')) {
+      row.hidden = Boolean(query) && !row.dataset.search.includes(query);
+      if (!row.hidden) shown += 1;
+    }
+    matches += shown;
+    return shown;
+  };
+  for (const section of $('integration-groups').children) {
+    const shown = filter(section.querySelector('ul'));
+    section.querySelector('.group-count').textContent = String(shown);
+    section.hidden = !shown;
+  }
+  const custom = filter($('custom-list'));
+  $('custom-count').textContent = custom ? String(custom) : '';
+  const more = filter($('more-list'));
+  $('more-count').textContent = String(more);
+  $('more-apps').hidden = !more;
+  $('more-apps').open = Boolean(query) || (moreAppsOpen === null ? moreConnected : moreAppsOpen);
+  $('integration-empty').hidden = !query || matches > 0;
+  $('integration-empty').textContent = `No integration matches “${typed}”. If it has an MCP server, add it under Custom.`;
+}
+
+$('integration-search').addEventListener('input', filterIntegrations);
+$('more-apps').addEventListener('toggle', () => {
+  if (!$('integration-search').value.trim()) moreAppsOpen = $('more-apps').open;  // not the search's opening it
+});
+
+async function connectEntry(entry) {
+  if (entry.provider !== 'mcp') {
+    await connectApp(entry.key);
+    return;
+  }
+  const signingIn = await connectPreset(entry);
+  if (signingIn) await loadIntegrations();  // listed as needing a sign-in until the window says it is done
+  $('integrations-status').textContent = signingIn ? SIGNING_IN : `${entry.name} is connected.`;
 }
 
 async function connectApp(slug) {
   await openSignIn('connect app', { app: slug }, () => (
     api(`/api/integrations/apps/${encodeURIComponent(slug)}/connect`, { method: 'POST', body: {} })));
-  $('integrations-status').textContent = 'Finish signing in in the window that opened. This page updates when you have.';
+  $('integrations-status').textContent = SIGNING_IN;
 }
 
-$('app-search').addEventListener('input', () => { if (apps) renderApps(); });
+async function reconnect(connection) {
+  if (connection.provider === 'composio') {
+    await connectApp(connection.key);
+    return;
+  }
+  await openSignIn('sign in to mcp server', {}, () => (
+    api(`/api/integrations/servers/${connection.id}/sign-in`, { method: 'POST', body: {} })));
+  $('integrations-status').textContent = SIGNING_IN;
+}
+
+async function removeConnection(connection, question) {
+  if (!confirm(`${question} Monty will no longer be able to use it.`)) return;
+  const path = connection.provider === 'composio' ? `/api/integrations/apps/accounts/${encodeURIComponent(connection.id)}`
+    : `/api/integrations/servers/${connection.id}`;
+  await telemetry.span('remove integration', { provider: connection.provider }, () => api(path, { method: 'DELETE' }));
+  await loadIntegrations();
+}
+
+function showServerForm(open) {
+  $('server-panel').hidden = !open;
+  $('show-server-form').setAttribute('aria-expanded', String(open));
+}
+
+$('show-server-form').addEventListener('click', () => {
+  const open = $('server-panel').hidden;
+  showServerForm(open);
+  if (open) $('server-name').focus();
+});
 
 $('server-form').addEventListener('submit', (event) => {
   event.preventDefault();
@@ -1224,6 +1355,7 @@ async function addServer() {
     $('add-server').disabled = false;
   }
   $('server-form').reset();
+  showServerForm(false);
   await loadIntegrations();
   // An OAuth server is listed as needing a sign-in: its Sign in button opens it, from the user's own click.
   $('integrations-status').textContent = created.sign_in_url ? `${created.connection.name} needs you to sign in: use its Sign in button.`

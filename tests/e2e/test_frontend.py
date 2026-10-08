@@ -8,7 +8,7 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 import pytest
 from playwright.sync_api import Page, Route, expect, sync_playwright
@@ -37,6 +37,7 @@ class MockAPI:
     exported: list[tuple[str, str]] = field(default_factory=list)  # (path, raw body) POSTed to /api/telemetry/v1
     connections: list[dict[str, str]] = field(default_factory=list)
     apps: list[dict[str, object]] = field(default_factory=list)
+    server_sign_in: bool = False  # whether an added MCP server needs the user to sign in
 
     def handle(self, route: Route) -> None:
         request = route.request
@@ -138,10 +139,12 @@ class MockAPI:
             result = {'url': 'http://monty.test/mock-sign-in'}
         elif path == '/api/integrations/servers' and method == 'POST':
             assert isinstance(body, dict)
-            added = {'id': 'server', 'key': 'mcp:notes', 'provider': 'mcp', 'name': body['name'], 'detail':
-                     'notes.example.test', 'logo': '', 'state': 'connected'}  # fmt: skip
+            added = {'id': 'server', 'key': f'mcp:{body["name"].lower()}', 'provider': 'mcp', 'name': body['name'],
+                     'detail': urlsplit(body['url']).hostname, 'logo': '',
+                     'state': 'needs_sign_in' if self.server_sign_in else 'connected'}  # fmt: skip
             self.connections.append(added)
-            result, status = {'connection': added, 'sign_in_url': None}, 201
+            sign_in = 'http://monty.test/mock-sign-in' if self.server_sign_in else None
+            result, status = {'connection': added, 'sign_in_url': sign_in}, 201
         elif path.startswith('/api/integrations/') and method == 'DELETE':
             self.connections = [c for c in self.connections if not path.endswith(f'/{c["id"]}')]
         elif path == '/mock-sign-in':
@@ -1156,8 +1159,8 @@ def test_a_chat_asks_to_connect_an_app(frontend: tuple[Page, MockAPI], connected
         page.get_by_role('button', name="I've connected it").click()
     else:
         page.get_by_role('button', name='Not now').click()
+    expect(page.locator('#ask')).to_be_hidden()  # the answer went: wait for it before reading the calls
     assert ('POST', '/api/asks/ask', {'connected': connected}) in mock.calls
-    expect(page.locator('#ask')).to_be_hidden()
 
 
 def test_a_service_without_an_app_offers_an_mcp_server(frontend: tuple[Page, MockAPI]) -> None:
@@ -1169,6 +1172,39 @@ def test_a_service_without_an_app_offers_an_mcp_server(frontend: tuple[Page, Moc
     expect(page.locator('#server-name')).to_have_value('Acme Wiki')
 
 
+POSTHOG = {'provider': 'mcp', 'key': 'posthog', 'name': 'PostHog', 'logo': '', 'url': 'https://mcp.posthog.com/mcp'}
+
+
+def listed(key: str, name: str, about: str, kind: str | None = None, label: str | None = None) -> dict[str, object]:
+    """An entry of `/api/integrations/apps`, as `catalog.entries` makes it."""
+    mcp = key == 'posthog'
+    return {'key': key, 'slug': key, 'name': name, 'logo': '', 'description': about, 'categories': [], 'kind': kind,
+            'kind_label': label, 'featured': kind is not None, 'provider': 'mcp' if mcp else 'composio',
+            'url': POSTHOG['url'] if mcp else None, 'host': 'mcp.posthog.com' if mcp else None}  # fmt: skip
+
+
+LISTING = [
+    listed('github', 'GitHub', 'Code hosting', 'code', 'Code'),
+    listed('linear', 'Linear', 'Issue tracking', 'issues', 'Issue tracking'),
+    listed('gmail', 'Gmail', 'Email', 'email', 'Email and calendar'),
+    listed('posthog', 'PostHog', 'Product analytics', 'analytics', 'Analytics and monitoring'),
+    listed('airtable', 'Airtable', 'Spreadsheets and databases'),
+    listed('zoom', 'Zoom', 'Video meetings'),
+]
+
+
+def test_a_chat_connects_a_listed_mcp_server_in_one_click(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    connect_chat(page, mock, POSTHOG)
+    page.get_by_role('button', name='Connect PostHog').click()
+    expect(page.locator('#ask')).to_contain_text('PostHog is connected.')  # nothing to sign in to here
+    assert ('POST', '/api/integrations/servers', {'name': 'PostHog', 'url': 'https://mcp.posthog.com/mcp',
+            'headers': {}}) in mock.calls  # fmt: skip
+    page.get_by_role('button', name="I've connected it").click()
+    expect(page.locator('#ask')).to_be_hidden()  # the answer went: wait for it before reading the calls
+    assert ('POST', '/api/asks/ask', {'connected': True}) in mock.calls
+
+
 @pytest.mark.parametrize('width', [1440, 390])
 def test_integrations_page(frontend: tuple[Page, MockAPI], width: int) -> None:
     page, mock = frontend
@@ -1178,34 +1214,59 @@ def test_integrations_page(frontend: tuple[Page, MockAPI], width: int) -> None:
          'logo': '', 'state': 'connected'},
         {'id': 'srv', 'key': 'mcp:wiki', 'provider': 'mcp', 'name': 'Wiki', 'detail': 'wiki.example.test',
          'logo': '', 'state': 'needs_sign_in'},
+        {'id': 'ca_2', 'key': 'airtable', 'provider': 'composio', 'name': 'Airtable', 'detail': '',
+         'logo': '', 'state': 'broken'},
     ]  # fmt: skip
-    mock.apps = [
-        {'slug': slug, 'name': name, 'logo': '', 'description': about, 'categories': []}
-        for slug, name, about in [('github', 'GitHub', 'Code hosting'), ('gmail', 'Gmail', 'Email'),
-                                  ('linear', 'Linear', 'Issue tracking')]
-    ]  # fmt: skip
+    mock.apps = LISTING
     workspace(page, mock)
     page.goto('http://monty.test/#/integrations')
     expect(page.locator('#integrations-title')).to_be_focused()
-    expect(page.locator('#connection-list li')).to_have_count(2)
-    expect(page.locator('#connection-list')).to_contain_text('Needs you to sign in')
-    expect(page.locator('.app-card')).to_have_count(3)
-    expect(page.locator('.app-card', has_text='Linear')).to_contain_text('Connected')  # no second Connect
+    expect(page.locator('#integration-groups h3')).to_have_text(
+        ['Code 1', 'Issue tracking 1', 'Email and calendar 1', 'Analytics and monitoring 1']
+    )
+    linear = page.locator('.integration-row', has_text='Linear')
+    expect(linear.locator('.badge')).to_have_text('Connected')
+    expect(linear.get_by_role('button')).to_have_text(['Disconnect'])  # no second Connect
+    expect(page.locator('.integration-row', has_text='GitHub').get_by_role('button')).to_have_text(['Connect'])
+    # The user's own server, under Custom with the row that adds one.
+    wiki = page.locator('#custom-list .integration-row', has_text='Wiki')
+    expect(wiki).to_contain_text('Needs you to sign in')
+    expect(wiki.get_by_role('button')).to_have_text(['Sign in', 'Remove'])
+    expect(page.locator('#custom-list > li')).to_have_count(2)
+    expect(page.locator('#server-panel')).to_be_hidden()
+    # More apps is open, as one of them is connected (and broken).
+    expect(page.locator('#more-apps')).to_have_attribute('open', '')
+    expect(page.locator('#more-apps summary')).to_have_text('More apps 2')
+    airtable = page.locator('#more-list .integration-row', has_text='Airtable')
+    expect(airtable).to_contain_text('Not working')
+    expect(airtable.get_by_role('button')).to_have_text(['Reconnect', 'Remove'])
     no_overflow(page)
 
-    page.fill('#app-search', 'mail')
-    expect(page.locator('.app-card')).to_have_count(1)
+    page.fill('#integration-search', 'mail')
+    expect(page.locator('.integration-row[data-search]:visible')).to_have_count(1)
+    expect(page.locator('#integration-groups h3:visible')).to_have_text(['Email and calendar 1'])
+    expect(page.locator('#more-apps')).to_be_hidden()
     with page.expect_popup() as opened:
-        page.locator('.app-card', has_text='Gmail').get_by_role('button', name='Connect').click()
+        page.locator('.integration-row', has_text='Gmail').get_by_role('button', name='Connect').click()
     assert signed_in_window(opened.value).evaluate('window.opener') is None
     assert ('POST', '/api/integrations/apps/gmail/connect', {}) in mock.calls
-    page.fill('#app-search', 'nothing like it')
-    expect(page.locator('#app-list')).to_contain_text('No app matches')
+    page.fill('#integration-search', 'video')  # by what it is, too
+    expect(page.locator('.integration-row[data-search]:visible')).to_have_text([re.compile('Zoom')])
+    page.fill('#integration-search', 'nothing like it')
+    expect(page.locator('#integration-empty')).to_have_text(
+        'No integration matches “nothing like it”. If it has an MCP server, add it under Custom.'
+    )
+    expect(page.locator('#add-server-row')).to_be_visible()
+    page.fill('#integration-search', '')
+    expect(page.locator('#integration-empty')).to_be_hidden()
 
     with page.expect_popup():
-        page.locator('#connection-list li', has_text='Wiki').get_by_role('button', name='Sign in').click()
+        wiki.get_by_role('button', name='Sign in').click()
     assert ('POST', '/api/integrations/servers/srv/sign-in', {}) in mock.calls
 
+    page.get_by_role('button', name='Add a custom MCP server').click()
+    expect(page.locator('#server-name')).to_be_focused()
+    expect(page.get_by_role('button', name='Add a custom MCP server')).to_have_attribute('aria-expanded', 'true')
     page.fill('#server-name', 'Notes')
     page.fill('#server-url', 'https://notes.example.test/mcp')
     page.fill('#server-header-name', 'Authorization')
@@ -1215,16 +1276,40 @@ def test_integrations_page(frontend: tuple[Page, MockAPI], width: int) -> None:
     assert ('POST', '/api/integrations/servers', {'name': 'Notes', 'url': 'https://notes.example.test/mcp',
             'headers': {'Authorization': 'Bearer secret'}}) in mock.calls  # fmt: skip
     expect(page.locator('#server-header-value')).to_have_value('')  # not left on screen
+    expect(page.locator('#server-panel')).to_be_hidden()
+    expect(page.locator('#custom-list .integration-row', has_text='Notes')).to_contain_text('Connected')
+    no_overflow(page)
 
-    page.once('dialog', lambda dialog: dialog.accept())  # "Remove Linear? ..."
-    page.locator('#connection-list li', has_text='Linear').get_by_role('button', name='Remove').click()
-    expect(page.locator('#connection-list li')).to_have_count(2)
+    page.once('dialog', lambda dialog: dialog.accept())  # "Disconnect Linear? ..."
+    linear.get_by_role('button', name='Disconnect').click()
+    expect(linear.get_by_role('button')).to_have_text(['Connect'])
     assert ('DELETE', '/api/integrations/apps/accounts/ca_1', None) in mock.calls
 
     # A sign-in that finishes in its own window updates the page.
     mock.connections[0]['state'] = 'connected'
     page.evaluate("new BroadcastChannel('montybot-integrations').postMessage({ok: true})")
-    expect(page.locator('#connection-list')).not_to_contain_text('Needs you to sign in')
+    expect(wiki).not_to_contain_text('Needs you to sign in')
+
+
+@pytest.mark.parametrize('signs_in', [False, True])
+def test_a_listed_mcp_server_connects_in_one_click(frontend: tuple[Page, MockAPI], signs_in: bool) -> None:
+    page, mock = frontend
+    mock.apps, mock.server_sign_in = LISTING, signs_in
+    workspace(page, mock)
+    page.goto('http://monty.test/#/integrations')
+    posthog = page.locator('.integration-row', has_text='PostHog')
+    if signs_in:
+        with page.expect_popup() as opened:
+            posthog.get_by_role('button', name='Connect').click()
+        signed_in_window(opened.value)
+        expect(posthog.locator('.badge')).to_have_text('Needs you to sign in')
+    else:
+        posthog.get_by_role('button', name='Connect').click()
+        expect(page.locator('#integrations-status')).to_have_text('PostHog is connected.')
+        expect(posthog.locator('.badge')).to_have_text('Connected')
+    assert ('POST', '/api/integrations/servers', {'name': 'PostHog', 'url': 'https://mcp.posthog.com/mcp',
+            'headers': {}}) in mock.calls  # fmt: skip
+    expect(page.locator('#custom-list > li')).to_have_count(1)  # it is the listed one, not a server of the user's own
 
 
 def test_integration_addresses_are_route_templates_in_telemetry(frontend: tuple[Page, MockAPI]) -> None:

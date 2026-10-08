@@ -662,7 +662,7 @@ struct ConnectControls: View {
 
     var body: some View {
         let offer = ask.integration ?? Offer(provider: "mcp", key: "", name: "the app")
-        let canSignIn = offer.isApp || offer.serverId != nil
+        let canSignIn = offer.isApp || offer.serverId != nil || offer.isPreset
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 AppLogo(url: offer.logo, name: offer.name, size: 28)

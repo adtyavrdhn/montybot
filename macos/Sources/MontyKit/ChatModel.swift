@@ -664,10 +664,21 @@ public final class ChatModel {
     }
 
     /// For a connect ask: opens where the user signs in, in their browser (the server hears when they are done, and
-    /// the run carries on). A service no app is offered for has nothing to sign in to: the Integrations page opens,
-    /// to add its MCP server.
+    /// the run carries on). A known MCP server (PostHog's, say) is added first, as on the Integrations page. A service
+    /// no app is offered for has nothing to sign in to: the Integrations page opens, to add its MCP server.
     public func connect() async {
         guard let ask, ask.kind == .connect, let offer = ask.integration, let app else { return }
+        if offer.isPreset, let url = offer.url {
+            answerError = nil
+            app.serverNote = nil
+            let attributes = ids.merging(["monty.integration.provider": .string(offer.provider), "monty.preset": .string(offer.key)]) { $1 }
+            if await app.addServer(name: offer.name, url: url, headers: [:], attributes) != nil {
+                connectingAsk = ask.id
+            } else if let note = app.serverNote, note.isError {
+                answerError = note.text
+            }
+            return
+        }
         guard offer.isApp || offer.serverId != nil else {
             app.serverName = offer.name
             app.open(.integrations)
