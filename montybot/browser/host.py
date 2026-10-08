@@ -255,6 +255,15 @@ class BrowserHost:
             screenshot, restarted = await self._use(run, lambda backend: backend.screenshot(), replay=True)
             return ScreenshotResult(screenshot=screenshot, restarted=restarted)
 
+    async def discard_parked(self, user_id: UserId) -> None:
+        """Close the user's browser kept open after their last run (`keep_open`), without saving it, for when the saved
+        state changes under it, such as a forgotten sign-in: the next run starts from the jar, not from cookies the
+        user asked to forget. Its state was saved when it was parked, so nothing else is lost."""
+        async with self._user_locks.setdefault(user_id, asyncio.Lock()):
+            parked = self._parked.pop(user_id, None)
+        if parked is not None:
+            await _close_quietly(parked.backend)
+
     @timed('browser.peek_screenshot', only_in_trace=True)
     async def peek_screenshot(self, *, run_id: RunId, user_id: UserId) -> Screenshot:
         """The viewport of the run's open browser, for the user watching the run. Read only: it never opens, restarts
