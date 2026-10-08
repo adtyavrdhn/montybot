@@ -253,12 +253,12 @@ struct MontyCommands: Commands {
                     .keyboardShortcut("t", modifiers: [.command, .shift])
                     .disabled(app.chat?.ask?.kind != .handoff)
             }
-            Button(app.chat?.watching == true ? "Hide Monty's Browser" : "Watch Monty's Browser") {
+            Button(app.chat?.watching == true ? "Hide \(app.montyName)'s Browser" : "Watch \(app.montyName)'s Browser") {
                 app.chat?.watching.toggle()
             }
             .keyboardShortcut("b", modifiers: [.command, .shift])
             .disabled(app.chat?.run == nil || app.isTakingOver)
-            Button(app.chat?.browserExpanded == true ? "Back to the Chat" : "Expand Monty's Browser") {
+            Button(app.chat?.browserExpanded == true ? "Back to the Chat" : "Expand \(app.montyName)'s Browser") {
                 app.chat?.browserExpanded.toggle()
             }
             .keyboardShortcut("f", modifiers: [.command, .shift])

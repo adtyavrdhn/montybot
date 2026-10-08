@@ -142,8 +142,8 @@ struct GeneralSettings: View {
             Toggle("Browse from this Mac", isOn: $app.browseFromMac)
         } footer: {
             Text(app.tunnelStatus.replaced
-                ? "Another of your Macs is browsing for Monty now. Turn this off and on again to take it back."
-                : "While Monty is open, the browser of each task you start visits sites from this Mac, so they see your own internet connection, not a server's. It reaches only public websites, never your network. Scheduled tasks always browse from the server.")
+                ? "Another of your Macs is browsing for \(app.montyName) now. Turn this off and on again to take it back."
+                : "While \(app.montyName) is open, the browser of each task you start visits sites from this Mac, so they see your own internet connection, not a server's. It reaches only public websites, never your network. Scheduled tasks always browse from the server.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
         }
