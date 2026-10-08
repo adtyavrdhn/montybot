@@ -8,13 +8,15 @@ struct TakeoverView: View {
     let live: LiveSession
     /// Bumped to give the page the keyboard back, after the address bar.
     @State private var pageFocus = 0
+    /// Bumped to edit the address: ⌘L, or a new tab.
+    @State private var addressFocus = 0
 
     var body: some View {
         VStack(spacing: 0) {
             bar
             Divider().overlay(Palette.outline)
             if !live.tabs.isEmpty {
-                TabStrip(live: live)
+                TabStrip(live: live, newTab: newTab)
                 Divider().overlay(Palette.outline)
             }
             ZStack {
@@ -41,6 +43,7 @@ struct TakeoverView: View {
             }
         }
         .background(Palette.surface)
+        .background(BrowserShortcuts(perform: perform))
         .onChange(of: live.notice) { _, text in if let text { AccessibilityNotification.Announcement(text).post() } }
         .onChange(of: live.state) { _, state in
             if live.signedOut { chat.liveSignedOut(); return }
@@ -59,7 +62,10 @@ struct TakeoverView: View {
             .frame(minWidth: 140, maxWidth: 360, alignment: .leading)
             Spacer(minLength: 12)
             if live.activeTab != nil {
-                AddressField(live: live) { pageFocus += 1 }
+                HStack(spacing: 6) {
+                    NavigationButtons(live: live)
+                    AddressField(live: live, focus: addressFocus) { pageFocus += 1 }
+                }
             }
             Spacer(minLength: 12)
             Button("Not now") { chat.leaveLiveView() }
@@ -84,6 +90,23 @@ struct TakeoverView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Palette.container)
+    }
+
+    /// A blank tab, with the address bar ready to type into.
+    private func newTab() {
+        live.newTab()
+        addressFocus += 1
+    }
+
+    /// The browser's shortcuts, while the user can drive; otherwise the keys do what they always do.
+    private func perform(_ shortcut: BrowserShortcut) -> Bool {
+        guard live.canDrive else { return false }
+        switch shortcut {
+        case .editAddress: addressFocus += 1
+        case .newTab: if live.controls { newTab() }
+        default: live.perform(shortcut)
+        }
+        return true
     }
 
     @ViewBuilder private var stateOverlay: some View {
@@ -332,23 +355,14 @@ struct LiveCanvas: NSViewRepresentable {
 
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
             guard window?.firstResponder === self else { return super.performKeyEquivalent(with: event) }
-            // ⌘↩ gives the browser back; other app shortcuts (⌘W, ⌘Q, ⌘N) stay with the app.
+            // ⌘↩ gives the browser back; other app shortcuts (⌘Q, ⌘N) stay with the app. The browser's own (⌘W, ⌘T,
+            // ⌘L and so on) never get here: `BrowserShortcuts` catches them first.
             if event.modifierFlags.contains(.command), event.keyCode == 36 { return super.performKeyEquivalent(with: event) }
             return handle(event) || super.performKeyEquivalent(with: event)
         }
 
         private func handle(_ event: NSEvent) -> Bool {
-            let flags = event.modifierFlags
-            let key = MacKey(
-                keyCode: event.keyCode,
-                characters: event.characters ?? "",
-                bare: event.charactersIgnoringModifiers ?? "",
-                command: flags.contains(.command),
-                option: flags.contains(.option),
-                control: flags.contains(.control),
-                shift: flags.contains(.shift)
-            )
-            switch KeyMapping.action(for: key) {
+            switch KeyMapping.action(for: MacKey(event)) {
             case .send(let inputs):
                 inputs.forEach { live?.input($0) }
                 return true

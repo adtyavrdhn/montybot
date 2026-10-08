@@ -5,6 +5,9 @@ import Foundation
 
 public enum MouseButton: String, Sendable { case left, middle, right }
 
+/// A browser's own buttons for the active tab; the raw value is the message's `kind`.
+public enum PageCommand: String, Sendable { case back, forward, reload, stop }
+
 /// What the user does in the live view, in the page's CSS pixels.
 public enum LiveInput: Equatable, Sendable {
     case mouseDown(x: Double, y: Double, button: MouseButton)
@@ -18,6 +21,10 @@ public enum LiveInput: Equatable, Sendable {
     case switchTab(String)
     /// An address the user typed into the address bar, for the active tab.
     case navigate(String)
+    case page(PageCommand)
+    /// A blank tab, ready for an address.
+    case newTab
+    case closeTab(String)
     case giveBack
     /// Asks what is on the page, for a screen reader (answered with an outline).
     case outline
@@ -34,6 +41,9 @@ public enum LiveInput: Equatable, Sendable {
         case .press(let key, let modifiers): object = ["kind": "press", "key": key, "modifiers": modifiers]
         case .switchTab(let tab): object = ["kind": "switch_tab", "tab_id": tab]
         case .navigate(let url): object = ["kind": "navigate", "url": url]
+        case .page(let command): object = ["kind": command.rawValue]
+        case .newTab: object = ["kind": "new_tab"]
+        case .closeTab(let tab): object = ["kind": "close_tab", "tab_id": tab]
         case .giveBack: object = ["kind": "give_back"]
         case .outline: object = ["kind": "outline"]
         }
@@ -47,12 +57,35 @@ public struct LiveTab: Equatable, Identifiable, Sendable {
     public let url: String
     public let title: String
     public let active: Bool
+    /// Any tab but the run's own, which Monty carries on in.
+    public var closable = false
+    /// The active tab is loading a page.
+    public var loading = false
+    /// Whether the active tab has history that way; nil when the browser cannot tell (Servo), so the button stays on.
+    public var canGoBack: Bool?
+    public var canGoForward: Bool?
 
-    public init(id: String, url: String, title: String, active: Bool) {
+    public init(id: String, url: String, title: String, active: Bool, closable: Bool = false, loading: Bool = false,
+                canGoBack: Bool? = nil, canGoForward: Bool? = nil) {
         self.id = id
         self.url = url
         self.title = title
         self.active = active
+        self.closable = closable
+        self.loading = loading
+        self.canGoBack = canGoBack
+        self.canGoForward = canGoForward
+    }
+
+    /// A new tab, before anything was opened in it: the address bar shows its placeholder.
+    public var isBlank: Bool { Self.isBlank(url) }
+    public static func isBlank(_ url: String) -> Bool { url.isEmpty || url == "about:blank" }
+
+    /// What the tab strip calls it: the page's title, else its host, as a browser without favicons would.
+    public var name: String {
+        if !title.isEmpty { return title }
+        if isBlank { return "New Tab" }
+        return URLComponents(string: url)?.host ?? url
     }
 }
 
@@ -113,7 +146,8 @@ public struct PageOutline: Equatable, Sendable {
 }
 
 public enum LiveServerMessage: Equatable, Sendable {
-    case hello(handoffId: String, reason: String)
+    /// `controls`: the browser has back, forward, reload, stop and opening and closing tabs.
+    case hello(handoffId: String, reason: String, controls: Bool = false)
     case tabs([LiveTab])
     /// An input failed; safe to show (never contains typed text).
     case error(String)
@@ -126,13 +160,15 @@ public enum LiveServerMessage: Equatable, Sendable {
         switch object["kind"] as? String {
         case "hello":
             guard let id = object["handoff_id"] as? String, let reason = object["reason"] as? String else { return nil }
-            self = .hello(handoffId: id, reason: reason)
+            self = .hello(handoffId: id, reason: reason, controls: object["controls"] as? Bool == true)
         case "tabs":
             guard let tabs = object["tabs"] as? [[String: Any]] else { return nil }
             self = .tabs(tabs.compactMap { tab in
                 guard let id = tab["tab_id"] as? String, let url = tab["url"] as? String,
                       let title = tab["title"] as? String else { return nil }
-                return LiveTab(id: id, url: url, title: title, active: tab["active"] as? Bool == true)
+                return LiveTab(id: id, url: url, title: title, active: tab["active"] as? Bool == true,
+                               closable: tab["closable"] as? Bool == true, loading: tab["loading"] as? Bool == true,
+                               canGoBack: tab["can_go_back"] as? Bool, canGoForward: tab["can_go_forward"] as? Bool)
             })
         case "error":
             guard let message = object["message"] as? String else { return nil }
@@ -197,6 +233,47 @@ public enum LiveCloseCode {
 }
 
 // MARK: - keys
+
+/// A browser's own shortcut while the user drives, as in Safari and Chrome. These never reach the page.
+public enum BrowserShortcut: Equatable, Sendable {
+    case page(PageCommand)
+    case newTab
+    case closeTab
+    case editAddress
+    case nextTab
+    case previousTab
+    /// ⌘1 to ⌘8: the tab at that place, from 1. ⌘9 is the last tab, wherever it is.
+    case tab(Int)
+
+    /// ⌘[ ⌘] ⌘R ⌘T ⌘W ⌘L ⌘1-9, ⌃⇥ and ⌃⇧⇥. ⇧⌘T stays the takeover's "Not now".
+    public static func shortcut(for key: MacKey) -> BrowserShortcut? {
+        if key.control, !key.command, !key.option, key.keyCode == 48 { return key.shift ? .previousTab : .nextTab }
+        guard key.command, !key.control, !key.option, !key.shift else { return nil }
+        switch key.bare.lowercased() {
+        case "[": return .page(.back)
+        case "]": return .page(.forward)
+        case "r": return .page(.reload)
+        case "t": return .newTab
+        case "w": return .closeTab
+        case "l": return .editAddress
+        case let digit where digit.count == 1 && ("1"..."9").contains(digit): return .tab(Int(digit)!)
+        default: return nil
+        }
+    }
+
+    /// The tab a tab shortcut goes to, from the active one. Next and previous wrap around, as in a browser.
+    public static func target(of shortcut: BrowserShortcut, in tabs: [LiveTab]) -> LiveTab? {
+        guard !tabs.isEmpty else { return nil }
+        let active = tabs.firstIndex(where: \.active) ?? 0
+        switch shortcut {
+        case .nextTab: return tabs[(active + 1) % tabs.count]
+        case .previousTab: return tabs[(active - 1 + tabs.count) % tabs.count]
+        case .tab(9): return tabs.last
+        case .tab(let place): return tabs.indices.contains(place - 1) ? tabs[place - 1] : nil
+        default: return nil
+        }
+    }
+}
 
 /// A key press on the Mac, as AppKit reports it, without AppKit: `keyCode` is the hardware key, `characters` what it
 /// types with the modifiers applied, `bare` what it types without them.
