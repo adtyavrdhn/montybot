@@ -808,8 +808,13 @@ function tokenForm(listed, connected) {
     event.preventDefault();
     report((async () => {
       error.textContent = '';
+      const token = input.value.trim();
+      if (!token) {  // spaces pass `required`
+        input.focus();
+        return;
+      }
       submit.disabled = true;
-      const headers = { [listed.token_header || 'Authorization']: `Bearer ${input.value.trim()}` };
+      const headers = { [listed.token_header || 'Authorization']: `Bearer ${token}` };
       try {
         await telemetry.span('connect mcp server', { app: listed.key, with_token: true }, () => (
           api('/api/integrations/servers', { method: 'POST', body: { name: listed.name, url: listed.url, headers } })));

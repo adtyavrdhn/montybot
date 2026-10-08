@@ -1370,6 +1370,10 @@ def test_a_listed_mcp_server_connects_with_a_token(frontend: tuple[Page, MockAPI
     expect(token).to_have_attribute('type', 'password')
     expect(opener).to_have_attribute('aria-expanded', 'true')
     no_overflow(page)
+    token.fill('   ')  # no token: nothing is sent
+    github.get_by_role('button', name='Connect GitHub with this token').click()
+    expect(token).to_be_focused()
+    assert not [call for call in mock.calls if call[1] == '/api/integrations/servers']
     token.fill('bad')
     github.get_by_role('button', name='Connect GitHub with this token').click()
     expect(github.get_by_role('alert')).to_have_text('The server refused those credentials.')
