@@ -108,8 +108,9 @@ struct MainView: View {
 struct Sidebar: View {
     @Environment(AppModel.self) private var app
     @State private var search = ""
-    /// Chats whose tasks or replies mention the search, as the server finds them.
-    @State private var contentMatches: Set<String> = []
+    /// Chats whose tasks or replies mention the search, as the server found them, with the words they answer: they
+    /// count only for those words, so a new search never shows the last one's chats.
+    @State private var contentMatches: (query: String, ids: Set<String>) = ("", [])
 
     private var selection: Binding<Route?> {
         Binding(get: { app.route }, set: { if let route = $0 { app.open(route) } })
@@ -163,12 +164,12 @@ struct Sidebar: View {
         .onDeleteCommand { app.deleting = app.openThread }  // ⌫ or ⌘⌫ on the selected chat
         .searchable(text: $search, placement: .sidebar, prompt: Text("Search chats"))
         .task(id: search) {
-            // The last matches stay until the new ones come, so chats found by their contents don't blink away.
-            if search.trimmingCharacters(in: .whitespaces).count < 2 { contentMatches = []; return }
+            let query = search.trimmingCharacters(in: .whitespaces)
+            guard query.count >= 2 else { return }
             try? await Task.sleep(for: .milliseconds(250))  // once typing pauses
             guard !Task.isCancelled else { return }
-            let found = await app.search(search)
-            if !Task.isCancelled { contentMatches = found }
+            let found = await app.search(query)
+            if !Task.isCancelled { contentMatches = (query, found) }
         }
         .modifier(FocusedSearch())
         // Nothing beside the window's buttons: the sidebar's own toggle is in the View menu (⌃⌘S).
@@ -243,7 +244,9 @@ struct Sidebar: View {
 
     private func filtered(_ threads: [ThreadSummary]) -> [ThreadSummary] {
         let query = search.trimmingCharacters(in: .whitespaces)
-        return query.isEmpty ? threads : threads.filter { $0.title.localizedCaseInsensitiveContains(query) || contentMatches.contains($0.id) }
+        return query.isEmpty ? threads : threads.filter {
+            $0.title.localizedCaseInsensitiveContains(query) || (contentMatches.query == query && contentMatches.ids.contains($0.id))
+        }
     }
 }
 
