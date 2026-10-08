@@ -35,6 +35,7 @@ import itertools
 import socket
 import struct
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from montybot.browser.egress import (
@@ -76,6 +77,19 @@ class _Stream:
         """Whether the egress proxy has `upstream`, and closes it itself."""
 
 
+@dataclass(frozen=True)
+class Place:
+    """Where a Mac is, as it says: its time zone and language. A browser going out through it takes them, so its clock
+    and language agree with the address sites see. None: the Mac did not say."""
+
+    timezone: str | None = None
+    locale: str | None = None
+
+
+NOWHERE = Place()
+"""A Mac that did not say where it is."""
+
+
 class MacTunnel:
     """One Mac's WebSocket, carrying many browser connections. `send` sends one binary message on it, and `hang_up`
     closes it, for when the tunnel is closed from this side (another Mac of the same user took over)."""
@@ -86,7 +100,9 @@ class MacTunnel:
         *,
         hang_up: Callable[[], Awaitable[None]] | None = None,
         ports: frozenset[int] = WEB_PORTS,
+        place: Place = NOWHERE,
     ) -> None:
+        self.place = place
         self._send = send
         self._hang_up = hang_up
         self._ports = ports
@@ -240,6 +256,12 @@ class Tunnels:
                 await proxy.start()
                 self._proxies[user_id] = proxy
             return proxy.path
+
+    def place_of(self, socket: Path) -> Place:
+        """Where the Mac is whose tunnel the egress proxy at `socket` dials through, for a browser starting on it."""
+        user_id = next((user for user, proxy in self._proxies.items() if proxy.path == socket), None)
+        tunnel = self._tunnels.get(user_id) if user_id is not None else None
+        return tunnel.place if tunnel is not None else NOWHERE
 
     async def aclose(self) -> None:
         for tunnel in list(self._tunnels.values()):

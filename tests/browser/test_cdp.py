@@ -7,6 +7,7 @@ tests that start Chrome are skipped without it. The jailed tests also need Linux
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import shutil
 import sys
 import threading
@@ -548,6 +549,20 @@ def test_jailed_command() -> None:
     assert '--proxy-server=socks5://127.0.0.1:1080' in browser and '--proxy-bypass-list=<-loopback>' in browser
     with pytest.raises(ValueError, match='egress proxy'):
         options.command(profile=profile)
+
+
+def test_the_clock_and_language_can_be_the_users() -> None:
+    """So they agree with the address sites see: a browser going out through the user's Mac has the Mac's."""
+    options = CDPOptions(executable=Path('/opt/chrome/chrome'), timezone='America/Toronto', locale='en-CA')
+    argv = options.command(profile=Path('/p'))
+    assert '--lang=en-CA' in argv and '--accept-lang=en-CA,en' in argv
+    assert options.clock() == {'TZ': 'America/Toronto'}
+    jailed = dataclasses.replace(options, bwrap=True).command(profile=Path('/p'), proxy=Path('/egress.sock'))
+    assert '--setenv TZ America/Toronto' in ' '.join(jailed)  # the jail clears the environment
+    assert '--accept-lang=fr' in CDPOptions(executable=Path('/c'), locale='fr').command(profile=Path('/p'))
+    plain = CDPOptions(executable=Path('/c')).command(profile=Path('/p'))
+    assert not any(arg.startswith(('--lang', '--accept-lang')) for arg in plain)
+    assert CDPOptions().clock() == {}
 
 
 def test_server_options() -> None:

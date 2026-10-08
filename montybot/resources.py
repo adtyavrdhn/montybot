@@ -22,7 +22,7 @@ from pydantic_ai.models import Model
 from montybot import store
 from montybot.browser.contract import BrowserBackend, TabsBackend
 from montybot.browser.host import BrowserHost, Detour
-from montybot.browser.tunnel import Tunnels
+from montybot.browser.tunnel import NOWHERE, Place, Tunnels
 from montybot.crypto import deployment_key
 from montybot.db import Pool, create_pool, migrate
 from montybot.imports import import_object
@@ -78,12 +78,23 @@ def backend_factory(name: str) -> Callable[[], BrowserBackend]:
     return cast(Callable[[], BrowserBackend], import_object(name))
 
 
-def routed_backend_factory(name: str) -> Callable[[Path], BrowserBackend] | None:
-    """The engine made with another egress proxy socket, for the Mac tunnel; None for an engine without a proxy."""
+def routed_backend_factory(
+    name: str, place_of: Callable[[Path], Place] = lambda _: NOWHERE
+) -> Callable[[Path], BrowserBackend] | None:
+    """The engine made with another egress proxy socket, for the Mac tunnel; None for an engine without a proxy. An
+    engine that can also takes the Mac's time zone and language (`place_of` the socket), so they match its address."""
     factory = cast(Callable[..., BrowserBackend], import_object(name))
-    if 'egress_socket' not in inspect.signature(factory).parameters:
+    parameters = inspect.signature(factory).parameters
+    if 'egress_socket' not in parameters:
         return None
-    return lambda socket: factory(egress_socket=socket)
+    if 'timezone' not in parameters:
+        return lambda socket: factory(egress_socket=socket)
+
+    def routed(socket: Path) -> BrowserBackend:
+        place = place_of(socket)
+        return factory(egress_socket=socket, timezone=place.timezone, locale=place.locale)
+
+    return routed
 
 
 def mac_route(pool: Pool, tunnels: Tunnels) -> Callable[[str, str], Awaitable[Path | None]]:
@@ -115,8 +126,10 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
     # Runs of one user share the lease, and one browser in tabs, only on this server.
     lease = PostgresLease(pool, owner=settings.executor_id)
     new_backend = backend_factory(settings.browser_backend)
-    routed = routed_backend_factory(settings.browser_backend) if settings.mac_tunnel else None
-    tunnels = Tunnels(settings.tunnel_dir) if routed is not None else None
+    tunnels = Tunnels(settings.tunnel_dir) if settings.mac_tunnel else None
+    routed = routed_backend_factory(settings.browser_backend, tunnels.place_of) if tunnels is not None else None
+    if routed is None:
+        tunnels = None  # an engine without a proxy cannot go out through the Mac
     browser = BrowserHost(
         new_backend=new_backend,
         jar=jar,

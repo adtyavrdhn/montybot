@@ -206,6 +206,11 @@ class CDPOptions:
     software_webgl: bool = True
     """Pass `--enable-unsafe-swiftshader`, for WebGL with no GPU. A browser that reports a GPU of its own, such as
     CloakBrowser (`cloak.py`), goes without it."""
+    timezone: str | None = None
+    """The IANA zone the browser's clock is in (`TZ`). It should be where the browser's traffic leaves from: bot checks
+    such as PerimeterX compare the two, and a Toronto address with a UTC clock looks like a bot. None: the machine's."""
+    locale: str | None = None
+    """The language the browser reports and asks sites for, such as `en-CA`. None: Chrome's own default."""
 
     @classmethod
     def server(cls, *, egress_socket: Path | None = None, headless: bool = False) -> CDPOptions:
@@ -219,6 +224,7 @@ class CDPOptions:
             f'--user-data-dir={profile}',
             *(arg for arg in _ARGS if self.software_webgl or arg != '--enable-unsafe-swiftshader'),
             f'--window-size={self.window_width},{self.window_height}',
+            *(language_args(self.locale) if self.locale else ()),
         ]
         if self.headless:
             argv.append('--headless')
@@ -235,9 +241,24 @@ class CDPOptions:
             display=display,
             proxy=proxy,
             proxy_directory=proxy.parent if self.egress_socket is not None else None,
+            env=self.clock(),
             bwrap=self.bwrap_path,
         )
         return [*jail, *argv[1:]]
+
+    def clock(self) -> dict[str, str]:
+        """The environment that sets the browser's time zone, if it has one of its own."""
+        return {'TZ': self.timezone} if self.timezone else {}
+
+
+def language_args(locale: str) -> tuple[str, ...]:
+    """Chrome's own locale (not the jail's LANG=C.UTF-8), and `navigator.languages` as a stock Chrome in `locale` has
+    it: `en-CA` gives ["en-CA", "en"]."""
+    language = locale.split('-')[0]
+    return (
+        f'--lang={locale}',
+        f'--accept-lang={locale},{language}' if language != locale else f'--accept-lang={locale}',
+    )
 
 
 # --- input, shared with the live view ---
@@ -701,6 +722,8 @@ class ChromiumCDPBackend:
         ours: list[int] = []
         try:
             env: dict[str, str] | None = None
+            if options.timezone and not options.bwrap:  # the jail sets its own environment (`command`)
+                env = {**os.environ, **options.clock()}
             if options.virtual_screen and not options.headless:
                 try:
                     screen = await start_virtual_screen(
@@ -711,7 +734,8 @@ class ChromiumCDPBackend:
                     )
                 except (OSError, RuntimeError) as error:
                     raise ActionFailed(f'could not start a virtual screen: {error}') from error
-                env = {**os.environ, 'DISPLAY': screen.display.name, 'XAUTHORITY': str(screen.display.xauthority)}
+                display = {'DISPLAY': screen.display.name, 'XAUTHORITY': str(screen.display.xauthority)}
+                env = {**(env or os.environ), **display}
             socket_path: Path | None = None
             if options.bwrap:
                 if shutil.which(options.bwrap_path) is None:

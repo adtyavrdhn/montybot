@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from montybot.browser.cdp import CDPOptions
+from montybot.browser.cdp import CDPOptions, language_args
 
 BINARY_ENV = 'MONTYBOT_CLOAK_BINARY'
 SEED_ENV = 'MONTYBOT_CLOAK_SEED'
@@ -73,10 +73,8 @@ class Fingerprint:
             f'--fingerprint={self.seed}',
             f'--fingerprint-platform={self.platform}',
             f'--fingerprint-timezone={self.timezone}',
-            # Chrome's own locale, not the jail's (LANG=C.UTF-8), and `navigator.languages` as a stock en-US Chrome
-            # has it: ["en-US", "en"]. Not their `--fingerprint-locale`, which leaves only ["en-US"].
-            f'--lang={self.locale}',
-            f'--accept-lang={self.locale},{self.locale.split("-")[0]}',
+            # Not their `--fingerprint-locale`, which leaves `navigator.languages` only ["en-US"].
+            *language_args(self.locale),
         )
         return args if headless else (*args, '--ignore-gpu-blocklist')
 
@@ -89,10 +87,16 @@ def with_cloak(
     executable = executable or cloak_executable()
     if executable is None:
         raise RuntimeError(f'CloakBrowser needs its binary: set {BINARY_ENV} (see montybot/browser/cloak.md)')
+    # The browser's place (`options.timezone` and `locale`, where its traffic leaves from) wins over the fingerprint's
+    # default, the server's; the fingerprint passes the language flags, so the options do not too.
     fingerprint = fingerprint or Fingerprint()
+    fingerprint = dataclasses.replace(
+        fingerprint, timezone=options.timezone or fingerprint.timezone, locale=options.locale or fingerprint.locale
+    )
     return dataclasses.replace(
         options,
         executable=executable,
         software_webgl=False,
+        locale=None,
         extra_args=(*fingerprint.args(headless=options.headless), *options.extra_args),
     )
