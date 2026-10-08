@@ -10,9 +10,12 @@ Everything runs on one Linux machine with Docker Compose (`deploy/compose.yaml`)
 | `backup` | `pg_dump` every night at `BACKUP_AT` (03:00 UTC) into `/opt/montybot/backups`, keeping `BACKUP_KEEP_DAYS` (14) days |
 | `browser-egress` | public-only SOCKS proxy for jailed browsers, on a separate bridge without Postgres or app credentials; the app mounts only its socket volume |
 
-The app allows at most `BROWSER_MAX_OPEN` live browsers (default 2 on the server). A user's runs share one browser,
-each in its own tab, so they run side by side and count once. When full it saves and closes the
-least-recently-used browser that is neither busy nor in a hand-off; that run reopens from saved state on its next call.
+The app allows at most `BROWSER_MAX_OPEN` live browsers (default 8 on the server: about 430 MB and 1.3% of a core
+each when idle, per `montybot/browser/CHROMIUM.md`). A user's runs share one browser, each in its own tab, so they
+run side by side and count once. A user's browser stays open between their runs (`BROWSER_KEEP_OPEN`) until it has
+been idle for `BROWSER_IDLE_TIMEOUT_SECONDS` (a day). When full it first closes the browser parked longest, then
+saves and closes the least-recently-used browser that is neither busy nor in a hand-off; that run reopens from saved
+state on its next call.
 If all browsers are busy, a new call fails quickly rather than starting an unbounded number of Chromium processes.
 Tune this against measured VM memory: it is a concurrency guard, **not** a per-browser memory limit. Do not give
 bwrap writable cgroups or Docker privileged mode to impose one.

@@ -40,7 +40,7 @@ public final class ChatModel {
     public private(set) var answering = false
     public private(set) var stopping = false
     public private(set) var takingOver = false
-    /// The bot's browser as it works (PNG), while `watching`.
+    /// The bot's browser as it works (PNG), while `watching`; after the run, the browser as Monty left it.
     public private(set) var screen: Data?
     public private(set) var live: LiveSession?
     /// Shown once above the composer, then cleared by the view.
@@ -63,11 +63,11 @@ public final class ChatModel {
             app?.answerDrafts[ask.id] = AnswerDraft(threadId: threadId, text: newValue)
         }
     }
-    /// Whether the bot's browser panel is open. It opens while the run is going on (working, or waiting for the
-    /// user, when they most want to look), and closes when it ends.
+    /// Whether the bot's browser panel is open. It stays open when the run ends: the browser does too, where Monty
+    /// left it, until the user's next task carries on in it.
     public var watching = false {
         didSet {
-            if watching, !isActive || closed { watching = false; browserExpanded = false; return }
+            if watching, run == nil || closed { watching = false; browserExpanded = false; return }  // nothing to see yet
             if !watching { browserExpanded = false }
             watching ? startWatching() : stopWatching()
         }
@@ -228,8 +228,9 @@ public final class ChatModel {
         guard !closed else { return }
         if run?.ask?.id != self.run?.ask?.id { denying = false; answerError = nil }  // that ask is gone
         self.run = run
-        if !isActive, watching { watching = false }
-        if run?.status.isActive != true { preview = nil; screen = nil }
+        if run == nil, watching { watching = false }
+        if run?.status.isActive != true { preview = nil }
+        if run == nil { screen = nil }
         if let live, !live.state.isOver, !live.givingBack, run?.status != .waiting || run?.ask?.kind != .handoff {
             live.close()  // the hand-off was answered elsewhere, or the run stopped: the live view is over
         }
@@ -309,7 +310,6 @@ public final class ChatModel {
                             if await refresh() { return }
                             run = status
                             preview = nil
-                            if watching { watching = false }  // nothing more to see
                             app?.chatChanged(self)
                             await refreshUntilShown()
                             return
@@ -616,7 +616,7 @@ public final class ChatModel {
     }
 
     private func fetchScreen() async {
-        guard let run, run.status == .running, !closed else { return }  // waiting: keep the last picture
+        guard let run, run.status != .waiting, !closed else { return }  // waiting: keep the last picture
         if let png = try? await client.screen(run: run.id), !Task.isCancelled, !closed, self.run?.id == run.id {
             screen = png
         }

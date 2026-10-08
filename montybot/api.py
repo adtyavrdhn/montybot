@@ -534,12 +534,12 @@ async def live_link(request: Request, user: User) -> Response:
 
 @auth.signed_in
 async def watch_screen(request: Request, user: User) -> Response:
-    """The bot's browser as it works, for the user to watch: read only, and only while the run is running (during a
-    hand-off the user has the live view instead)."""
+    """The bot's browser as it works, for the user to watch: read only. Once the run has ended, the user's browser
+    kept open for their next run (during a hand-off the user has the live view instead)."""
     resources = resources_of(request)
     async with resources.pool.connection() as connection:
         run = await store.get_run(connection, user.id, str(request.path_params['run_id']))
-    if run is None or run.status != 'running':
+    if run is None:
         return NOT_FOUND
     try:
         screenshot = await resources.browser.peek_screenshot(run_id=run.id, user_id=user.id)

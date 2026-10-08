@@ -3,14 +3,19 @@
 - **One browser per run, or one tab per run.** `start` makes a backend with `new_backend()` and opens it from the
   user's saved state. With `share_browser`, a run of a user whose browser is open gets a tab of that browser instead
   (`TabsBackend.new_tab`), sharing its cookies, so runs of one user work side by side. A retry of the same run gets
-  the same browser or tab back, so it outlives the agent attempt that started it.
+  the same browser or tab back, so it outlives the agent attempt that started it. Only runs going out the same way
+  (`Detour`: the user's Mac or the server) share a browser.
+- **Kept open between runs.** With `keep_open`, a user's browser stays open when their last run ends (`close` still
+  saves it and frees the lease), and their next run carries on in it where the last one left off: open tabs, forms
+  and all. Closed only once idle for `idle_timeout`, to make room (`max_open_browsers`), or when it cannot export.
 - **One browser per user.** A run holds the user's `JarLease` from `start` until `close`. Without `share_browser`,
   another run of the same user gets `UserBusy` until then, so two browsers never save over each other. With it, runs
   share the lease, and the one browser they share is the only writer.
 - **Saving.** `save_state`, `end_handoff`, `close` and the idle reaper export the browser's state into the user's
   `SignInJar`. Call `save_state` before pausing a run, so a crash during the pause loses nothing.
 - **Idle reaper.** Inside `async with BrowserHost(...)`, a task saves and closes every browser that has not been used
-  for `idle_timeout` seconds. The run stays alive: its next call starts a new browser.
+  for `idle_timeout` seconds (a day by default), parked ones too. A run stays alive: its next call starts a new
+  browser.
 - **Restarts are reported.** When a run's browser is gone (reaped, crashed, or the service restarted), the next call
   starts a new one from the saved state, and its result carries `Restarted(reason, url)`. A crash is noticed when a
   call fails and the browser no longer answers `snapshot()`. A read (`snapshot`, `screenshot`) is then retried on the
@@ -84,7 +89,7 @@ class Detour:
     new_backend: Callable[[Path], BrowserBackend]
 
 
-DEFAULT_IDLE_TIMEOUT = 10 * 60.0
+DEFAULT_IDLE_TIMEOUT = 24 * 60 * 60.0
 """Seconds without a call before the reaper saves and closes a browser."""
 
 CRASHED = 'the browser stopped unexpectedly'
@@ -120,6 +125,19 @@ class _Run:
     """Held for every call into the backend, which is not safe to use concurrently."""
     sources: list[FrameSource] = field(default_factory=list[FrameSource])
     """Live views of the active hand-off, closed when it ends or the browser closes."""
+    egress: Path | None = None
+    """The way out the run's browser goes (`Detour`); None is the usual one. Only runs going out the same way share a
+    browser."""
+
+
+@dataclass(kw_only=True, eq=False)
+class _Parked:
+    """A user's browser, kept open after their last run ended (`keep_open`): that run's tab, where it left off."""
+
+    backend: BrowserBackend
+    egress: Path | None
+    url: str
+    since: float = field(default_factory=time.monotonic)
 
 
 class _Gone(Exception):
@@ -132,6 +150,8 @@ class BrowserHost:
     `idle_timeout` is in seconds. `reap_every` is how often the reaper looks, by default a quarter of `idle_timeout`
     and at most a minute. `share_browser` (for an engine with tabs, `TabsBackend`) gives runs of the same user tabs
     of one browser, so they run side by side; `max_open_browsers` then counts each user's browser once.
+    `keep_open` keeps a user's browser open when their last run ends, for their next run, until it has been idle for
+    `idle_timeout` or must make room for another.
     """
 
     def __init__(
@@ -145,9 +165,12 @@ class BrowserHost:
         max_open_browsers: int | None = None,
         share_browser: bool = False,
         detour: Detour | None = None,
+        keep_open: bool = False,
     ) -> None:
         self._new_backend = new_backend
         self._detour = detour
+        self._keep_open = keep_open
+        self._parked: dict[UserId, _Parked] = {}
         self._share_browser = share_browser
         self._user_locks: dict[UserId, asyncio.Lock] = {}
         self._jar = jar
@@ -184,6 +207,9 @@ class BrowserHost:
         for run in list(self._runs.values()):
             async with run.lock:
                 await self._save_and_drop(run, SERVICE_RESTARTED)
+        parked, self._parked = self._parked, {}
+        for browser in parked.values():
+            await _close_quietly(browser.backend)
 
     # --- BrowserService ---
 
@@ -232,17 +258,35 @@ class BrowserHost:
     @timed('browser.peek_screenshot', only_in_trace=True)
     async def peek_screenshot(self, *, run_id: RunId, user_id: UserId) -> Screenshot:
         """The viewport of the run's open browser, for the user watching the run. Read only: it never opens, restarts
-        or keeps a browser alive, and does not wait for a call in progress. `UnknownRun` if there is no open browser
-        or it is busy; `HandoffActive` during a hand-off."""
+        or keeps a browser alive, and does not wait for a call in progress. Once the run has ended, the user's browser
+        kept open (`keep_open`), where their last run left it. `UnknownRun` if there is no open browser or it is busy;
+        `HandoffActive` during a hand-off."""
         run = self._runs.get(run_id)
-        backend = run.backend if run is not None and run.user_id == user_id else None
-        if run is None or backend is None or run.lock.locked():
+        if run is None:
+            return await self._peek_parked(user_id)
+        backend = run.backend if run.user_id == user_id else None
+        if backend is None or run.lock.locked():
             raise UnknownRun('no browser to watch for this run')
         async with run.lock:  # free when checked above; only a waiter woken just before could get it first
             _check_handoff(run, None)
             try:
                 return await self._call(run, backend, lambda backend: backend.screenshot())
             except Exception as error:  # a watcher gets the next frame instead, whatever went wrong with this one
+                raise UnknownRun('no browser to watch for this run') from error
+
+    async def _peek_parked(self, user_id: UserId) -> Screenshot:
+        """The viewport of the user's parked browser. Under the user's lock, so a run cannot take it meanwhile; never
+        waits for that lock."""
+        lock = self._user_locks.get(user_id)
+        if user_id not in self._parked or (lock is not None and lock.locked()):
+            raise UnknownRun('no browser to watch for this run')
+        async with self._user_locks.setdefault(user_id, asyncio.Lock()):
+            parked = self._parked.get(user_id)
+            if parked is None:
+                raise UnknownRun('no browser to watch for this run')
+            try:
+                return await parked.backend.screenshot()
+            except Exception as error:  # stopped while parked: the next run finds out and starts another
                 raise UnknownRun('no browser to watch for this run') from error
 
     @timed('browser.handoff.start')
@@ -323,11 +367,14 @@ class BrowserHost:
             self._closed.add(run_id)
             raise
         async with self._hold(run):
+            saved = False
             try:
                 saved = await self._save_if_open(run)
             except UserBusy:  # the lease was lost, so the jar belongs to another run now
-                saved = False
+                pass
             finally:
+                if saved and self._keep_open:
+                    await self._park(run)
                 await self._drop(run)
                 run.handoff = None
                 run.closed = True
@@ -349,6 +396,11 @@ class BrowserHost:
                 if not self._has_idle_browser(run):
                     continue  # used or closed while the reaper waited for the lock
                 await self._save_and_drop(run, f'closed after {_duration(self.idle_timeout)} idle')
+                reaped += 1
+        for user_id, browser in list(self._parked.items()):
+            if time.monotonic() - browser.since >= self.idle_timeout and self._parked.get(user_id) is browser:
+                del self._parked[user_id]
+                await _close_quietly(browser.backend)
                 reaped += 1
         return reaped
 
@@ -425,16 +477,49 @@ class BrowserHost:
             return run.backend
         # One at a time per user, so a run opening a tab sees the browser another run of the user has just started.
         async with self._user_locks.setdefault(run.user_id, asyncio.Lock()):
+            if self._detour is not None:
+                run.egress = await self._detour.route(run.run_id, run.user_id)
             if (sibling := self._sibling(run)) is not None and (tab := await self._open_tab(run, sibling)) is not None:
                 return tab
+            if (parked := await self._unpark(run)) is not None:
+                return parked
             return await self._launch(run)
+
+    async def _park(self, run: _Run) -> None:
+        """Keep the ending run's browser open for the user's next run. Not while another run of the user has a tab in
+        it: then only this run's tab closes. A user has one parked browser; an older one is closed."""
+        await _close_sources(run)
+        async with self._user_locks.setdefault(run.user_id, asyncio.Lock()):
+            if run.backend is None or (self._share_browser and self._sibling(run) is not None):
+                return
+            older = self._parked.pop(run.user_id, None)
+            self._parked[run.user_id] = _Parked(backend=run.backend, egress=run.egress, url=run.url)
+            run.backend = None
+        if older is not None:
+            await _close_quietly(older.backend)
+
+    async def _unpark(self, run: _Run) -> BrowserBackend | None:
+        """The user's parked browser for the run, where it was left, if it goes out the run's way and still answers.
+        Otherwise it is closed: its state is in the jar already, which the run's new browser starts from."""
+        parked = self._parked.pop(run.user_id, None)
+        if parked is None:
+            return None
+        if parked.egress == run.egress and await _answers(parked.backend):
+            return self._opened(run, parked.backend, parked.url)
+        await _close_quietly(parked.backend)
+        return None
 
     def _sibling(self, run: _Run) -> TabsBackend | None:
         """The open browser of another run of the same user, to open this run's tab in."""
         if not self._share_browser:
             return None
         for other in self._runs.values():
-            if other is not run and other.user_id == run.user_id and isinstance(other.backend, TabsBackend):
+            if (
+                other is not run
+                and other.user_id == run.user_id
+                and other.egress == run.egress
+                and isinstance(other.backend, TabsBackend)
+            ):
                 return other.backend
         return None
 
@@ -481,8 +566,8 @@ class BrowserHost:
                 self._launching -= 1
 
     async def _make_backend(self, run: _Run) -> BrowserBackend:
-        if self._detour is not None and (egress := await self._detour.route(run.run_id, run.user_id)) is not None:
-            return self._detour.new_backend(egress)
+        if self._detour is not None and run.egress is not None:
+            return self._detour.new_backend(run.egress)
         return self._new_backend()
 
     def _opened(self, run: _Run, backend: BrowserBackend, url: str) -> BrowserBackend:
@@ -502,7 +587,14 @@ class BrowserHost:
             if other.backend is not None and other is not run:
                 key = f'user {other.user_id}' if self._share_browser else f'run {other.run_id}'
                 browsers.setdefault(key, []).append(other)
-        if self._max_open_browsers is None or len(browsers) + self._launching < self._max_open_browsers:
+        if (
+            self._max_open_browsers is None
+            or len(browsers) + len(self._parked) + self._launching < self._max_open_browsers
+        ):
+            return
+        if self._parked:  # nobody is using those: the one parked longest goes first
+            user_id = min(self._parked, key=lambda user_id: self._parked[user_id].since)
+            await _close_quietly(self._parked.pop(user_id).backend)
             return
         candidates = sorted(
             (runs for runs in browsers.values() if not any(r.handoff or r.lock.locked() for r in runs)),
@@ -640,6 +732,9 @@ async def _close_quietly(backend: BrowserBackend) -> None:
 
 
 def _duration(seconds: float) -> str:
+    if seconds >= 3600 and seconds % 3600 == 0:
+        hours = int(seconds // 3600)
+        return f'{hours} hour' + ('s' if hours != 1 else '')
     if seconds >= 60 and seconds % 60 == 0:
         minutes = int(seconds // 60)
         return f'{minutes} minute' + ('s' if minutes != 1 else '')

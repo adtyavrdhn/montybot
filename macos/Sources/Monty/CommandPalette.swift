@@ -148,7 +148,7 @@ struct CommandPalette: View {
                 items.append(Item(id: "retry", title: "Try again", icon: "arrow.clockwise", shortcut: "⌘R") { Task { await chat.retry() } })
                 items.append(Item(id: "edit", title: "Edit and send again", icon: "pencil") { chat.editLastTask() })
             }
-            if chat.isActive {
+            if chat.run != nil {
                 items.append(Item(id: "watch", title: chat.watching ? "Hide Monty's browser" : "Watch Monty's browser", icon: "macwindow", shortcut: "⇧⌘B") {
                     chat.watching.toggle()
                 })

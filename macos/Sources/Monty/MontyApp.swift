@@ -257,12 +257,12 @@ struct MontyCommands: Commands {
                 app.chat?.watching.toggle()
             }
             .keyboardShortcut("b", modifiers: [.command, .shift])
-            .disabled(app.chat?.isActive != true || app.isTakingOver)
+            .disabled(app.chat?.run == nil || app.isTakingOver)
             Button(app.chat?.browserExpanded == true ? "Back to the Chat" : "Expand Monty's Browser") {
                 app.chat?.browserExpanded.toggle()
             }
             .keyboardShortcut("f", modifiers: [.command, .shift])
-            .disabled(app.chat?.isActive != true || app.isTakingOver)
+            .disabled(app.chat?.run == nil || app.isTakingOver)
             Divider()
             Button("Next Chat Needing You") {
                 if let next = nextNeedingYou { show(.chat(next.id)) }
