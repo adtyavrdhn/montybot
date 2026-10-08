@@ -19,17 +19,17 @@ from pathlib import Path
 import pytest
 from playwright.async_api import async_playwright
 
-from montybot.browser.chromium import ChromiumBackend, ChromiumOptions
-from montybot.browser.chromium_linux import (
+from sammy.browser.chromium import ChromiumBackend, ChromiumOptions
+from sammy.browser.chromium_linux import (
     Display,
     bwrap_command,
     start_virtual_screen,
     write_bwrap_script,
     xauthority_entry,
 )
-from montybot.browser.conformance import Site, sample_state, serve_site
-from montybot.browser.contract import ActionFailed, Navigate
-from montybot.browser.egress import EgressProxy
+from sammy.browser.conformance import Site, sample_state, serve_site
+from sammy.browser.contract import ActionFailed, Navigate
+from sammy.browser.egress import EgressProxy
 
 pytestmark = pytest.mark.anyio
 
@@ -197,7 +197,7 @@ async def check_server_launch(backend: ChromiumBackend, site: Site) -> Path:
 
 @pytest.mark.skipif(sys.platform == 'linux', reason='headed Chrome under the stand-in Xvfb needs a real screen')
 @pytest.mark.skipif(
-    os.environ.get('MONTYBOT_HEADED') != '1', reason='opens a real window on this desktop; set MONTYBOT_HEADED=1 to run'
+    os.environ.get('SAMMY_HEADED') != '1', reason='opens a real window on this desktop; set SAMMY_HEADED=1 to run'
 )
 async def test_server_launch_with_stand_ins(tmp_path: Path) -> None:
     log = tmp_path / 'bwrap-args'

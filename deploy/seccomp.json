@@ -1232,7 +1232,7 @@
 				"pivot_root"
 			],
 			"action": "SCMP_ACT_ALLOW",
-			"comment": "montybot: bwrap makes user, mount, pid and network namespaces without CAP_SYS_ADMIN (deploy/README.md)"
+			"comment": "sammy: bwrap makes user, mount, pid and network namespaces without CAP_SYS_ADMIN (deploy/README.md)"
 		}
 	]
 }

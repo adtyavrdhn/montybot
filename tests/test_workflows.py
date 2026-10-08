@@ -8,9 +8,9 @@ import logging
 import pydantic_ai.exceptions
 from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException
 
-from montybot.browser import cdp_client, contract, service
-from montybot.vendor.claude_code import auth as claude_code_auth
-from montybot.workflows import FAILURE_NOTICE, FAILURE_NOTICES, HideStoppedRuns, failure_notice
+from sammy.browser import cdp_client, contract, service
+from sammy.vendor.claude_code import auth as claude_code_auth
+from sammy.workflows import FAILURE_NOTICE, FAILURE_NOTICES, HideStoppedRuns, failure_notice
 
 
 def record(error: BaseException) -> logging.LogRecord:

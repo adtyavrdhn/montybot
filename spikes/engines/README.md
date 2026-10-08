@@ -1,6 +1,6 @@
 # Browser engine spike
 
-Measures six browser engines against monty-bot's five requirements, next to the earlier Servo 0.7.0 spike
+Measures six browser engines against Sammy's five requirements, next to the earlier Servo 0.7.0 spike
 (`../servo`). Everything ran on the same M-series Mac (macOS 26.5, arm64) on 2026-10-06.
 
 | Engine | Version | How it was driven |

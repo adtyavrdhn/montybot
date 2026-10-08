@@ -1,5 +1,5 @@
-"""Files in chats (`montybot.attachments`): the user attaches files to a message, the model sees what it can and the
-run's code gets every file in /work/uploads; Monty shares a file back with its reply. Another user can reach none of
+"""Files in chats (`sammy.attachments`): the user attaches files to a message, the model sees what it can and the
+run's code gets every file in /work/uploads; Sammy shares a file back with its reply. Another user can reach none of
 it."""
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ def test_the_model_sees_attached_files_and_the_code_gets_them(app: App, client: 
     assert seen[4] == 'image/png 40x30'  # small already: as it was
     assert seen[6] == f'application/pdf {len(PDF)} bytes'
     assert seen[8] == 'file text: <file name="notes.md">\\n# Groceries\\neggs, milk\\n\\n</file>'
-    # Monty opens these with code: the model gets their notes only (a "PNG" that is not one is never sent as one).
+    # Sammy opens these with code: the model gets their notes only (a "PNG" that is not one is never sent as one).
     assert len(seen) == 11
     assert seen[9].startswith('note: [The user attached "budget.xlsx"')
     assert seen[10].startswith('note: [The user attached "fake.png"')
@@ -108,7 +108,7 @@ def test_the_model_sees_attached_files_and_the_code_gets_them(app: App, client: 
     # The stored history keeps a note per file, never the bytes; the next message gets the files back.
     with psycopg.connect(app.env['DATABASE_URL']) as connection:
         payloads = connection.execute(
-            'SELECT payload FROM montybot.messages WHERE thread_id = %s', (thread_id,)
+            'SELECT payload FROM sammy.messages WHERE thread_id = %s', (thread_id,)
         ).fetchall()
     asked = json.dumps(
         [part for (payload,) in payloads for part in payload['parts'] if part['part_kind'] == 'user-prompt']
@@ -143,7 +143,7 @@ def test_files_keep_the_order_they_were_sent_in(client: Client) -> None:
     assert seen.index('"second.txt"') < seen.index('"first.txt"')  # and the model reads them so
 
 
-def test_monty_shares_a_file_with_its_reply(client: Client) -> None:
+def test_sammy_shares_a_file_with_its_reply(client: Client) -> None:
     client.sign_up()
     thread_id = client.ask('Make me a report')
     reply = client.wait_for_reply(thread_id)

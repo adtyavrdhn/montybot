@@ -1,7 +1,7 @@
-"""CloakBrowser under `ChromiumCDPBackend` (`montybot/browser/cloak.py`): the conformance suite, the jail, and the device
+"""CloakBrowser under `ChromiumCDPBackend` (`sammy/browser/cloak.py`): the conformance suite, the jail, and the device
 it presents.
 
-Needs the binary at `$MONTYBOT_CLOAK_BINARY` (`tests/linux/fetch_cloak.sh` downloads it); the tests that start it are
+Needs the binary at `$SAMMY_CLOAK_BINARY` (`tests/linux/fetch_cloak.sh` downloads it); the tests that start it are
 skipped without it. The jailed tests also need Linux with bwrap, socat and Xvfb.
 """
 
@@ -18,16 +18,16 @@ from pathlib import Path
 import pytest
 from test_cdp import listening_ports
 
-from montybot.browser.cdp import CDPOptions, ChromiumCDPBackend
-from montybot.browser.cloak import Fingerprint, cloak_executable, fingerprint_seed, with_cloak
-from montybot.browser.conformance import BrowserBackendConformance, Site, serve_site, wait_for_text
-from montybot.browser.contract import ActionFailed, BrowserBackend, Navigate
+from sammy.browser.cdp import CDPOptions, ChromiumCDPBackend
+from sammy.browser.cloak import Fingerprint, cloak_executable, fingerprint_seed, with_cloak
+from sammy.browser.conformance import BrowserBackendConformance, Site, serve_site, wait_for_text
+from sammy.browser.contract import ActionFailed, BrowserBackend, Navigate
 
 pytestmark = pytest.mark.anyio
 
 BINARY = cloak_executable()
 needs_cloak = pytest.mark.skipif(
-    BINARY is None or not BINARY.exists(), reason='no CloakBrowser: set MONTYBOT_CLOAK_BINARY'
+    BINARY is None or not BINARY.exists(), reason='no CloakBrowser: set SAMMY_CLOAK_BINARY'
 )
 needs_jail = pytest.mark.skipif(
     sys.platform != 'linux' or not all(shutil.which(tool) for tool in ('bwrap', 'socat', 'Xvfb')),
@@ -142,9 +142,9 @@ async def test_the_page_sees_the_device_we_chose(options: CDPOptions) -> None:
 def binary_env(value: str | None) -> Iterator[None]:
     with pytest.MonkeyPatch.context() as patch:
         if value is None:
-            patch.delenv('MONTYBOT_CLOAK_BINARY', raising=False)
+            patch.delenv('SAMMY_CLOAK_BINARY', raising=False)
         else:
-            patch.setenv('MONTYBOT_CLOAK_BINARY', value)
+            patch.setenv('SAMMY_CLOAK_BINARY', value)
         yield
 
 
@@ -199,7 +199,7 @@ def test_the_browsers_place_wins_over_the_servers() -> None:
 
 
 def test_the_binary_comes_from_the_environment() -> None:
-    with binary_env(None), pytest.raises(RuntimeError, match='MONTYBOT_CLOAK_BINARY'):
+    with binary_env(None), pytest.raises(RuntimeError, match='SAMMY_CLOAK_BINARY'):
         with_cloak(CDPOptions(executable=Path('/c')))
     with binary_env('/opt/cloak/chrome'):
         assert with_cloak(CDPOptions(executable=Path('/c'))).executable == Path('/opt/cloak/chrome')
@@ -207,13 +207,13 @@ def test_the_binary_comes_from_the_environment() -> None:
 
 def test_the_seed_is_stable() -> None:
     """One identity is one device on every launch and every machine; the seed stays in their wrapper's range."""
-    assert fingerprint_seed('montybot') == fingerprint_seed('montybot') != fingerprint_seed('other')
+    assert fingerprint_seed('sammy') == fingerprint_seed('sammy') != fingerprint_seed('other')
     assert all(10_000 <= fingerprint_seed(str(n)) <= 99_999 for n in range(200))
     with pytest.MonkeyPatch.context() as patch:
-        patch.setenv('MONTYBOT_CLOAK_SEED', '54321')
+        patch.setenv('SAMMY_CLOAK_SEED', '54321')
         assert Fingerprint().seed == 54_321
-        patch.setenv('MONTYBOT_CLOAK_SEED', 'staging')
+        patch.setenv('SAMMY_CLOAK_SEED', 'staging')
         assert Fingerprint().seed == fingerprint_seed('staging')
-        patch.delenv('MONTYBOT_CLOAK_SEED')
-        assert Fingerprint().seed == fingerprint_seed('montybot')
+        patch.delenv('SAMMY_CLOAK_SEED')
+        assert Fingerprint().seed == fingerprint_seed('sammy')
     assert replace(DEVICE, seed=1).args(headless=True)[0] == '--fingerprint=1'

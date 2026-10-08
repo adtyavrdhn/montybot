@@ -7,8 +7,8 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from montybot import memory, store
-from montybot.db import Pool, create_pool, migrate
+from sammy import memory, store
+from sammy.db import Pool, create_pool, migrate
 
 pytestmark = pytest.mark.anyio
 

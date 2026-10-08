@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Bundles Logfire's browser SDK into one self-contained ES module, montybot/static/vendor/logfire-browser.js, which
-# montybot/static/telemetry.js imports. The web app has no build step: this runs only to update the SDK, and its
+# Bundles Logfire's browser SDK into one self-contained ES module, sammy/static/vendor/logfire-browser.js, which
+# sammy/static/telemetry.js imports. The web app has no build step: this runs only to update the SDK, and its
 # output is committed. Needs Node.js (npm). Run from anywhere: scripts/vendor-logfire-browser.sh
 set -euo pipefail
 
@@ -17,7 +17,7 @@ PACKAGES=(
 )
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-out="$root/montybot/static/vendor/logfire-browser.js"
+out="$root/sammy/static/vendor/logfire-browser.js"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 cd "$work"

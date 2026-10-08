@@ -2,7 +2,7 @@
 and a scripted human.
 
 ```
-pytest process                                 app process (python -m montybot serve)
+pytest process                                 app process (python -m sammy serve)
   fixture sites (tests/sites) on threads  <---  browser backend (HtmlBrowser, or Chromium with --browser=chromium)
   Client: the web app's API over HTTP     --->  Starlette + DBOS workflows + the agent
   Human: drives a hand-off through the live-view API, as a person in the web app would
@@ -32,8 +32,8 @@ import httpx
 import pytest
 from helpers import eventually, free_port
 
-from montybot.browser.contract import MouseDown, MouseUp, Point, Press, Type
-from montybot.liveview.client import LiveViewClient
+from sammy.browser.contract import MouseDown, MouseUp, Point, Press, Type
+from sammy.liveview.client import LiveViewClient
 
 ROOT = Path(__file__).resolve().parents[2]
 TESTS = ROOT / 'tests'
@@ -41,22 +41,22 @@ T = TypeVar('T')
 
 BACKENDS = {
     'fake': 'sites.html_browser:new_backend',
-    'chromium': 'montybot.engines:chromium_headless',
-    # Unjailed headless servoshell at MONTYBOT_SERVO_BINARY, for the engine evaluation (#18).
-    'servo': 'montybot.browser.servo:ServoBackend',
+    'chromium': 'sammy.engines:chromium_headless',
+    # Unjailed headless servoshell at SAMMY_SERVO_BINARY, for the engine evaluation (#18).
+    'servo': 'sammy.browser.servo:ServoBackend',
     # Chrome over our own CDP pipe, no Playwright, headless and unjailed (cdp.md).
-    'cdp': 'montybot.engines:chromium_cdp_headless',
-    # CloakBrowser at MONTYBOT_CLOAK_BINARY in place of Chrome, the same way (cloak.md).
-    'cloak': 'montybot.engines:cloak_headless',
-    # Unjailed Lightpanda at MONTYBOT_LIGHTPANDA_BINARY, for the same evaluation.
-    'lightpanda': 'montybot.browser.lightpanda:LightpandaBackend',
+    'cdp': 'sammy.engines:chromium_cdp_headless',
+    # CloakBrowser at SAMMY_CLOAK_BINARY in place of Chrome, the same way (cloak.md).
+    'cloak': 'sammy.engines:cloak_headless',
+    # Unjailed Lightpanda at SAMMY_LIGHTPANDA_BINARY, for the same evaluation.
+    'lightpanda': 'sammy.browser.lightpanda:LightpandaBackend',
 }
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         '--browser',
-        default=os.environ.get('MONTYBOT_BROWSER', 'fake'),
+        default=os.environ.get('SAMMY_BROWSER', 'fake'),
         choices=sorted(BACKENDS),
         help='the browser engine the app drives in end-to-end tests',
     )
@@ -65,12 +65,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     real_browser = config.getoption('--browser') != 'fake'
-    live = pytest.mark.skip(reason='real sites: run with --live, a real --browser and MONTYBOT_TEST_MODEL')
+    live = pytest.mark.skip(reason='real sites: run with --live, a real --browser and SAMMY_TEST_MODEL')
     scripted = pytest.mark.skip(reason='needs the scripted model')
     for item in items:
         if 'live' in item.keywords and not (config.getoption('--live') and real_browser):
             item.add_marker(live)
-        if 'scripted' in item.keywords and os.environ.get('MONTYBOT_TEST_MODEL'):
+        if 'scripted' in item.keywords and os.environ.get('SAMMY_TEST_MODEL'):
             item.add_marker(scripted)
 
 
@@ -94,7 +94,7 @@ class App:
         env = {**os.environ, **self.env, 'PORT': str(self.port), 'PUBLIC_URL': self.url}
         with self.log.open('ab') as log:
             self.process = subprocess.Popen(
-                [sys.executable, '-m', 'montybot', 'serve'],
+                [sys.executable, '-m', 'sammy', 'serve'],
                 cwd=ROOT,
                 env=env,
                 stdout=log,
@@ -157,14 +157,14 @@ def app(
         'DATABASE_URL': database_url,
         'SESSION_SECRET': 'test-session-secret',
         'ENCRYPTION_KEY': 'bW9udHlib3QtdGVzdC1rZXktMzItYnl0ZXMtbG9uZyE=',
-        'MODEL': os.environ.get('MONTYBOT_TEST_MODEL', 'script:e2e.scripts:model'),
+        'MODEL': os.environ.get('SAMMY_TEST_MODEL', 'script:e2e.scripts:model'),
         'BROWSER_BACKEND': backend,
         'PYTHONPATH': os.pathsep.join([str(TESTS), os.environ.get('PYTHONPATH', '')]),
         'EXECUTOR_ID': 'local',
         'ALLOW_PRIVATE_NETWORKS': 'true',  # the fixture sites are on 127.0.0.1
         'WORKSPACES_DIR': str(workspaces_dir),
         # Full Monty (monty-server), if the test run names one; local Monty subprocesses otherwise.
-        **({'MONTY_URL': url} if (url := os.environ.get('MONTYBOT_TEST_MONTY_URL')) else {}),
+        **({'MONTY_URL': url} if (url := os.environ.get('SAMMY_TEST_MONTY_URL')) else {}),
     }
     app = App(env=env | app_env, log=tmp_path / 'app.log')
     app.start()
@@ -257,7 +257,7 @@ class Human:
         return self.client.app.url.replace('http', 'ws', 1) + response.json()['url'] + '/ws'
 
     def drive(self, steps: Callable[[LiveViewClient], Awaitable[None]], *, give_back: bool = True) -> None:
-        session = self.client.http.cookies.get('montybot_session')
+        session = self.client.http.cookies.get('sammy_session')
 
         async def run() -> None:
             async with LiveViewClient.connect(self._ws_url(), session=session, origin=self.client.app.url) as live:

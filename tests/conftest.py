@@ -1,6 +1,6 @@
 """Shared fixtures: a Postgres server for the whole session, and a fresh database per test.
 
-Postgres: `MONTYBOT_TEST_POSTGRES` (a server URL whose user may create databases), else a `postgres:17` container
+Postgres: `SAMMY_TEST_POSTGRES` (a server URL whose user may create databases), else a `postgres:17` container
 this session starts with Docker.
 """
 
@@ -29,14 +29,14 @@ def _reachable(url: str) -> bool:
 @pytest.fixture(scope='session')
 def postgres() -> Iterator[str]:
     """A Postgres server URL whose user may create databases."""
-    url = os.environ.get('MONTYBOT_TEST_POSTGRES')
+    url = os.environ.get('SAMMY_TEST_POSTGRES')
     if url:
         yield url
         return
     if shutil.which('docker') is None:
-        pytest.skip('set MONTYBOT_TEST_POSTGRES or install Docker')
+        pytest.skip('set SAMMY_TEST_POSTGRES or install Docker')
     port = free_port()
-    name = f'montybot-test-{uuid.uuid4().hex[:8]}'
+    name = f'sammy-test-{uuid.uuid4().hex[:8]}'
     subprocess.run(
         [
             'docker',

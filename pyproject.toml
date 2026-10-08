@@ -1,5 +1,5 @@
 [project]
-name = "montybot"
+name = "sammy"
 version = "0.0.0"
 description = "An always-on agent built on Monty and Pydantic AI, with a browser it can hand to the user."
 requires-python = ">=3.11"
@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.scripts]
-montybot = "montybot.cli:main"
+sammy = "sammy.cli:main"
 
 [dependency-groups]
 dev = [
@@ -41,7 +41,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["montybot"]
+packages = ["sammy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -54,13 +54,13 @@ markers = [
     "u5: user path U5, files",
     "u6: user path U6, a bot check the user solves",
     "live: real sites and a real model, by hand only (--live)",
-    "scripted: only meaningful with the scripted model (skipped when MONTYBOT_TEST_MODEL is set)",
-    "deploy: the deployed stack in Docker (deploy/compose.yaml), only with MONTYBOT_TEST_DEPLOY=1",
+    "scripted: only meaningful with the scripted model (skipped when SAMMY_TEST_MODEL is set)",
+    "deploy: the deployed stack in Docker (deploy/compose.yaml), only with SAMMY_TEST_DEPLOY=1",
 ]
 
 [tool.ruff]
 line-length = 120
-extend-exclude = ["poc", "*.md", "montybot/vendor/claude_code"]
+extend-exclude = ["poc", "*.md", "sammy/vendor/claude_code"]
 
 [tool.ruff.lint]
 extend-select = ["I", "UP", "B"]
@@ -69,7 +69,7 @@ extend-select = ["I", "UP", "B"]
 quote-style = "single"
 
 [tool.pyright]
-include = ["montybot", "tests"]
-exclude = ["montybot/vendor/claude_code"]
-strict = ["montybot"]
+include = ["sammy", "tests"]
+exclude = ["sammy/vendor/claude_code"]
+strict = ["sammy"]
 pythonVersion = "3.11"

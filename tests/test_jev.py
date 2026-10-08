@@ -13,9 +13,9 @@ from pydantic import SecretStr
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from montybot.agent import build_agent
-from montybot.jev import Intent, candidates, decide, jev_tools, likelihood, make_model, suggest_navigation
-from montybot.settings import Settings
+from sammy.agent import build_agent
+from sammy.jev import Intent, candidates, decide, jev_tools, likelihood, make_model, suggest_navigation
+from sammy.settings import Settings
 
 
 def settings(**kwargs: Any) -> Settings:
@@ -90,7 +90,7 @@ def test_navigation_is_durable_advice_not_a_click(monkeypatch: pytest.MonkeyPatc
             jev_model=model('17', 0.95), settings=settings(), browser=SimpleNamespace(snapshot=snapshot)
         )
         ctx: Any = SimpleNamespace(deps=SimpleNamespace(resources=resources, run_id='run', user_id='user'))
-        monkeypatch.setattr('montybot.jev.DBOS.run_step_async', step)
+        monkeypatch.setattr('sammy.jev.DBOS.run_step_async', step)
         first = await suggest_navigation(ctx, 'Show orders')
         assert first == await suggest_navigation(ctx, 'Show orders')
         assert '[17]' in first and 'Not clicked' in first

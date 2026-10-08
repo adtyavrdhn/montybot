@@ -1,5 +1,5 @@
 [project]
-name = "montybot-poc"
+name = "sammy-poc"
 version = "0.0.0"
 description = "Proof of concept: hand a remote agent's browser session to the user's machine and back."
 requires-python = ">=3.11"

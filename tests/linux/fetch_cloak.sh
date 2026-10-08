@@ -1,9 +1,9 @@
 #!/bin/sh
-# Download a free CloakBrowser build from GitHub Releases, verify it, and unpack it (montybot/browser/cloak.md):
+# Download a free CloakBrowser build from GitHub Releases, verify it, and unpack it (sammy/browser/cloak.md):
 #
 #   tests/linux/fetch_cloak.sh DEST [PLATFORM]    # PLATFORM: linux-x64 (default) or darwin-arm64
 #
-# Prints the binary's path, for MONTYBOT_CLOAK_BINARY. Its license forbids redistributing it: never commit it or put
+# Prints the binary's path, for SAMMY_CLOAK_BINARY. Its license forbids redistributing it: never commit it or put
 # it in an image we publish. Only the free builds below; no license key, no sign-in.
 #
 # Checked twice, as their wrapper does: the archive's SHA-256 against the pin here, and the release's SHA256SUMS

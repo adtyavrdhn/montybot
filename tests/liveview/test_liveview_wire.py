@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from montybot.browser.contract import (
+from sammy.browser.contract import (
     Click,
     MouseDown,
     MouseMove,
@@ -16,10 +16,10 @@ from montybot.browser.contract import (
     Selector,
     Type,
 )
-from montybot.browser.live import Frame, Outline, OutlineItem, Tab, Tabs, neighbour
-from montybot.liveview.activity import Activity
-from montybot.liveview.keys import key_for
-from montybot.liveview.wire import (
+from sammy.browser.live import Frame, Outline, OutlineItem, Tab, Tabs, neighbour
+from sammy.liveview.activity import Activity
+from sammy.liveview.keys import key_for
+from sammy.liveview.wire import (
     ClientMessage,
     CloseTab,
     Command,

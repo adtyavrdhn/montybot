@@ -1,5 +1,5 @@
 """The local demo's model: the end-to-end tests' scripted model (`tests/e2e/scripts.py`), made forgiving for a person
-trying the Mac app. A message without a site gets the matching fixture site (from MONTY_DEMO_SITES, which
+trying the Mac app. A message without a site gets the matching fixture site (from SAMMY_DEMO_SITES, which
 dev_server.py sets), so the app's own suggestions work; a message it has no script for gets a friendly reply that
 says what it can do, instead of a failed task.
 """
@@ -13,7 +13,7 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, Text
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from scripts import SCRIPTS, current_turn, respond
 
-SITES: dict[str, str] = json.loads(os.environ.get('MONTY_DEMO_SITES', '{}'))
+SITES: dict[str, str] = json.loads(os.environ.get('SAMMY_DEMO_SITES', '{}'))
 # What a person might write, and the scripted prompt (with its site) that plays it.
 TOPICS = [
     ('flight', 'Find the three cheapest flights to Lisbon next Friday at {flights}'),

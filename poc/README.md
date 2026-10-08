@@ -5,7 +5,7 @@ socket to the user's machine and opens in a sandboxed local window. The user doe
 **Return control to agent**. The session moves back, and the agent carries on.
 
 ```
-remote (monty-bot)                                   user's machine
+remote (Sammy)                                   user's machine
   agent ── navigate / click / read_page ──> headless Chromium or Servo
   agent ── ask_user("please sign in")
      export cookies + storage, close the context  ── handoff ──>  sandboxed Chromium window,
@@ -25,11 +25,11 @@ per origin, so a session moves between engines, as in Servo, then Chromium, then
 cd poc
 uv sync
 
-# terminal 1: the monty-bot side (the demo shop, a scripted agent, the hand-off socket)
-uv run python -m montybot_poc.remote
+# terminal 1: the Sammy side (the demo shop, a scripted agent, the hand-off socket)
+uv run python -m sammy_poc.remote
 
 # terminal 2: the user's machine; paste the command terminal 1 prints
-uv run python -m montybot_poc.local --token TOKEN
+uv run python -m sammy_poc.local --token TOKEN
 ```
 
 A Chromium window opens on the shop's sign-in wall, with a bar at the bottom. Sign in with any username and the
@@ -37,7 +37,7 @@ password `hunter2`, optionally add an item, then click **Return control to agent
 finishing with your login and your item in the cart.
 
 - `--engine servo` on the remote side uses Servo instead of Chromium. It expects `servoshell` at
-  `~/.cache/montybot/servo/Servo.app/Contents/MacOS/servoshell`; pass `--servo-binary` to change that. The Homebrew
+  `~/.cache/sammy/servo/Servo.app/Contents/MacOS/servoshell`; pass `--servo-binary` to change that. The Homebrew
   cask is disabled because it fails Gatekeeper, so take the build from the
   [Servo release page](https://github.com/servo/servo/releases) and check its `.sha256`.
 - `--auto-demo` on the local side plays the user headlessly. That is how this was tested.
@@ -112,7 +112,7 @@ Cookies), or a cookie-export API on Servo's embedding (Rust) side.
   short-lived and good for one hand-off only, instead of one shared token on localhost.
 - **The local app.** A real client would be a small app that ships or finds a browser, not a Python script. With
   `channel="chrome"`, Playwright can use the user's installed Chrome with a fresh profile.
-- **Page access to the bar.** Page scripts can call `window.montybotReturn()`. The worst they can do is end the
+- **Page access to the bar.** Page scripts can call `window.sammyReturn()`. The worst they can do is end the
   hand-off early.
 - **Stronger local isolation.** On Linux, the local window could run inside bwrap like the remote browser. On macOS,
   Chromium already sandboxes its renderers with Seatbelt, and wrapping all of Chrome in `sandbox-exec` is not
@@ -122,10 +122,10 @@ Cookies), or a cookie-export API on Servo's embedding (Rust) side.
 
 | File | Holds |
 |---|---|
-| `montybot_poc/state.py` | `BrowserState`: URL, cookies, localStorage and sessionStorage, plus conversions to and from Playwright |
-| `montybot_poc/browser.py` | Seeding a Playwright context with a state, and exporting one |
-| `montybot_poc/wire.py` | Newline-delimited JSON over TCP, and the three messages |
-| `montybot_poc/remote.py` | The monty-bot side: the agent and its tools, the hand-off server, and the Chromium backend |
-| `montybot_poc/servo.py` | The Servo backend: a WebDriver client, one Servo process per opened state |
-| `montybot_poc/local.py` | The user's side: the sandboxed window, the Return bar, and sending the state back |
-| `montybot_poc/demo_site.py` | A tiny shop with an HttpOnly login cookie, a localStorage cart and a sessionStorage counter |
+| `sammy_poc/state.py` | `BrowserState`: URL, cookies, localStorage and sessionStorage, plus conversions to and from Playwright |
+| `sammy_poc/browser.py` | Seeding a Playwright context with a state, and exporting one |
+| `sammy_poc/wire.py` | Newline-delimited JSON over TCP, and the three messages |
+| `sammy_poc/remote.py` | The Sammy side: the agent and its tools, the hand-off server, and the Chromium backend |
+| `sammy_poc/servo.py` | The Servo backend: a WebDriver client, one Servo process per opened state |
+| `sammy_poc/local.py` | The user's side: the sandboxed window, the Return bar, and sending the state back |
+| `sammy_poc/demo_site.py` | A tiny shop with an HttpOnly login cookie, a localStorage cart and a sessionStorage counter |

@@ -1,4 +1,4 @@
-# monty-bot design
+# Sammy design
 
 **Status:** draft, written 2026-10-06 by Claude for Mike. It builds on Aditya's
 [2026-10-06 note](<notes/2026-10-06 clai2 vs Muse, Dots and Grok Bot.md>). Pydantic AI and harness facts come from
@@ -7,14 +7,14 @@ agreed with anyone.
 
 ## Goal
 
-monty-bot is a service that people's own agents connect to. A user asks their agent for a scheduled browser task:
+Sammy is a service that people's own agents connect to. A user asks their agent for a scheduled browser task:
 
 > Every Tuesday, check my messages for a shopping list, put everything in my walmart.com cart, then ping me.
 
-monty-bot runs the task on schedule in a sandbox. When the agent gets stuck on a login, a CAPTCHA or an unclear item,
+Sammy runs the task on schedule in a sandbox. When the agent gets stuck on a login, a CAPTCHA or an unclear item,
 it hands the browser to the user, who finishes that one step. Then the run continues.
 
-Grok Bot, dots and Muse give every user (or every bot) a cloud computer that runs all the time. monty-bot gives
+Grok Bot, dots and Muse give every user (or every bot) a cloud computer that runs all the time. Sammy gives
 nobody a computer. Between runs, a user costs a few rows in Postgres. During a run, a user costs one Monty session
 and one headed Chromium on a private Xvfb display, and both exist only while the run needs them.
 
@@ -33,10 +33,10 @@ It differs on purpose:
 - **No VM per user.** Logins live in an encrypted cookie jar (Playwright `storageState`) in Postgres, not on a VM's
   disk. A user's files are a plain directory on our server (`WORKSPACES_DIR`), which Monty code sees at `/work` and
   browser downloads land in (#21).
-- **No computer use.** There is no E2B desktop and no router choosing between Monty and computer use. monty-bot only
+- **No computer use.** There is no E2B desktop and no router choosing between Monty and computer use. Sammy only
   drives a browser. A task that needs a desktop app is out of scope. (Decided 2026-10-06.)
-- **Agents are the clients, not chat channels.** Users reach monty-bot through the agent they already use. That agent
-  can sit behind Slack or a phone app, but monty-bot does not talk to those directly.
+- **Agents are the clients, not chat channels.** Users reach Sammy through the agent they already use. That agent
+  can sit behind Slack or a phone app, but Sammy does not talk to those directly.
 - **DBOS is the durable backend.** That answers the note's open question for this service.
 
 ## Components
@@ -158,7 +158,7 @@ exec bwrap \
 ```
 
 ```python
-browser = await playwright.chromium.launch(executable_path="/opt/montybot/chrome-in-bwrap")
+browser = await playwright.chromium.launch(executable_path="/opt/sammy/chrome-in-bwrap")
 ```
 
 The browser still needs the internet. Run it under `pasta` (or `slirp4netns`) for a private network namespace with

@@ -1,11 +1,11 @@
-# montybot
+# Sammy
 
 Notes and design for an always-on agent built on Monty and Pydantic AI: reachable from chat channels, running in
 Monty by default and in a real machine only when a process has to run, with computer use and human takeover.
 
 ## Design
 
-[`DESIGN.md`](DESIGN.md) is the current design for monty-bot: scheduled browser runs in Monty and a sandboxed
+[`DESIGN.md`](DESIGN.md) is the current design for Sammy: scheduled browser runs in Monty and a sandboxed
 Chromium, DBOS for schedules, and hand-off to the user when the agent gets stuck.
 
 ## Run it
@@ -13,24 +13,24 @@ Chromium, DBOS for schedules, and hand-off to the user when the agent gets stuck
 ```bash
 docker compose up -d          # Postgres
 cp .env.example .env          # then set SESSION_SECRET, MONTY_EXECUTION_KEY and your model's API key
-uv run montybot serve         # http://127.0.0.1:8000
+uv run sammy serve            # http://127.0.0.1:8000
 ```
 
-The app is Starlette plus DBOS in one process (`montybot/app.py`, `montybot/workflows.py`). A run is a DBOS workflow:
+The app is Starlette plus DBOS in one process (`sammy/app.py`, `sammy/workflows.py`). A run is a DBOS workflow:
 model requests and browser calls are steps, and questions, approvals and hand-offs wait in `DBOS.recv`
-(`montybot/approvals.py`). The agent's code runs in Monty through `run_code` (`montybot/code.py`), with the browser
+(`sammy/approvals.py`). The agent's code runs in Monty through `run_code` (`sammy/code.py`), with the browser
 as host functions; with `MONTY_URL` and `MONTY_EXECUTION_KEY` set it runs on the hosted Monty sandboxes (see
 [`deploy/README.md`](deploy/README.md#hosted-monty-sandboxes)). Our own monty-server is still there, behind
 `docker compose --profile full-monty`, but no longer used by default. Its file calls (`pathlib`, `open`) reach the user's
-own directory under `WORKSPACES_DIR` at `/work`, where browser downloads land too (`montybot/workspaces.py`). Heavy
+own directory under `WORKSPACES_DIR` at `/work`, where browser downloads land too (`sammy/workspaces.py`). Heavy
 Python (pandas, PDFs) runs through `run_python` in real CPython, in a bubblewrap jail per call on the same files
-(`montybot/cpython.py`, Linux only). The browser contract and service are in [`montybot/browser/`](montybot/browser/README.md).
+(`sammy/cpython.py`, Linux only). The browser contract and service are in [`sammy/browser/`](sammy/browser/README.md).
 
-Files live in the chats (`montybot/attachments.py`). The user drops, pastes or picks files in the composer (up to 10
+Files live in the chats (`sammy/attachments.py`). The user drops, pastes or picks files in the composer (up to 10
 per message, 20 MB each). Each file uploads at once and goes with the next message. The model sees images (shrunk to
 1568 px), PDFs and text files directly. Every file is also saved in `/work/uploads` for the code tools, which is how
-Monty opens spreadsheets, Word documents and the like. The stored history keeps only a note per file. The bytes stay
-in Postgres, and later turns get the files back within a size budget. Monty gives files back with the `share_file`
+Sammy opens spreadsheets, Word documents and the like. The stored history keeps only a note per file. The bytes stay
+in Postgres, and later turns get the files back within a size budget. Sammy gives files back with the `share_file`
 tool, and they appear on its reply.
 
 Jev intent and navigation advice is disabled for now, even when `TYPESAFE_API_KEY` is set. The main agent handles
@@ -38,27 +38,27 @@ these decisions directly. Experimental Jev helpers remain available in the sourc
 
 ## Integrations
 
-Users connect the services they use, and Monty works in them through three agent tools that never change
-(`montybot/integration_tools.py`): `list_integration_tools`, `call_integration_tool` (a tool that changes something
+Users connect the services they use, and Sammy works in them through three agent tools that never change
+(`sammy/integration_tools.py`): `list_integration_tools`, `call_integration_tool` (a tool that changes something
 asks the user first, as `commit` does) and `connect_integration`. When a request needs a service that is not
 connected ("yo what's on my linear"), the agent calls `connect_integration`, and the chat shows a card to connect it
 (an ask of kind `connect`); the run carries on once the sign-in finishes. Each user's connections are listed, added
 and removed on the Integrations page of the web and Mac apps.
 
-- **Apps through Composio** (`montybot/integrations/composio.py`): set `COMPOSIO_API_KEY` and every app with
-  Composio-managed OAuth (about 120: Linear, GitHub, Gmail, Notion, Slack...) connects in one click. Monty makes its
-  own auth config per app (`montybot-<app>`) on first use. Each user is `COMPOSIO_USER_PREFIX` + their id in
-  Composio; Monty lists, uses and removes only accounts under that id, and runs each tool on the user's own account,
+- **Apps through Composio** (`sammy/integrations/composio.py`): set `COMPOSIO_API_KEY` and every app with
+  Composio-managed OAuth (about 120: Linear, GitHub, Gmail, Notion, Slack...) connects in one click. Sammy makes its
+  own auth config per app (`sammy-<app>`) on first use. Each user is `COMPOSIO_USER_PREFIX` + their id in
+  Composio; Sammy lists, uses and removes only accounts under that id, and runs each tool on the user's own account,
   so a Composio project can be shared with other apps (give each its own prefix).
-- **The user's own MCP servers** (`montybot/integrations/mcp.py`, `oauth.py`): a streamable HTTP URL with a header,
+- **The user's own MCP servers** (`sammy/integrations/mcp.py`, `oauth.py`): a streamable HTTP URL with a header,
   or an OAuth sign-in (discovery, dynamic client registration, PKCE, refresh). The URL, headers and tokens are sealed
   with the user's data key. Requests go to public addresses only, checked as each connection opens
-  (`montybot/integrations/egress.py`), and are never traced, as a server's URL can hold a key.
+  (`sammy/integrations/egress.py`), and are never traced, as a server's URL can hold a key.
 
 ## Observability
 
 `LOGFIRE_TOKEN` is optional: without it, no telemetry is sent to Logfire. What is exported is decided per field in
-[`montybot/observability.py`](montybot/observability.py):
+[`sammy/observability.py`](sammy/observability.py):
 
 - **Always:** Pydantic AI's agent, model and tool spans with model, provider and tool names, token and cache usage
   (so Logfire shows cost) and the conversation's shape; database, run,
@@ -76,7 +76,7 @@ and removed on the Integrations page of the web and Mac apps.
 
 `tests/e2e/test_traces.py` holds these lines through a whole sign-in hand-off and order, with content on and off.
 
-Each run is a trace of its own, `run.lifecycle` at the top with the agent (`invoke_agent montybot`) inside, unless an
+Each run is a trace of its own, `run.lifecycle` at the top with the agent (`invoke_agent sammy`) inside, unless an
 app traced the action that started it (below). Database spans, `run.dispatch` and the live picture's
 `browser.peek_screenshot` are recorded only inside a trace: the apps' polling starts none.
 
@@ -92,18 +92,18 @@ from under `/live/`, no passwords, emails or file names, and content only with `
 
 ## Web workspace
 
-The frontend is plain HTML, CSS, and JavaScript in `montybot/static`, with no framework or build step.
+The frontend is plain HTML, CSS, and JavaScript in `sammy/static`, with no framework or build step.
 Its Pydantic-inspired purple navigation, pink actions, and light conversation surface work on desktop and mobile.
 On desktop, chats stay in a persistent sidebar; on a phone, the Chats button opens a keyboard-accessible drawer.
 
 Create an account or sign in, then describe a task in a new chat. Example prompts fill the message box for you to
-review before sending. Watch Monty's browser while it works, take over when it asks you to sign in, and answer
+review before sending. Watch Sammy's browser while it works, take over when it asks you to sign in, and answer
 questions or approve actions in the chat. Saved sign-ins and schedules are available in the sidebar, alongside
 notification opt-in. Motion respects your device's reduced-motion preference.
 
 ## Mac app
 
-[`macos/`](macos/README.md) is Monty for Mac: a native SwiftUI client of this server, in Logfire's design. Run
+[`macos/`](macos/README.md) is Sammy for Mac: a native SwiftUI client of this server, in Logfire's design. Run
 `uv run python macos/scripts/dev_server.py` for a local server it can use, with a scripted model and no Docker.
 
 ## Tests
@@ -113,16 +113,16 @@ uv run pytest                                   # unit tests, and end-to-end tes
 uv run pytest tests/e2e/test_frontend.py          # responsive UI and local API doubles, no Postgres or model
 uv run pytest tests/e2e --browser=chromium      # the same end-to-end tests in real (headless) Chrome
 uv run pytest -m u2                             # one user path (u1 ... u6)
-MONTYBOT_TEST_MODEL=anthropic:claude-sonnet-4-5 uv run pytest tests/e2e --browser=chromium --live   # real sites, by hand
+SAMMY_TEST_MODEL=anthropic:claude-sonnet-4-5 uv run pytest tests/e2e --browser=chromium --live   # real sites, by hand
 tests/linux/run.sh tests/test_cpython.py tests/e2e/test_files.py   # the tests that need Linux and bwrap, in Docker
 ```
 
-End-to-end tests run the real app in its own process against Postgres (`MONTYBOT_TEST_POSTGRES`, or a container they
+End-to-end tests run the real app in its own process against Postgres (`SAMMY_TEST_POSTGRES`, or a container they
 start with Docker), the fixture sites in `tests/sites` (one per user path), a scripted model (`tests/e2e/scripts.py`)
-and a scripted human who drives hand-offs through the live-view API. With `MONTYBOT_TEST_MODEL` the same tests run
+and a scripted human who drives hand-offs through the live-view API. With `SAMMY_TEST_MODEL` the same tests run
 against a real model; `--live` adds real sites (`tests/e2e/test_live.py`). The CPython tier's tests need Linux with
 bwrap and are skipped elsewhere; `tests/linux/run.sh` runs them in an Ubuntu container on any Docker host (colima on a
-Mac), reaching `MONTYBOT_TEST_POSTGRES` and `MONTYBOT_TEST_MONTY_URL` on the Docker host's network.
+Mac), reaching `SAMMY_TEST_POSTGRES` and `SAMMY_TEST_MONTY_URL` on the Docker host's network.
 
 ## Notes
 

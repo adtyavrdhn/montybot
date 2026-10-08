@@ -10,7 +10,7 @@ For every ``<frames>/<state>/*.png`` this writes:
     background; ImageIO / SwiftUI play it natively on Apple platforms)
 
 Usage:
-    uv run make_loops.py frames ../Resources/Squirrel --name montysquirrel --apng-size 192 --no-gif
+    uv run make_loops.py frames ../Resources/Squirrel --name sammysquirrel --apng-size 192 --no-gif
 """
 
 import argparse

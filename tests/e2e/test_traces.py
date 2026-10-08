@@ -1,11 +1,11 @@
-"""What reaches a trace (`montybot/observability.py`).
+"""What reaches a trace (`sammy/observability.py`).
 
 Never, whatever the settings: sign-in passwords, the account password, session cookies and hand-off ids.
 Content (messages, replies, the agent's code, pages, exception messages) only with `logfire_include_content`.
 Always: span names, run ids and the deploy's commit. HTTP server requests are not traced.
 The apps' telemetry is forwarded with the server's token, and a client's `traceparent` joins its trace.
 
-The app runs in this process (on a thread) with the observability setup `montybot serve` uses, plus an in-memory
+The app runs in this process (on a thread) with the observability setup `sammy serve` uses, plus an in-memory
 exporter, through a sign-in hand-off and an approved order. All exported span metadata, including status, events,
 links, resource and scope, is searched. Standalone tests require no database.
 """
@@ -40,12 +40,12 @@ from pydantic_ai.models.test import TestModel
 from sites.shop import Shop
 from starlette.types import ASGIApp, Message, Scope
 
-from montybot import api, observability
-from montybot.app import create_app
-from montybot.browser.contract import ActionFailed, LifecycleError
-from montybot.browser.service import UnknownRun
-from montybot.observability import configure_observability, timed, timing
-from montybot.settings import Settings
+from sammy import api, observability
+from sammy.app import create_app
+from sammy.browser.contract import ActionFailed, LifecycleError
+from sammy.browser.service import UnknownRun
+from sammy.observability import configure_observability, timed, timing
+from sammy.settings import Settings
 
 
 @dataclass
@@ -66,7 +66,7 @@ def traced(
 def serve_traced(
     database_url: str, workspaces_dir: Path, **settings: Any
 ) -> Iterator[tuple[InProcessApp, InMemorySpanExporter]]:
-    """The app on a thread with `montybot serve`'s observability, plus an in-memory exporter."""
+    """The app on a thread with `sammy serve`'s observability, plus an in-memory exporter."""
     exporter = InMemorySpanExporter()
     port = free_port()
     configured = Settings(
@@ -123,8 +123,8 @@ def test_traces(traced: tuple[InProcessApp, InMemorySpanExporter, bool], databas
         shop.stop()
 
     with psycopg.connect(database_url) as connection:
-        row = connection.execute("SELECT details->>'handoff_id' FROM montybot.asks WHERE kind = 'handoff'").fetchone()
-        user = connection.execute('SELECT user_id FROM montybot.runs WHERE id = %s', (run_id,)).fetchone()
+        row = connection.execute("SELECT details->>'handoff_id' FROM sammy.asks WHERE kind = 'handoff'").fetchone()
+        user = connection.execute('SELECT user_id FROM sammy.runs WHERE id = %s', (run_id,)).fetchone()
     assert row is not None and user is not None
     (sid,) = shop.sessions
     never = {
@@ -161,7 +161,7 @@ def test_traces(traced: tuple[InProcessApp, InMemorySpanExporter, bool], databas
         'monty.dump',
         'chat scripted',
         'execute_tool run_code',
-        'invoke_agent montybot',
+        'invoke_agent sammy',
     }
     assert required <= names, sorted(names)
     assert all(
@@ -172,7 +172,7 @@ def test_traces(traced: tuple[InProcessApp, InMemorySpanExporter, bool], databas
     assert (lifecycle.attributes or {})['user_id'] == str(user[0])
     # An untraced client's run is a trace of its own, the agent in it; requests and polling start none.
     assert lifecycle.parent is None
-    (agent_run,) = [span for span in spans if span.name == 'invoke_agent montybot']
+    (agent_run,) = [span for span in spans if span.name == 'invoke_agent sammy']
     assert agent_run.context and lifecycle.context
     assert agent_run.context.trace_id == lifecycle.context.trace_id
     roots = {span.name for span in spans if span.parent is None}
@@ -490,7 +490,7 @@ def test_forwarded_client_telemetry(with_token: tuple[InProcessApp, InMemorySpan
     assert forwarded.headers['authorization'] == 'test-logfire-token'
     assert forwarded.headers['content-type'] == 'application/json'
     assert 'cookie' not in forwarded.headers
-    assert not any('montybot_session' in value for value in forwarded.headers.values())
+    assert not any('sammy_session' in value for value in forwarded.headers.values())
 
 
 def test_client_trace_joins_server_spans(
@@ -515,7 +515,7 @@ def test_client_trace_joins_server_spans(
     spans = exporter.get_finished_spans()
     joined = [span for span in spans if span.context is not None and span.context.trace_id == int(CLIENT_TRACE_ID, 16)]
     names = {span.name for span in joined}
-    assert {'db.query', 'run.lifecycle', 'invoke_agent montybot'} <= names, names
+    assert {'db.query', 'run.lifecycle', 'invoke_agent sammy'} <= names, names
     assert 'http.server' not in {span.name for span in spans}
     roots = [span for span in joined if span.parent is not None and span.parent.span_id == int(CLIENT_SPAN_ID, 16)]
     assert roots and all(span.parent is not None and span.parent.is_remote for span in roots)

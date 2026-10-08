@@ -59,7 +59,7 @@ def in_a_browser(url: str) -> httpx.Response:
 
 def connect_app(client: Client, slug: str) -> httpx.Response:
     """Connect an app as the user would from the web app: the link, then signing in on Composio's page, which sends
-    the browser back to Monty."""
+    the browser back to Sammy."""
     response = client.http.post(f'/api/integrations/apps/{slug}/connect', json={})
     assert response.status_code == 200, response.text
     return in_a_browser(response.json()['url'])
@@ -97,11 +97,11 @@ def test_mentioning_linear_offers_to_connect_it_and_then_uses_it(client: Client,
 
     # It ran as this user, on this user's own account, at the version it listed.
     [ran] = composio.executed
-    assert ran['user_id'] == f'montybot:{me}'
-    assert composio.accounts[ran['connected_account_id']].user_id == f'montybot:{me}'
+    assert ran['user_id'] == f'sammy:{me}'
+    assert composio.accounts[ran['connected_account_id']].user_id == f'sammy:{me}'
     assert ran['version'] == '20260924_00'
-    # Monty made its own auth config; the other app's was left alone.
-    assert [c['name'] for c in composio.auth_configs] == ['viktor-linear', 'montybot-linear']
+    # Sammy made its own auth config; the other app's was left alone.
+    assert [c['name'] for c in composio.auth_configs] == ['viktor-linear', 'sammy-linear']
 
     assert [(c['key'], c['provider'], c['state']) for c in connections(client)] == [('linear', 'composio', 'connected')]
     apps = client.http.get('/api/integrations/apps').json()
@@ -125,7 +125,7 @@ def test_a_change_in_an_app_waits_for_approval(client: Client, composio: FakeCom
 
     client.answer(ask, approved=True)
     assert 'Ship integrations' in client.wait_for_reply(thread)
-    [account] = [a for a in composio.accounts.values() if a.user_id == f'montybot:{user_id(client)}']
+    [account] = [a for a in composio.accounts.values() if a.user_id == f'sammy:{user_id(client)}']
     assert composio.issues[account.id] == ['Fix the login page', 'Ship integrations']
 
 
@@ -166,8 +166,8 @@ def test_users_see_and_use_only_their_own_connections(app: App, client: Client, 
 
         connect_app(bob, 'linear')
         assert 'Fix the login page' in bob.wait_for_reply(thread)
-        assert composio.executed[-1]['user_id'] == f'montybot:{bobs_id}'
-        assert composio.accounts[composio.executed[-1]['connected_account_id']].user_id == f'montybot:{bobs_id}'
+        assert composio.executed[-1]['user_id'] == f'sammy:{bobs_id}'
+        assert composio.accounts[composio.executed[-1]['connected_account_id']].user_id == f'sammy:{bobs_id}'
     finally:
         bob.http.close()
 
@@ -175,7 +175,7 @@ def test_users_see_and_use_only_their_own_connections(app: App, client: Client, 
     for connection in connections(client):
         assert client.http.delete(f'/api/integrations/apps/accounts/{connection["id"]}').status_code == 200
     assert connections(client) == []
-    assert [a.user_id for a in composio.accounts.values()] == [OTHER_APP_USER, f'montybot:{bobs_id}']
+    assert [a.user_id for a in composio.accounts.values()] == [OTHER_APP_USER, f'sammy:{bobs_id}']
 
 
 def test_an_mcp_server_with_a_token(app: App, client: Client, notes: NotesServer, database_url: str) -> None:
@@ -205,7 +205,7 @@ def test_an_mcp_server_with_a_token(app: App, client: Client, notes: NotesServer
 
     # The address and the token are sealed with the user's key.
     with psycopg.connect(database_url) as connection:
-        [(secret,)] = connection.execute('SELECT secret FROM montybot.mcp_servers').fetchall()
+        [(secret,)] = connection.execute('SELECT secret FROM sammy.mcp_servers').fetchall()
     assert NOTES_TOKEN.encode() not in bytes(secret) and notes.mcp_url.encode() not in bytes(secret)
 
     bob = Client(app)
@@ -224,7 +224,7 @@ def test_an_mcp_server_with_a_token(app: App, client: Client, notes: NotesServer
 
 
 def test_an_mcp_server_with_an_oauth_sign_in(app: App, client: Client, oauth_notes: NotesServer) -> None:
-    oauth_notes.consent.token_seconds = 30  # inside Monty's margin: each use refreshes the token first
+    oauth_notes.consent.token_seconds = 30  # inside Sammy's margin: each use refreshes the token first
     client.sign_up()
     thread = client.ask('Search my Acme Wiki')
     ask = client.wait_for_ask(thread, 'connect')
@@ -237,13 +237,13 @@ def test_an_mcp_server_with_an_oauth_sign_in(app: App, client: Client, oauth_not
     assert [c['state'] for c in connections(client)] == ['needs_sign_in']
     assert client.thread(thread)['run']['ask'] == ask  # not signed in yet: still waiting
 
-    # The user signs in on the server's page in their own browser, which comes back to Monty.
+    # The user signs in on the server's page in their own browser, which comes back to Sammy.
     with httpx.Client(timeout=30) as browser:
-        to_monty = browser.get(sign_in_url).headers['location']
-        assert to_monty.startswith(f'{app.url}/integrations/mcp/callback?')
-        page = browser.get(to_monty)
+        to_sammy = browser.get(sign_in_url).headers['location']
+        assert to_sammy.startswith(f'{app.url}/integrations/mcp/callback?')
+        page = browser.get(to_sammy)
         assert page.status_code == 200 and 'Acme Wiki is connected' in page.text
-        assert browser.get(to_monty).status_code == 400  # a sign-in is used once
+        assert browser.get(to_sammy).status_code == 400  # a sign-in is used once
     assert [c['state'] for c in connections(client)] == ['connected']
 
     # The run looks again for itself, and finds the server by the name the user gave it.

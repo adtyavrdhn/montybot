@@ -10,26 +10,26 @@ commit=$(git rev-parse --short HEAD)
 
 echo "Deploying $commit to $target"
 # shellcheck disable=SC2086
-git archive --format=tar HEAD | ssh $ssh_opts "$target" 'rm -rf ~/montybot-release && mkdir ~/montybot-release && tar -x -C ~/montybot-release'
+git archive --format=tar HEAD | ssh $ssh_opts "$target" 'rm -rf ~/sammy-release && mkdir ~/sammy-release && tar -x -C ~/sammy-release'
 
 python3 deploy/update-secrets.py "$target"
 
 # shellcheck disable=SC2086
 ssh $ssh_opts "$target" COMMIT="$commit" DOMAIN="${DOMAIN:-}" sh -s <<'REMOTE'
 set -eu
-DOMAIN=$DOMAIN sh ~/montybot-release/deploy/bootstrap.sh
-rm -rf /opt/montybot/src && mv ~/montybot-release /opt/montybot/src
-echo "$COMMIT" > /opt/montybot/src/COMMIT
-cd /opt/montybot/src/deploy
+DOMAIN=$DOMAIN sh ~/sammy-release/deploy/bootstrap.sh
+rm -rf /opt/sammy/src && mv ~/sammy-release /opt/sammy/src
+echo "$COMMIT" > /opt/sammy/src/COMMIT
+cd /opt/sammy/src/deploy
 # VM-only overrides, such as a browser engine being tried out, live outside src/ so a deploy keeps them (README).
 export COMPOSE_FILE=compose.yaml
-if [ -f /opt/montybot/compose.local.yaml ]; then
-    COMPOSE_FILE=compose.yaml:/opt/montybot/compose.local.yaml
-    echo "With the VM's own overrides, /opt/montybot/compose.local.yaml"
+if [ -f /opt/sammy/compose.local.yaml ]; then
+    COMPOSE_FILE=compose.yaml:/opt/sammy/compose.local.yaml
+    echo "With the VM's own overrides, /opt/sammy/compose.local.yaml"
 fi
-compose() { sudo --preserve-env=COMPOSE_PROFILES,COMPOSE_FILE,MONTY_URL,COMMIT docker compose --env-file /opt/montybot/.env "$@"; }
+compose() { sudo --preserve-env=COMPOSE_PROFILES,COMPOSE_FILE,MONTY_URL,COMMIT docker compose --env-file /opt/sammy/.env "$@"; }
 
-. /opt/montybot/.env
+. /opt/sammy/.env
 # With MONTY_EXECUTION_KEY, the agent's code runs on the hosted Monty sandboxes (MONTY_URL in .env overrides the URL),
 # and our own Full Monty below is not started even if MONTY_PRIVATE_COMMIT is set. Without either, local Monty.
 hosted_monty_url=${MONTY_URL:-wss://monty-sdk-test-hqjw53u6ua-uk.a.run.app/monty-ws/}
@@ -41,7 +41,7 @@ elif [ -n "${MONTY_PRIVATE_COMMIT:-}" ]; then
     case "$MONTY_PRIVATE_COMMIT" in *[!0-9a-f]*) echo "Invalid MONTY_PRIVATE_COMMIT" >&2; exit 1 ;; esac
     [ "${#MONTY_PRIVATE_COMMIT}" -eq 40 ] || { echo "Expected full source commit" >&2; exit 1; }
     for service in server worker; do
-        image="montybot-monty-$service:$MONTY_PRIVATE_COMMIT"
+        image="sammy-monty-$service:$MONTY_PRIVATE_COMMIT"
         revision=$(sudo docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")
         [ "$revision" = "$MONTY_PRIVATE_COMMIT" ] || { echo "Source revision mismatch: $image" >&2; exit 1; }
     done
@@ -52,7 +52,7 @@ case "${MODEL:-}" in claude-code:*)
     if ! compose run --rm --no-deps -T app test -s /data/claude-code/auth.json; then
         echo "The server has no Claude Code sign-in yet. Sign in once, then deploy again:"
         echo "  ssh -t $(whoami)@$(curl -fsS -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip) \\"
-        echo "    'cd /opt/montybot/src/deploy && sudo docker compose --env-file /opt/montybot/.env run --rm app montybot claude-code-login'"
+        echo "    'cd /opt/sammy/src/deploy && sudo docker compose --env-file /opt/sammy/.env run --rm app sammy claude-code-login'"
         exit 1
     fi
 esac

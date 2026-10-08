@@ -1,17 +1,17 @@
-# Deploying monty-bot on one server
+# Deploying Sammy on one server
 
 Everything runs on one Linux machine with Docker Compose (`deploy/compose.yaml`):
 
 | Service | What it is |
 |---|---|
 | `caddy` | HTTPS for `$DOMAIN`, with a Let's Encrypt certificate (Caddy's own CA for `localhost`), and a basic-auth login in front of everything but `/healthz` |
-| `app` | the web app, the DBOS workflows and the browsers: one headed Chromium per run, each on its own Xvfb screen, inside bwrap, driven over our own CDP pipe (`montybot.engines:chromium_cdp_server`; `BROWSER_BACKEND=montybot.engines:chromium_server` in `.env` rolls back to Playwright) |
+| `app` | the web app, the DBOS workflows and the browsers: one headed Chromium per run, each on its own Xvfb screen, inside bwrap, driven over our own CDP pipe (`sammy.engines:chromium_cdp_server`; `BROWSER_BACKEND=sammy.engines:chromium_server` in `.env` rolls back to Playwright) |
 | `postgres` | our tables and DBOS's |
-| `backup` | `pg_dump` every night at `BACKUP_AT` (03:00 UTC) into `/opt/montybot/backups`, keeping `BACKUP_KEEP_DAYS` (14) days |
+| `backup` | `pg_dump` every night at `BACKUP_AT` (03:00 UTC) into `/opt/sammy/backups`, keeping `BACKUP_KEEP_DAYS` (14) days |
 | `browser-egress` | public-only SOCKS proxy for jailed browsers, on a separate bridge without Postgres or app credentials; the app mounts only its socket volume |
 
 The app allows at most `BROWSER_MAX_OPEN` live browsers (default 8 on the server: about 430 MB and 1.3% of a core
-each when idle, per `montybot/browser/CHROMIUM.md`). A user's runs share one browser, each in its own tab, so they
+each when idle, per `sammy/browser/CHROMIUM.md`). A user's runs share one browser, each in its own tab, so they
 run side by side and count once. A user's browser stays open between their runs (`BROWSER_KEEP_OPEN`) until it has
 been idle for `BROWSER_IDLE_TIMEOUT_SECONDS` (a day). When full it first closes the browser parked longest, then
 saves and closes the least-recently-used browser that is neither busy nor in a hand-off; that run reopens from saved
@@ -20,7 +20,7 @@ If all browsers are busy, a new call fails quickly rather than starting an unbou
 Tune this against measured VM memory: it is a concurrency guard, **not** a per-browser memory limit. Do not give
 bwrap writable cgroups or Docker privileged mode to impose one.
 
-Secrets live only in `/opt/montybot/.env` on the server, which `bootstrap.sh` writes once. Nothing secret is in the
+Secrets live only in `/opt/sammy/.env` on the server, which `bootstrap.sh` writes once. Nothing secret is in the
 images or the repository.
 
 ## A new server
@@ -37,45 +37,53 @@ with sudo you can reach over SSH.
    ```
 
    `deploy.sh` copies the current commit over SSH and runs `bootstrap.sh`, which does each step only once:
-   installs Docker, installs the AppArmor profile for bwrap (below), and writes `/opt/montybot/.env` with new secrets
+   installs Docker, installs the AppArmor profile for bwrap (below), and writes `/opt/sammy/.env` with new secrets
    (`POSTGRES_PASSWORD`, `SESSION_SECRET`, `ENCRYPTION_KEY`, the basic-auth login). Then it builds the app image on
    the server, runs `docker compose up -d --wait`, and checks `https://$DOMAIN/healthz`. Caddy gets the certificate
    on the first request.
 3. **The model:** with the default `MODEL=claude-code:...`, sign the server in once, as `deploy.sh` prints. For an API
-   model, put `MODEL=anthropic:claude-sonnet-4-5` and `ANTHROPIC_API_KEY=...` in `/opt/montybot/.env` and deploy again.
-4. **The login** is `BASIC_AUTH_USER` and `BASIC_AUTH_PASSWORD` in `/opt/montybot/.env`.
+   model, put `MODEL=anthropic:claude-sonnet-4-5` and `ANTHROPIC_API_KEY=...` in `/opt/sammy/.env` and deploy again.
+4. **The login** is `BASIC_AUTH_USER` and `BASIC_AUTH_PASSWORD` in `/opt/sammy/.env`.
 
-By hand on the server, from `/opt/montybot/src/deploy`, `compose` meaning
-`sudo docker compose --env-file /opt/montybot/.env`:
+By hand on the server, from `/opt/sammy/src/deploy`, `compose` meaning
+`sudo docker compose --env-file /opt/sammy/.env`:
 
 ```bash
 compose ps                         # what runs
 compose logs -f app                # the app's log
 compose restart app                # unfinished runs carry on after the restart (DBOS, EXECUTOR_ID=vm-1)
-compose exec backup backup now     # a backup now, into /opt/montybot/backups
+compose exec backup backup now     # a backup now, into /opt/sammy/backups
 ```
 
-**The VM's own overrides:** `/opt/montybot/compose.local.yaml`, when it exists, goes on top of `compose.yaml` at every
+**The VM's own overrides:** `/opt/sammy/compose.local.yaml`, when it exists, goes on top of `compose.yaml` at every
 deploy, so a change only this server should have (such as trying another browser engine) survives deploys. It lives
 outside `src/`, which each deploy replaces. By hand, give compose both files:
-`COMPOSE_FILE=compose.yaml:/opt/montybot/compose.local.yaml` before `compose` (and `--preserve-env=COMPOSE_FILE` for
-`sudo`), or `-f compose.yaml -f /opt/montybot/compose.local.yaml`. A plain `compose up` without it drops the overrides
+`COMPOSE_FILE=compose.yaml:/opt/sammy/compose.local.yaml` before `compose` (and `--preserve-env=COMPOSE_FILE` for
+`sudo`), or `-f compose.yaml -f /opt/sammy/compose.local.yaml`. A plain `compose up` without it drops the overrides
 until the next deploy. Delete the file and deploy again to go back.
 
 **Restore a backup** into a new database, check it, then point the app at it or rename it:
 
 ```bash
-compose exec backup createdb montybot_restored
-compose exec backup pg_restore --no-owner -d montybot_restored /backups/montybot-YYYYMMDDTHHMMSSZ.dump
+compose exec backup createdb sammy_restored
+compose exec backup pg_restore --no-owner -d sammy_restored /backups/sammy-YYYYMMDDTHHMMSSZ.dump
 ```
 
-Copy `/opt/montybot/backups` off the server (rsync, a bucket) for backups that survive losing the disk; that is not
+Copy `/opt/sammy/backups` off the server (rsync, a bucket) for backups that survive losing the disk; that is not
 automated yet.
+
+## From montybot to Sammy
+
+The app was called montybot. On a VM that still has `/opt/montybot`, the first deploy after the rename stops the old
+`montybot` Compose project and moves `/opt/montybot` to `/opt/sammy`, keeping `.env` (secrets, domain, basic-auth
+login) and backups. It copies the Claude Code sign-in and Caddy's certificates into the new volumes and tags the Full
+Monty images as `sammy-monty-*`. The database, workspaces and parked Monty sessions start empty. The old volumes stay
+until removed by hand: `sudo docker volume rm $(sudo docker volume ls -q -f name=montybot_)`.
 
 ## Hosted Monty sandboxes
 
 The app takes its Monty sessions from the hosted service instead of running monty-server and monty-worker on the
-VM. Set the key as the `MONTY_EXECUTION_KEY` Actions secret (copied into `/opt/montybot/.env` on deploy, like the
+VM. Set the key as the `MONTY_EXECUTION_KEY` Actions secret (copied into `/opt/sammy/.env` on deploy, like the
 other secrets). Whenever `.env` has a key, `deploy.sh` points the app at
 `wss://monty-sdk-test-hqjw53u6ua-uk.a.run.app/monty-ws/` (or `MONTY_URL` from `.env`) and does not start our own
 Full Monty, even with `MONTY_PRIVATE_COMMIT` set; its images and session volume are left in place.
@@ -101,7 +109,7 @@ the default. The production Compose file has no private build contexts and uses 
 From a machine with an existing authorized `monty-private` checkout (not a GitHub runner):
 
 ```bash
-cd /path/to/montybot
+cd /path/to/sammy
 PRIVATE="$HOME/pydantic_repos/monty-private"
 COMMIT=$(git -C "$PRIVATE" rev-parse --verify 'HEAD^{commit}')
 git -C "$PRIVATE" show --stat "$COMMIT"  # review the intended committed revision
@@ -112,7 +120,7 @@ SSH_KEY="$HOME/.ssh/vm" sh deploy/build-monty.sh USER@SERVER "$PRIVATE" "$COMMIT
 The script makes `git archive` of the full commit, sends it encrypted over SSH with normal host-key verification,
 and builds the workspace-root server and worker Dockerfiles on the VM's native Linux amd64/arm64 daemon.
 `MONTY_COMMIT` stamps the revision into the images (and server binary); `CARGO_PROFILE=release` is explicit.
-Images stay in that daemon as `montybot-monty-server:<full-commit>` and `montybot-monty-worker:<full-commit>`.
+Images stay in that daemon as `sammy-monty-server:<full-commit>` and `sammy-monty-worker:<full-commit>`.
 There is no push, image export, registry login, stack restart or automatic activation. Existing tags are not
 overwritten. A partial build may leave only the server tag: inspect it before removing that unused tag and
 retrying. Do not remove tags used by running containers or retained for rollback.
@@ -131,21 +139,21 @@ On the VM, inspect both local image revision labels, non-root users and architec
 ```bash
 COMMIT=<full-reviewed-source-commit>
 for service in server worker; do
-  sudo docker image inspect --format '{{.Architecture}} {{.Config.User}} {{ index .Config.Labels "org.opencontainers.image.revision" }}' "montybot-monty-$service:$COMMIT"
+  sudo docker image inspect --format '{{.Architecture}} {{.Config.User}} {{ index .Config.Labels "org.opencontainers.image.revision" }}' "sammy-monty-$service:$COMMIT"
 done
 # Edit privately; add MONTY_PRIVATE_COMMIT=<the same full commit> (do not duplicate the key).
-${EDITOR:-vi} /opt/montybot/.env
+${EDITOR:-vi} /opt/sammy/.env
 ```
 
 The next normal app deploy enables Full Monty using those installed tags, never rebuilding them. To activate
-without waiting for CD, on the VM with the updated montybot source installed:
+without waiting for CD, on the VM with the updated sammy source installed:
 
 ```bash
-cd /opt/montybot/src/deploy
-set -a; . /opt/montybot/.env; set +a
+cd /opt/sammy/src/deploy
+set -a; . /opt/sammy/.env; set +a
 export COMPOSE_PROFILES=full-monty MONTY_URL=ws://monty-server:8000
-sudo --preserve-env=COMPOSE_PROFILES,MONTY_URL docker compose --env-file /opt/montybot/.env up -d --no-build --wait
-sudo --preserve-env=COMPOSE_PROFILES,MONTY_URL docker compose --env-file /opt/montybot/.env ps
+sudo --preserve-env=COMPOSE_PROFILES,MONTY_URL docker compose --env-file /opt/sammy/.env up -d --no-build --wait
+sudo --preserve-env=COMPOSE_PROFILES,MONTY_URL docker compose --env-file /opt/sammy/.env ps
 ```
 
 `monty-server` shares `edge` with the app and has no published port. It relays to the worker on the separate
@@ -156,7 +164,7 @@ isolation, not per-client authentication of the relay. Neither private service h
 real app `run_code` call, network isolation, and a paused session surviving a relay restart before declaring ready.
 
 Sessions use `MONTY_SERVER_DEFAULT_PERSISTENCE=stored` and `file:///var/lib/monty-server` on
-`montybot_monty-sessions`. The current private Dockerfile creates that directory owned by `65532:65532`, so a
+`sammy_monty-sessions`. The current private Dockerfile creates that directory owned by `65532:65532`, so a
 **fresh named volume** inherits writable ownership for the nonroot server. Inspect existing volume ownership
 before reusing it; old root-owned volumes require an explicit operator repair while the server is stopped.
 Do not use `down -v`. The worker limits are 32 sessions and 256 MiB per session, not a total container/VM memory
@@ -196,7 +204,7 @@ as part of rollback.
 ## The browser jail
 
 Each Chrome runs inside bwrap with its own user, PID, IPC and network namespaces, its own profile folder and `/tmp`,
-an empty environment, and only its own X screen (`montybot/browser/chromium_linux.py`, `CHROMIUM.md`). Chrome's own
+an empty environment, and only its own X screen (`sammy/browser/chromium_linux.py`, `CHROMIUM.md`). Chrome's own
 sandbox stays on inside. Docker's defaults refuse all of that, so the `app` service needs these settings, and no more:
 
 | Setting | Why |
@@ -219,7 +227,7 @@ Hosts without AppArmor (Debian, most other distributions) need only the containe
 started without bwrap (the headless test engine) cannot start its own sandbox; the server never does that.
 
 **Network.** bwrap's `--unshare-net` leaves Chrome only loopback. Its connections leave through the app's egress
-proxy (`montybot/browser/egress.py`): SOCKS5 over a Unix socket, which resolves each host name itself and refuses
+proxy (`sammy/browser/egress.py`): SOCKS5 over a Unix socket, which resolves each host name itself and refuses
 any private, loopback or link-local answer. So pages cannot reach Postgres, the app itself, the Docker host, other
 servers on the provider's private network or the cloud metadata address (`169.254.169.254`), by name or by number,
 redirects and subresources included. Only TCP leaves, so there is no QUIC and no WebRTC UDP.
@@ -234,7 +242,7 @@ backup another.
 scripted model, and HTTPS on `localhost:8443`), then checks over HTTPS what a user would see:
 
 ```bash
-MONTYBOT_TEST_DEPLOY=1 uv run pytest tests/test_deploy.py -v
+SAMMY_TEST_DEPLOY=1 uv run pytest tests/test_deploy.py -v
 ```
 
 - the web app behind the login, over TLS;

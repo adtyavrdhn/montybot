@@ -28,11 +28,11 @@ import pytest
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, ViewportSize, async_playwright
 
-from montybot.browser.contract import Action, ActionFailed, Click, Point, Ref, TargetNotFound, Type
-from montybot.browser.snapshot import JSON, SnapshotWalker, webdriver_script
+from sammy.browser.contract import Action, ActionFailed, Click, Point, Ref, TargetNotFound, Type
+from sammy.browser.snapshot import JSON, SnapshotWalker, webdriver_script
 
 FIXTURES = Path(__file__).parent.parent / 'fixtures'
-SERVO = Path(os.environ.get('MONTYBOT_SERVO', '~/.cache/montybot/servo/Servo.app/Contents/MacOS/servoshell'))
+SERVO = Path(os.environ.get('SAMMY_SERVO', '~/.cache/sammy/servo/Servo.app/Contents/MacOS/servoshell'))
 # Servo's headless default, so both engines lay out the same width.
 VIEWPORT: ViewportSize = {'width': 1024, 'height': 740}
 
@@ -95,7 +95,7 @@ class Chromium:
 
 
 class Servo:
-    """One servoshell process with one WebDriver session, as in `poc/montybot_poc/servo.py`."""
+    """One servoshell process with one WebDriver session, as in `poc/sammy_poc/servo.py`."""
 
     name = 'servo'
 
@@ -164,11 +164,11 @@ async def chromium() -> AsyncGenerator[Chromium]:
 def servo() -> Iterator[Servo]:
     binary = SERVO.expanduser()
     if not binary.exists():
-        pytest.skip(f'servoshell not found at {binary}; set MONTYBOT_SERVO')
+        pytest.skip(f'servoshell not found at {binary}; set SAMMY_SERVO')
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
-    config_dir = tempfile.mkdtemp(prefix='montybot-servo-')
+    config_dir = tempfile.mkdtemp(prefix='sammy-servo-')
     process = subprocess.Popen(
         [str(binary), '--headless', f'--webdriver={port}', f'--config-dir={config_dir}'],
         stdout=subprocess.DEVNULL,
@@ -455,7 +455,7 @@ async def test_size_budget(engine: Engine, site: str) -> None:
 
 @pytest.mark.parametrize('length', [11_900, 12_100, 13_000, 19_000, 20_000])
 async def test_default_budget_preserves_oversized_prose(engine: Engine, length: int) -> None:
-    from montybot.browsing import SNAPSHOT_LIMIT
+    from sammy.browsing import SNAPSHOT_LIMIT
 
     await engine.goto('about:blank')
     await engine.run_script(
@@ -473,9 +473,7 @@ async def test_default_budget_preserves_oversized_prose(engine: Engine, length: 
         )
     # Check assignment before a larger snapshot can mutate shared ref state. Internal preservation is not
     # agent-visible completeness: code must not guess a ref omitted from its returned page.
-    assert (
-        await engine.run_script("() => document.querySelector('button').getAttribute('data-montybot-ref')", None) == '1'
-    )
+    assert await engine.run_script("() => document.querySelector('button').getAttribute('data-sammy-ref')", None) == '1'
     await act(engine, walker, Click(target=Ref(ref='1')))
     # A larger explicit budget can reveal the same internally retained ref.
     full = await SnapshotWalker(run_script=engine.run_script, budget=30_000).snapshot()

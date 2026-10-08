@@ -1,4 +1,4 @@
-# Local development: Postgres. `docker compose up -d`, then `uv run montybot serve` with the settings in `.env` (copy
+# Local development: Postgres. `docker compose up -d`, then `uv run sammy serve` with the settings in `.env` (copy
 # `.env.example`). #7 grows this into the whole product on one server.
 #
 # The agent's code runs on the hosted Monty sandboxes (MONTY_URL and MONTY_EXECUTION_KEY in `.env`). Our own Full
@@ -9,15 +9,15 @@ services:
   postgres:
     image: postgres:17
     environment:
-      POSTGRES_USER: montybot
-      POSTGRES_PASSWORD: montybot
-      POSTGRES_DB: montybot
+      POSTGRES_USER: sammy
+      POSTGRES_PASSWORD: sammy
+      POSTGRES_DB: sammy
     ports:
       - '127.0.0.1:5432:5432'
     volumes:
       - postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U montybot']
+      test: ['CMD-SHELL', 'pg_isready -U sammy']
       interval: 2s
       retries: 30
 
