@@ -64,9 +64,13 @@ STOPPED_NOTICE = 'You stopped this.'
 
 # Why a task failed, in words the user can act on, by the error's type (its text stays private: it can quote the
 # user's content). A type not listed gets FAILURE_NOTICE.
-_SERVICE = "The AI service I use didn't answer, so I couldn't finish. It may be busy: please try again in a minute."
+_SERVICE = 'The AI service I use returned an error, so I could not finish. Please try again in a little while.'
 _BROWSER = 'My browser stopped working partway through, so I could not finish. Please try again.'
 FAILURE_NOTICES = {
+    'ClaudeCodeSignInExpiredError': (
+        "I can't use the AI service right now: this server's sign-in to it has expired and needs renewing. "
+        'Please try again later.'
+    ),
     'ModelHTTPError': _SERVICE,
     'ModelAPIError': _SERVICE,
     'ConcurrencyLimitExceeded': _SERVICE,
@@ -90,9 +94,13 @@ FAILURE_NOTICES = {
 }
 
 
-def failure_notice(error_type: str) -> str:
-    """What the user reads when a task fails with an error of this type."""
-    return FAILURE_NOTICES.get(error_type, FAILURE_NOTICE)
+def failure_notice(error: BaseException) -> str:
+    """What the user reads when a task fails with this error: the notice of its type, or of the nearest type it
+    derives from that has one (`IncompleteToolCall` is an `UnexpectedModelBehavior`)."""
+    for kind in type(error).__mro__:
+        if kind.__name__ in FAILURE_NOTICES:
+            return FAILURE_NOTICES[kind.__name__]
+    return FAILURE_NOTICE
 
 
 @DBOS.workflow(name='montybot.run_thread_stream')  # the name runs were recorded under; keep it so they resume
@@ -120,7 +128,12 @@ async def run_thread(run_id: str) -> str:
                 # quote the user's content.
                 logger.warning('Run %s failed: %s', run_id, type(error).__qualname__)
                 await DBOS.run_step_async(
-                    {**RETRIED, 'name': 'run.failed'}, fail_run, resources, run, type(error).__name__
+                    {**RETRIED, 'name': 'run.failed'},
+                    fail_run,
+                    resources,
+                    run,
+                    type(error).__name__,
+                    failure_notice(error),
                 )
                 if isinstance(error, DBOSException):
                     raise  # a replay that does not match its recording is a bug to see, not a failed task
@@ -175,10 +188,10 @@ async def finish_run(resources: Resources, run: Run, new_messages: bytes, output
             await store.finish_run(connection, run.id, 'done', output=output)
 
 
-async def fail_run(resources: Resources, run: Run, error_type: str) -> None:
+async def fail_run(resources: Resources, run: Run, error_type: str, notice: str = FAILURE_NOTICE) -> None:
     await close_browser(resources, run)
     with timing('run.fail'):
-        await end_run(resources, run, 'failed', failure_notice(error_type), error=error_type)
+        await end_run(resources, run, 'failed', notice, error=error_type)
 
 
 async def stop(resources: Resources, run: Run) -> bool:

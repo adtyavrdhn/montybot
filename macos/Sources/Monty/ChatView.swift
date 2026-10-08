@@ -495,12 +495,15 @@ struct PastStepsView: View {
 struct BoundedHeight<Content: View>: View {
     var limit: CGFloat = 320
     @ViewBuilder let content: Content
-    @State private var height: CGFloat = 120
+    @State private var height: CGFloat = 0
 
     var body: some View {
         ScrollView(.vertical) {
-            content.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+            content
+                .padding(4)  // room for focus rings and the card's edge, which the scroll view would clip
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         }
+        .padding(-4)
         .scrollBounceBehavior(.basedOnSize)
         .scrollIndicators(.automatic)
         .frame(height: min(height, limit))

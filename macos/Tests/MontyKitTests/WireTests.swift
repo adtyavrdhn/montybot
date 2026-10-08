@@ -142,6 +142,9 @@ import Testing
         let schedule = try JSONDecoder().decode(Schedule.self, from: Data(json.utf8))
         #expect(schedule.plainWhen == "Mondays at 09:00")
         #expect(schedule.timeZone == "Europe/London")
+        let now = #"{"id": "s", "name": "Slots", "when": "every 30 minutes (America/Toronto)", "paused": false, "watch": true, "thread_id": "t"}"#
+        let current = try JSONDecoder().decode(Schedule.self, from: Data(now.utf8))
+        #expect(current.plainWhen == "every 30 minutes" && current.timeZone == "America/Toronto")  // as the server says it now
     }
 
     @Test func threadListStatus() throws {

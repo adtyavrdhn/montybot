@@ -163,7 +163,8 @@ struct Sidebar: View {
         .onDeleteCommand { app.deleting = app.openThread }  // ⌫ or ⌘⌫ on the selected chat
         .searchable(text: $search, placement: .sidebar, prompt: Text("Search chats"))
         .task(id: search) {
-            contentMatches = []
+            // The last matches stay until the new ones come, so chats found by their contents don't blink away.
+            if search.trimmingCharacters(in: .whitespaces).count < 2 { contentMatches = []; return }
             try? await Task.sleep(for: .milliseconds(250))  // once typing pauses
             guard !Task.isCancelled else { return }
             let found = await app.search(search)

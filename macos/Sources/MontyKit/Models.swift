@@ -289,8 +289,10 @@ public struct Schedule: Codable, Equatable, Identifiable, Sendable {
 
     /// The time zone the server appends, "Europe/London", or nil.
     public var timeZone: String? {
-        guard when.hasSuffix(")"), let comma = when.lastIndex(of: ",") else { return nil }
-        let zone = when[when.index(after: comma)...].dropLast().trimmingCharacters(in: .whitespaces)
+        // "(Europe/London)" from the server now; "(0 9 * * 1, Europe/London)" from older ones.
+        guard when.hasSuffix(")"), let open = when.lastIndex(of: "(") else { return nil }
+        let inside = when[when.index(after: open)...].dropLast()
+        let zone = (inside.split(separator: ",").last ?? inside).trimmingCharacters(in: .whitespaces)
         return zone.isEmpty ? nil : zone
     }
 }
