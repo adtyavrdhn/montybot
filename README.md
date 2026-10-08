@@ -3,6 +3,124 @@
 Notes and design for an always-on agent built on Monty and Pydantic AI: reachable from chat channels, running in
 Monty by default and in a real machine only when a process has to run, with computer use and human takeover.
 
+## 🐿️ Why Sammy is ridiculously, unreasonably awesome
+
+Most agent demos are a `while True:` loop around a chat API. **Sammy is not that.** Sammy is a durable, sandboxed,
+browser-driving, app-connecting, cron-scheduling, hand-off-capable agent. It runs on one server, keeps costs down,
+and **traces everything it does in Logfire**, from a click in the Mac app to the SQL query that click caused.
+
+You tell it *"every Monday, fill my grocery cart"*, *"tell me when a vet slot opens"* or *"yo what's on my linear"*.
+It writes Python, drives a real browser, calls your apps, asks you when it is unsure, hands you the keyboard when a
+site wants your password, and pings your phone when it's done.
+
+### 💸 It saves an absurd amount of money
+
+Every layer of Sammy avoids paying for what it doesn't need.
+
+- **Monty first, machines last.** The agent's code runs in **Monty**, a Python interpreter written in Rust that
+  starts in microseconds, not in a container or VM that takes seconds to boot and keeps billing while idle
+  (`sammy/code.py`). The session is dumped after each call and **no worker is held between calls, during a
+  hand-off, or while waiting for approval**. Waiting for a human costs nothing. Real CPython starts only when the
+  agent needs pandas or PDFs, in a bubblewrap jail per call with hard caps (`CPYTHON_CPU_SECONDS=60`,
+  `CPYTHON_MEMORY_MB=2048`) (`sammy/cpython.py`).
+- **Hard limits on runaway code.** Each Monty call gets 60 s of compute, 256 MB of memory and 300 suspensions
+  (`ResourceLimits` in `sammy/code.py`). An agent stuck in an infinite loop can't run up your bill.
+- **Prompt caching on everything that repeats.** Instructions, tool definitions and the conversation so far (page
+  snapshots included) are cached between a run's model calls (`CACHE` in `sammy/agent.py`). The bulk of the
+  conversation is billed at cache-read prices instead of full price.
+- **Token diets everywhere.**
+  - History is trimmed to the last `HISTORY_LIMIT` (40) messages, cut at a user turn so the conversation stays
+    whole with no tool call cut from its result (`recent()` in `sammy/workflows.py`).
+  - Pages reach the model as a compact text outline (headings, text, numbered controls) of at most 12,000
+    characters, not raw HTML or a screenshot for every step (`sammy/browser/snapshot.py`).
+  - Images are shrunk to 1568 px before the model sees them. Earlier turns' files come back only within a 16 MB
+    budget (`sammy/attachments.py`).
+  - Stored history keeps a short note per file, not the bytes.
+- **Crashes don't cost twice.** Every run is a **DBOS workflow**. Model requests, browser calls, memory writes and
+  schedule changes are steps, and each step's result is recorded. If the server dies halfway through a run, DBOS
+  starts it again and **every finished step returns its recorded result instead of running again**, so model calls
+  that already finished are not paid for again (`sammy/workflows.py`).
+- **Browsers that pay rent only when used.** A user's runs share **one** Chromium, a tab each. An idle browser is
+  saved and closed after a day (`BROWSER_IDLE_TIMEOUT_SECONDS`). `BROWSER_MAX_OPEN` caps live browsers (8 on the
+  server, about 430 MB each), evicting the least recently used. The live view streams Chromium's screencast, so **a
+  still page sends nothing** (`sammy/browser/host.py`, `sammy/liveview/`).
+- **One box, no fleet.** Everything is Caddy, the app, Postgres, nightly backups and an egress proxy on **one Linux
+  server** with Docker Compose (`deploy/`). DBOS runs on the same Postgres, so there is no Redis, no queue service, no
+  Kubernetes and no separate workflow cluster. The web app is plain HTML, CSS and JS with **no build step**.
+- **Watches, not polling humans.** A schedule can be a *watch* ("tell me when a slot opens"): it calls
+  `notify_user` once, by push and email, then **pauses itself** so it stops spending (`sammy/schedule_tools.py`).
+- **Telemetry that doesn't bloat your bill.** The apps' polling never starts a trace (`only_in_trace=True`). Client
+  telemetry is capped at 120 exports and 10 MB per minute (`TELEMETRY_PER_MINUTE`). And because token usage and cost
+  are on every model span, **you can see exactly where the money goes** (below).
+
+### 🪵 Logfire everywhere, and we mean *everywhere*
+
+Sammy isn't just "instrumented with Logfire". It is **built around** Logfire. Set one `LOGFIRE_TOKEN` and every
+layer reports in, in **one connected trace**.
+
+- **One call wires it all** (`sammy/observability.py`): `logfire.configure` with service name, commit
+  (`service.version`) and environment, then `instrument_pydantic_ai`, `instrument_httpx` and
+  `instrument_system_metrics`. Agent runs, every model request, every tool call, **token usage, cache hits and
+  cost**, every outgoing HTTP call to a model provider, CPU and memory.
+- **44 hand-named spans across the whole system:**
+  - runs: `run.lifecycle`, `run.start`, `run.agent`, `run.dispatch`, `run.finish`, `run.fail`, `run.close`
+  - Monty: `monty.run`, `monty.session`, `monty.snippet`, `monty.dump`, `monty.load`
+  - the agent driving the browser: `code.browser.goto`, `code.browser.click`, `code.browser.type`,
+    `code.browser.read`
+  - the browser itself: `browser.snapshot`, `browser.act`, `browser.handoff.start`, `browser.handoff.end`,
+    `browser.state.save`, `browser.reap_idle`, `browser.live_view`
+  - the database: `db.query`, `db.pool.acquire`, `db.migrate`
+  - ...and more. Every layer, every hop.
+- **`run_id` on every span of a run** through OpenTelemetry baggage. Model calls, browser calls and Monty snippets
+  all carry it, and `run.lifecycle` adds `thread_id`, `user_id` and `trigger` (message or schedule). Each browser
+  step records the **site it opened** (host only).
+- **One trace from the click to the database.** The web app (Logfire's browser SDK, `sammy/static/telemetry.js`)
+  and the native Mac app (OpenTelemetry Swift, `macos/Sources/SammyKit/Telemetry.swift`) trace page loads, **Web
+  Vitals**, long animation frames, clicks, submits, every API call by route template, the live view and errors.
+  Every traced action sends a W3C `traceparent`, and `ClientTraceContext` puts the server's spans **inside the
+  client's trace**. One trace covers the click, the API call, the DBOS workflow, the agent, the model, Monty and
+  Chromium.
+- **No tokens in clients, ever.** Both apps post OTLP to `/api/telemetry/v1/...`, and the server forwards it with
+  *its* token, for signed-in users only. `GET /api/telemetry` tells the apps whether to send anything and whether
+  content is allowed.
+- **Error rates that mean bugs.** `kind_of()` sorts every exception into `error`, `expected` or `cancelled`. A page
+  that didn't load, or a mistake in the agent's own code, is a **warning**. A user pressing stop is just cancelled.
+  Only real failures turn spans red.
+- **Privacy by construction.** Every field is classed as *always*, *only with `LOGFIRE_INCLUDE_CONTENT`*, or
+  *never* (see [Observability](#observability)). Clients rewrite URLs to route templates such as
+  `/api/threads/{thread_id}`, hand-off links become `/live/*`, and long ids become `{id}`. MCP server URLs are never
+  traced. Logfire's scrubbing stays on as a backstop. Cookies, passwords and sign-ins never leave.
+
+### 🔌 It plugs into everything you use
+
+- **About 120 apps in one click through Composio:** Linear, GitHub, Gmail, Notion, Slack and more. Sammy creates its
+  own auth config per app on first use, and each user's accounts are namespaced so a Composio project can be shared
+  (`sammy/integrations/composio.py`).
+- **Bring your own MCP servers:** streamable HTTP with a header, or a full OAuth sign-in with discovery, dynamic
+  client registration, PKCE and refresh (`sammy/integrations/mcp.py`, `oauth.py`). URLs, headers and tokens are
+  sealed with the user's own data key, and every connection is **checked to reach public addresses only**
+  (`sammy/integrations/egress.py`).
+- **Three tools that never change** (`sammy/integration_tools.py`), however many apps are connected: list, call and
+  connect. The model's tool list stays small, and the prompt cache stays warm. Anything that changes something
+  **asks you first**.
+- **Connect in the middle of a task.** Say "what's on my linear" without Linear connected, and the chat shows a
+  connect card. Sign in, and **the same run carries on**.
+- **A real browser with your sign-ins.** Chromium in a bubblewrap jail, driven over Sammy's own CDP pipe, behind a
+  public-only SOCKS egress proxy. Saved sign-ins use **envelope encryption** (AES-256-GCM, a per-user data key
+  wrapped by the deployment key, with associated data tied to the user and version) (`sammy/signins.py`,
+  `sammy/crypto.py`).
+- **Human takeover.** When a site wants a password or a CAPTCHA, Sammy hands you the live browser, with an editable
+  address bar and tabs, and picks up when you hand it back.
+- **Files both ways.** Drop up to 10 files per message (20 MB each). Sammy reads images, PDFs and text directly,
+  opens spreadsheets with real CPython, and hands files back with `share_file`.
+- **Memory, schedules and notifications.** Per-user memories, cron schedules in your own time zone, watches, and web
+  push plus email when Sammy needs you or finishes.
+- **Everywhere you are.** A framework-free web app that works on phones, and a native SwiftUI **Mac app** with a
+  menu bar, a command palette and an animated 3D squirrel. 🐿️
+
+In short: Sammy does the work, spends as little as possible doing it, and Logfire shows every step, with the
+model's cost on every request. ✨
+
 ## Design
 
 [`DESIGN.md`](DESIGN.md) is the current design for Sammy: scheduled browser runs in Monty and a sandboxed
