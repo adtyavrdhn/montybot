@@ -168,19 +168,60 @@ public final class APIClient: Sendable {
     }
 
     /// Messages carry the Mac's time zone, so the bot knows what "today" and "9am" mean for the user, and the name the
-    /// user gave their squirrel, which the bot answers to (empty forgets it; nil leaves it as it is).
-    public func startThread(_ text: String, squirrelName: String? = nil) async throws -> Created {
-        try await send("POST", "/api/threads", body: message(text, squirrelName: squirrelName))
+    /// user gave their squirrel, which the bot answers to (empty forgets it; nil leaves it as it is). `attachments` are
+    /// the ids of files uploaded for it (`upload`); with some, `text` may be empty.
+    public func startThread(_ text: String, attachments: [String] = [], squirrelName: String? = nil) async throws -> Created {
+        try await send("POST", "/api/threads", body: MessageBody(text, attachments, squirrelName))
     }
 
-    public func send(_ text: String, to thread: String, squirrelName: String? = nil) async throws -> Created {
-        try await send("POST", "/api/threads/\(thread)/messages", body: message(text, squirrelName: squirrelName))
+    public func send(_ text: String, to thread: String, attachments: [String] = [], squirrelName: String? = nil) async throws -> Created {
+        try await send("POST", "/api/threads/\(thread)/messages", body: MessageBody(text, attachments, squirrelName))
     }
 
-    private func message(_ text: String, squirrelName: String?) -> [String: String] {
-        var body = ["text": text, "timezone": TimeZone.current.identifier]
-        body["squirrel_name"] = squirrelName
-        return body
+    struct MessageBody: Encodable {
+        let text: String
+        let timezone = TimeZone.current.identifier
+        /// Left out when there are none, as older servers know no such field.
+        let attachments: [String]?
+        let squirrelName: String?
+
+        enum CodingKeys: String, CodingKey {
+            case text, timezone, attachments
+            case squirrelName = "squirrel_name"
+        }
+
+        init(_ text: String, _ attachments: [String], _ squirrelName: String?) {
+            self.text = text
+            self.attachments = attachments.isEmpty ? nil : attachments
+            self.squirrelName = squirrelName
+        }
+    }
+
+    // MARK: attachments
+
+    /// Uploads a file for the user's next message, as it is: its bytes are the body, its name a header (which the
+    /// server requires, so a web page can't upload for the user). It is sent with a message by its id.
+    public func upload(data: Data, name: String, mediaType: String) async throws -> Attachment {
+        try await decode(uploadRequest(data: data, name: name, mediaType: mediaType))
+    }
+
+    func uploadRequest(data: Data, name: String, mediaType: String) -> URLRequest {
+        var request = request("POST", "/api/attachments")
+        request.httpBody = data
+        request.setValue(mediaType.isEmpty ? "application/octet-stream" : mediaType, forHTTPHeaderField: "Content-Type")
+        request.setValue(name.addingPercentEncoding(withAllowedCharacters: Self.unreserved) ?? "file", forHTTPHeaderField: "X-Filename")
+        return request
+    }
+
+    /// What URLs never escape (RFC 3986), as JavaScript's `encodeURIComponent` leaves them.
+    private static let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
+    /// A file in a chat, as its bytes.
+    public func attachment(id: String) async throws -> Data {
+        try await raw(request("GET", "/api/attachments/\(Self.pathPart(id))", accept: "*/*")) { data, response in
+            guard response.statusCode == 200 else { throw error(response.statusCode, data) }
+            return data
+        }
     }
 
     public func rename(thread: String, to title: String) async throws {
@@ -286,7 +327,7 @@ public final class APIClient: Sendable {
         }
     }
 
-    // MARK: schedules, memories, sign-ins, files
+    // MARK: schedules, memories, sign-ins
 
     public func schedules() async throws -> [Schedule] { try await send("GET", "/api/schedules") }
 
@@ -310,8 +351,6 @@ public final class APIClient: Sendable {
         let escaped = site.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(["/"])) ?? site
         let _: Ok = try await send("DELETE", "/api/sign-ins/\(escaped)")
     }
-
-    public func files() async throws -> FileList { try await send("GET", "/api/files") }
 
     // MARK: integrations
 
@@ -354,19 +393,6 @@ public final class APIClient: Sendable {
             throw APIError.unexpected("not a sign-in address")
         }
         return url
-    }
-
-    /// A file from the workspace, and the name the server suggests saving it as.
-    public func download(_ path: String) async throws -> (data: Data, name: String) {
-        var request = request("POST", "/api/files/download")
-        request.httpBody = try JSONEncoder().encode(["path": path])
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        return try await raw(request) { data, response in
-            guard response.statusCode == 200 else { throw error(response.statusCode, data) }
-            let disposition = response.value(forHTTPHeaderField: "Content-Disposition") ?? ""
-            let name = disposition.components(separatedBy: "filename*=UTF-8''").dropFirst().first?.removingPercentEncoding
-            return (data, name ?? (path as NSString).lastPathComponent)
-        }
     }
 
     // MARK: the live view

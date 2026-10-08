@@ -2,7 +2,8 @@
 
 Passwords are hashed with scrypt from the standard library. The session cookie is Starlette's `SessionMiddleware`
 (signed with `SESSION_SECRET`, HttpOnly, SameSite=Lax). Writes to the API need a JSON body, which a page on another
-site cannot send with the user's cookie without a CORS preflight we never answer.
+site cannot send with the user's cookie without a CORS preflight we never answer; a file's upload, which is its raw
+bytes, carries an `X-Filename` header instead, which needs the same preflight.
 """
 
 from __future__ import annotations
@@ -71,15 +72,32 @@ Handler = Callable[[Request, User], Awaitable[Response]]
 
 def signed_in(handler: Handler) -> Callable[[Request], Awaitable[Response]]:
     """Answer 401 unless a user is signed in; refuse writes that are not JSON (`refuse_non_json`)."""
+    return _signed_in(handler, refuse_non_json)
 
+
+def signed_in_upload(handler: Handler) -> Callable[[Request], Awaitable[Response]]:
+    """As `signed_in`, for a POST of a file's bytes: it must name the file in `X-Filename`."""
+    return _signed_in(handler, refuse_unnamed_file)
+
+
+def _signed_in(
+    handler: Handler, refuse: Callable[[Request], Response | None]
+) -> Callable[[Request], Awaitable[Response]]:
     async def endpoint(request: Request) -> Response:
         user = await signed_in_user(request)
         if user is None:
             return JSONResponse({'detail': 'sign in first'}, status_code=401)
-        refused = refuse_non_json(request)
+        refused = refuse(request)
         return refused if refused is not None else await handler(request, user)
 
     return endpoint
+
+
+def refuse_unnamed_file(request: Request) -> Response | None:
+    """A form on another site cannot set a header, and a script there cannot without a CORS preflight."""
+    if request.headers.get('x-filename'):
+        return None
+    return JSONResponse({'detail': 'name the file in X-Filename'}, status_code=400)
 
 
 def refuse_non_json(request: Request) -> Response | None:

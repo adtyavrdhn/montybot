@@ -21,6 +21,7 @@ struct ChatView: View {
                 conversation
             }
         }
+        .modifier(DropFiles(chat: chat))
         .navigationTitle(chat.title.isEmpty ? "New task" : chat.title.readableTitle)
         .navigationSubtitle(subtitle)
         .toolbar {
@@ -192,7 +193,8 @@ struct ChatView: View {
                             }
                             .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
                             // What the user had written, or queued, stays in sight under the card, for after.
-                            if chat.queued != nil || !chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            if chat.queued != nil || !chat.attachments.isEmpty
+                                || !chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                 Composer(chat: chat)
                             }
                         }
@@ -285,18 +287,27 @@ struct MessageView: View {
         case .user:
             HStack {
                 Spacer(minLength: 80)
-                Text(message.text)
-                    .font(.system(size: 14))
-                    .lineSpacing(3)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(RoundedRectangle(cornerRadius: Metrics.radius).fill(Palette.containerHigh))
-                    .contextMenu { Button("Copy") { copy(message.text) } }
+                VStack(alignment: .trailing, spacing: 6) {
+                    if !message.files.isEmpty {
+                        MessageFiles(files: message.files, trailing: true)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityLabel("You attached \(message.files.count) file\(message.files.count == 1 ? "" : "s")")
+                    }
+                    if !message.text.isEmpty {  // a message of files alone is just its files
+                        Text(message.text)
+                            .font(.system(size: 14))
+                            .lineSpacing(3)
+                            .textSelection(.enabled)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(RoundedRectangle(cornerRadius: Metrics.radius).fill(Palette.containerHigh))
+                            .contextMenu { Button("Copy") { copy(message.text) } }
+                            .accessibilityLabel("You said: \(message.text)")
+                            .accessibilityAction(named: "Copy") { copy(message.text) }
+                    }
+                }
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("You said: \(message.text)")
-            .accessibilityAction(named: "Copy") { copy(message.text) }
+            .accessibilityElement(children: .contain)
         case .assistant:
             VStack(alignment: .leading, spacing: 6) {
                 if draft {
@@ -306,6 +317,12 @@ struct MessageView: View {
                     .opacity(draft ? 0.7 : 1)
                     .contentTransition(.opacity)
                     .motion(.easeOut(duration: 0.2), value: message.text)
+                if !message.files.isEmpty {
+                    MessageFiles(files: message.files)
+                        .padding(.top, 2)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel("Monty shared \(message.files.count) file\(message.files.count == 1 ? "" : "s")")
+                }
                 if !draft {
                     // Under each reply, as in other chat apps: shown on hover, so replies stay calm to read.
                     Button {
@@ -609,7 +626,9 @@ struct AskCard: View {
                 .buttonStyle(.primary)
                 .disabled(chat.takingOver)
                 .accessibilityHint("Opens \(app.montyName)'s browser. VoiceOver reads the page; activating an item clicks it, and typing goes into the page. Shift-Command-T closes it, Command-Return hands it back.")
-                Text("You sign in on the page yourself, and \(app.montyName) waits until you're done. Password managers can't fill it in: copy your password and paste it with ⌘V. Afterwards \(app.montyName) stays signed in to this site; you can remove it in Saved sign-ins.")
+                // A hand-off is any step Monty gives the user (a sign-in, a code, a CAPTCHA, a payment, or just because
+                // they asked); Monty's reason above says which, so this note must hold for all of them.
+                Text("\(app.montyName) waits until you hand it back. Password managers can't fill in this page: copy a password and paste it with ⌘V. If you sign in to a site, \(app.montyName) stays signed in there; you can remove it in Saved sign-ins.")
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.onSurfaceVariant)
             }
@@ -677,6 +696,7 @@ struct Composer: View {
     @Bindable var chat: ChatModel
     var prominent = false
     @FocusState private var focused: Bool
+    @State private var picking = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -685,61 +705,70 @@ struct Composer: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if let queued = chat.queued {
-                QueuedMessage(text: queued, edit: chat.unqueue, remove: chat.dropQueued)
+                QueuedMessage(text: queued, files: chat.queuedAttachments.count, edit: chat.unqueue, remove: chat.dropQueued)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            HStack(alignment: .bottom, spacing: 8) {
-                TextField("Message \(app.montyName)", text: $chat.draft, prompt: Text(placeholder).foregroundStyle(Palette.onSurfaceVariant), axis: .vertical)
-                    .labelsHidden()
-                    .accessibilityLabel("Message \(app.montyName)")
-                    .accessibilityHint(placeholder)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: prominent ? 15 : 14))
-                    .lineLimit(prominent ? 3...10 : 1...10)
-                    .focused($focused)
-                    .padding(.vertical, 6)
-                    .onSubmit {
-                        if chat.canSend { Task { await chat.send() } } else if chat.canQueue { chat.queue() }
+            VStack(alignment: .leading, spacing: 6) {
+                if !chat.attachments.isEmpty {
+                    AttachmentTray(chat: chat).padding(.leading, 4)
+                }
+                HStack(alignment: .bottom, spacing: 4) {
+                    Button { picking = true } label: { Image(systemName: "paperclip").font(.system(size: 14, weight: .medium)) }
+                        .buttonStyle(IconButtonStyle(size: Metrics.control))
+                        .help("Attach files (or drop them on the chat, or paste them)")
+                        .accessibilityLabel("Attach files")
+                    TextField("Message \(app.montyName)", text: $chat.draft, prompt: Text(placeholder).foregroundStyle(Palette.onSurfaceVariant), axis: .vertical)
+                        .labelsHidden()
+                        .accessibilityLabel("Message \(app.montyName)")
+                        .accessibilityHint(placeholder)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: prominent ? 15 : 14))
+                        .lineLimit(prominent ? 3...10 : 1...10)
+                        .focused($focused)
+                        .padding(.vertical, 6)
+                        .onSubmit {
+                            if chat.canSend { Task { await chat.send() } } else if chat.canQueue { chat.queue() }
+                        }
+                        // ↑ in an empty box brings back the last task, to change and send again (as T3 Code's history).
+                        .onKeyPress(.upArrow) {
+                            guard chat.draft.isEmpty, let last = chat.lastTask else { return .ignored }
+                            chat.draft = last
+                            return .handled
+                        }
+                        .disabled(chat.ask != nil && chat.draft.isEmpty)  // text kept here stays reachable
+                    if chat.isActive {
+                        // While Monty works (or waits for an answer), Send is Stop, as in other chat apps.
+                        Button { Task { await chat.stop() } } label: {
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 11, weight: .bold))
+                                .frame(width: Metrics.control, height: Metrics.control)
+                                .background(RoundedRectangle(cornerRadius: Metrics.radiusMedium).fill(Palette.onSurface))
+                                .foregroundStyle(Palette.surface)
+                                .opacity(chat.canStop ? 1 : 0.45)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!chat.canStop)
+                        .help("Stop this task (⌘.)")
+                        .accessibilityLabel(chat.stopping ? "Stopping" : "Stop task")
+                        .transition(.scale(scale: 0.8).combined(with: .opacity))
+                    } else {
+                        Button { Task { await chat.send() } } label: {
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 13, weight: .bold))
+                                .frame(width: Metrics.control, height: Metrics.control)
+                                .background(RoundedRectangle(cornerRadius: Metrics.radiusMedium).fill(chat.canSend ? Palette.action : Palette.containerHigh))
+                                .foregroundStyle(chat.canSend ? Palette.onLink : Palette.onSurfaceVariant)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!chat.canSend)
+                        .help(chat.isUploading ? "Sends once your files have uploaded" : "Send (↩). ⌥↩ starts a new line.")
+                        .accessibilityLabel(chat.isUploading ? "Send, waiting for files to upload" : "Send")
+                        .animation(.easeOut(duration: 0.15), value: chat.canSend)
+                        .transition(.scale(scale: 0.8).combined(with: .opacity))
                     }
-                    // ↑ in an empty box brings back the last task, to change and send again (as T3 Code's history).
-                    .onKeyPress(.upArrow) {
-                        guard chat.draft.isEmpty, let last = chat.lastTask else { return .ignored }
-                        chat.draft = last
-                        return .handled
-                    }
-                    .disabled(chat.ask != nil && chat.draft.isEmpty)  // text kept here stays reachable
-                if chat.isActive {
-                    // While Monty works (or waits for an answer), Send is Stop, as in other chat apps.
-                    Button { Task { await chat.stop() } } label: {
-                        Image(systemName: "stop.fill")
-                            .font(.system(size: 11, weight: .bold))
-                            .frame(width: Metrics.control, height: Metrics.control)
-                            .background(RoundedRectangle(cornerRadius: Metrics.radiusMedium).fill(Palette.onSurface))
-                            .foregroundStyle(Palette.surface)
-                            .opacity(chat.canStop ? 1 : 0.45)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!chat.canStop)
-                    .help("Stop this task (⌘.)")
-                    .accessibilityLabel(chat.stopping ? "Stopping" : "Stop task")
-                    .transition(.scale(scale: 0.8).combined(with: .opacity))
-                } else {
-                    Button { Task { await chat.send() } } label: {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 13, weight: .bold))
-                            .frame(width: Metrics.control, height: Metrics.control)
-                            .background(RoundedRectangle(cornerRadius: Metrics.radiusMedium).fill(chat.canSend ? Palette.action : Palette.containerHigh))
-                            .foregroundStyle(chat.canSend ? Palette.onLink : Palette.onSurfaceVariant)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!chat.canSend)
-                    .help("Send (↩). ⌥↩ starts a new line.")
-                    .accessibilityLabel("Send")
-                    .animation(.easeOut(duration: 0.15), value: chat.canSend)
-                    .transition(.scale(scale: 0.8).combined(with: .opacity))
                 }
             }
-            .padding(.leading, 16)
+            .padding(.leading, 6)
             .padding(.trailing, 6)
             .padding(.vertical, 6)
             .background(RoundedRectangle(cornerRadius: Metrics.radius).fill(chat.ask != nil ? Palette.containerLowest : Palette.container))
@@ -751,9 +780,14 @@ struct Composer: View {
         .animation(.easeOut(duration: 0.2), value: chat.notice)
         .animation(.easeOut(duration: 0.2), value: chat.queued)
         .animation(.easeOut(duration: 0.15), value: chat.isActive)
+        .animation(.easeOut(duration: 0.15), value: chat.attachments.isEmpty)
         .onAppear { if chat.ask == nil { focused = true } }
         .onReceive(NotificationCenter.default.publisher(for: .montyFocusMessage)) { _ in focused = true }
         .onChange(of: chat.ask == nil) { _, free in if free { focused = true } }
+        .fileImporter(isPresented: $picking, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { chat.attach(contentsOf: urls) }
+        }
+        .modifier(PasteFiles(chat: chat, active: focused))
     }
 
     private var placeholder: String {
@@ -777,6 +811,7 @@ struct Composer: View {
 struct QueuedMessage: View {
     @Environment(AppModel.self) private var app
     let text: String
+    var files = 0
     let edit: () -> Void
     let remove: () -> Void
 
@@ -785,7 +820,10 @@ struct QueuedMessage: View {
             Image(systemName: "clock.arrow.circlepath").accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Sends when \(app.montyName) is done").font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.onSurfaceVariant)
-                Text(text).lineLimit(2).foregroundStyle(Palette.onSurface)
+                if !text.isEmpty { Text(text).lineLimit(2).foregroundStyle(Palette.onSurface) }
+                if files > 0 {
+                    Label("\(files) file\(files == 1 ? "" : "s")", systemImage: "paperclip").foregroundStyle(Palette.onSurfaceVariant)
+                }
             }
             Spacer(minLength: 4)
             Button("Edit", action: edit).buttonStyle(.monty(.ghost, small: true)).help("Back to the message box")
@@ -800,7 +838,7 @@ struct QueuedMessage: View {
         .padding(.trailing, 4)
         .background(RoundedRectangle(cornerRadius: Metrics.radiusMedium).fill(Palette.containerHigh))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Queued message, sends when \(app.montyName) is done: \(text)")
+        .accessibilityLabel("Queued message, sends when \(app.montyName) is done: \(text)\(files > 0 ? ", with \(files) file\(files == 1 ? "" : "s")" : "")")
     }
 }
 
@@ -948,7 +986,7 @@ struct BrowserPanel: View {
                 .onTapGesture(count: 2) { chat.browserExpanded = true }
                 .help("Double-click to make it fill the window")
             if chat.ask?.kind == .handoff {
-                // Monty is stopped at a sign-in: what the user came to the browser for is to do it.
+                // Monty is stopped at a hand-off: what the user came to the browser for is to take it over.
                 Button { Task { await chat.takeOver() } } label: {
                     HStack(spacing: 6) {
                         if chat.takingOver { ProgressView().controlSize(.mini).tint(Palette.onLink) }
@@ -958,7 +996,7 @@ struct BrowserPanel: View {
                 }
                 .buttonStyle(.primary)
                 .disabled(chat.takingOver)
-                Text("\(app.montyName) is waiting for you to sign in on this page.")
+                Text("\(app.montyName) is waiting for you to take over the browser.")
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.onSurfaceVariant)
             } else if let activity = chat.activity {

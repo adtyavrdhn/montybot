@@ -6,6 +6,7 @@ Monty code: Path('/work/invoice.csv').read_text()           run_code (montybot.c
     WorkspaceFiles: /work/invoice.csv -> <user dir>/invoice.csv
       Workspace.read_bytes(...)                              pydantic_ai.workspaces, one per user
 browser download -> save_download -> /work/downloads/<name>  montybot.browsing.Session.read
+file in a message -> save_in -> /work/uploads/<name>         montybot.attachments.into_workspace
 ```
 
 Monty is the code runner, not the workspace: its file calls reach the user's `Workspace` through the `os=` handler
@@ -43,15 +44,16 @@ VIRTUAL_ROOT = '/work'
 """Where code sees the user's files."""
 DOWNLOADS = f'{VIRTUAL_ROOT}/downloads'
 """Where browser downloads are saved."""
+UPLOADS = f'{VIRTUAL_ROOT}/uploads'
+"""Where the files the user attaches to their messages are saved."""
 
 
 MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
-MAX_LIST_ENTRIES = 1000
-MAX_LIST_DEPTH = 16
+"""The most a file Monty gives the user may hold."""
 
 
 class FileTooLarge(ValueError):
-    """The consumer download exceeds the bounded in-memory response size."""
+    """The file is over `MAX_DOWNLOAD_BYTES`, the most read into memory to give the user."""
 
 
 class Workspaces:
@@ -178,62 +180,11 @@ class WorkspaceFiles:
             raise _error(errno.EACCES, f'Permission denied: {VIRTUAL_ROOT} itself cannot be changed', str(path))
         return host
 
-    # --- read-only consumer exports ---
+    # --- files given to the user (`montybot.attachments.share_file`) ---
 
     @staticmethod
     def _directory_fd(path: str, *, parent: int | None = None) -> int:
         return os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
-
-    async def list_results(self) -> tuple[list[dict[str, Any]], bool]:
-        """Bound traversal and output; never follow links, even inside /work."""
-        async with self.lock:
-            root = await self._host(VIRTUAL_ROOT)
-
-            def listing() -> tuple[list[dict[str, Any]], bool]:
-                found: list[dict[str, Any]] = []
-                visited = 0
-                truncated = False
-
-                def walk(fd: int, relative: str, depth: int) -> None:
-                    nonlocal visited, truncated
-                    with os.scandir(fd) as entries:
-                        for entry in entries:
-                            if visited >= MAX_LIST_ENTRIES:
-                                truncated = True
-                                return
-                            visited += 1
-                            path = relative + '/' + entry.name
-                            try:
-                                path.encode('utf-8')
-                            except UnicodeEncodeError:
-                                continue  # not representable as a JSON/attachment filename
-                            if len(path) > 1024:
-                                truncated = True
-                                continue
-                            try:
-                                info = entry.stat(follow_symlinks=False)
-                                if stat_module.S_ISREG(info.st_mode):
-                                    found.append({'path': path, 'size': info.st_size})
-                                elif stat_module.S_ISDIR(info.st_mode):
-                                    if depth >= MAX_LIST_DEPTH:
-                                        truncated = True
-                                        continue
-                                    child = self._directory_fd(entry.name, parent=fd)
-                                    try:
-                                        walk(child, path, depth + 1)
-                                    finally:
-                                        os.close(child)
-                            except OSError:
-                                continue  # removed, replaced, or inaccessible while listing
-
-                fd = self._directory_fd(root)
-                try:
-                    walk(fd, VIRTUAL_ROOT, 0)
-                finally:
-                    os.close(fd)
-                return sorted(found, key=lambda item: item['path']), truncated
-
-            return await asyncio.to_thread(listing)
 
     async def read_result(self, path: str) -> bytes:
         """Read bounded bytes from pinned descriptors, not a checked path reopened later.
@@ -426,21 +377,26 @@ def download_name(name: str) -> str:
 
 
 async def save_download(files: WorkspaceFiles, name: str, data: bytes) -> str:
-    """Save a browser download in the user's files; returns the path code sees it at. A file of the same name and
-    content is kept, so a download repeated after a restart leaves one copy; another with the same name gets ` (2)`,
+    """Save a browser download in the user's files; returns the path code sees it at (`save_in`)."""
+    return await save_in(files, DOWNLOADS, name, data)
+
+
+async def save_in(files: WorkspaceFiles, folder: str, name: str, data: bytes) -> str:
+    """Save a file in a folder of the user's files; returns the path code sees it at. A file of the same name and
+    content is kept, so a save repeated after a restart leaves one copy; another with the same name gets ` (2)`,
     ` (3)`... as in a browser."""
     async with files.lock:
-        return await _save_download(files, download_name(name), data)
+        return await _save_in(files, folder, download_name(name), data)
 
 
-async def _save_download(files: WorkspaceFiles, name: str, data: bytes) -> str:
-    await files.mkdir(PurePosixPath(DOWNLOADS), parents=True, exist_ok=True)
+async def _save_in(files: WorkspaceFiles, folder: str, name: str, data: bytes) -> str:
+    await files.mkdir(PurePosixPath(folder), parents=True, exist_ok=True)
     stem, dot, extension = name.rpartition('.') if '.' in name else (name, '', '')
     for number in range(1, 1000):
-        path = PurePosixPath(DOWNLOADS, name if number == 1 else f'{stem} ({number}){dot}{extension}')
+        path = PurePosixPath(folder, name if number == 1 else f'{stem} ({number}){dot}{extension}')
         if not await files.exists(path):
             await files.write_bytes(path, data)
             return str(path)
         if await files.is_file(path) and await files.read_bytes(path) == data:
             return str(path)
-    raise _error(errno.EEXIST, 'too many downloads of this name', f'{DOWNLOADS}/{name}')
+    raise _error(errno.EEXIST, 'too many files of this name', f'{folder}/{name}')

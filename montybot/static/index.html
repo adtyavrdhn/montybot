@@ -61,7 +61,6 @@
         <div class="thread-heading">Your chats</div>
         <ul id="threads"></ul>
         <div class="drawer-tools">
-          <button id="open-files" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6Zm8 0v5h4"/></svg> Files</button>
           <button id="open-signins" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="4"/><path d="m11 12 8 8 3-3-3-3-2 2"/></svg> Saved browser data</button>
           <button id="open-integrations" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v4m6-4v4M7 7h10v4a5 5 0 0 1-10 0Zm5 9v5"/></svg> Integrations</button>
           <button id="open-schedules" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16m-12 4h3"/></svg> Schedules</button>
@@ -77,13 +76,19 @@
           <div id="ask" class="ask" role="region" aria-label="Monty needs your input" hidden></div>
           <div class="composer-wrap">
             <form id="composer">
-              <label for="message" class="sr-only">Message Monty</label>
-              <textarea id="message" rows="2" maxlength="20000" placeholder="What would you like Monty to do?" required aria-describedby="composer-hint"></textarea>
-              <button type="submit" id="send">Send <span aria-hidden="true">↑</span></button>
-              <button type="button" id="stop" class="bad" hidden>Stop</button>
+              <ul id="attachments" aria-label="Files to send" hidden></ul>
+              <div class="composer-row">
+                <button type="button" id="attach" class="icon" aria-label="Attach files" title="Attach files (or drop or paste them)"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m20 11-8.5 8.5a5 5 0 0 1-7-7L13 4a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4L14.5 7"/></svg></button>
+                <input id="file-input" type="file" multiple hidden>
+                <label for="message" class="sr-only">Message Monty</label>
+                <textarea id="message" rows="2" maxlength="20000" placeholder="What would you like Monty to do?" aria-describedby="composer-hint"></textarea>
+                <button type="submit" id="send">Send <span aria-hidden="true">↑</span></button>
+                <button type="button" id="stop" class="bad" hidden>Stop</button>
+              </div>
             </form>
-            <p id="composer-hint">You can watch Monty's browser and step in when needed.</p>
+            <p id="composer-hint">Drop, paste or attach files: Monty sees images, PDFs and text, and works on the rest with code.</p>
           </div>
+          <div id="drop-zone" aria-hidden="true" hidden><div><svg viewBox="0 0 24 24"><path d="M12 15V3m-5 5 5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><strong>Drop files to attach</strong><span>Images, PDFs, documents, spreadsheets: up to 20 MB each</span></div></div>
         </main>
         <aside id="browser" aria-label="Monty's browser" hidden>
           <div class="panel-bar">
@@ -96,16 +101,6 @@
       <dialog id="takeover" aria-label="Monty's browser, yours to drive">
         <iframe id="live" title="Monty's browser, yours to drive"></iframe>
       </dialog>
-      <section id="files" class="page" aria-labelledby="files-title" hidden>
-        <div class="page-content">
-          <button class="secondary back">Back to chat</button>
-          <div class="page-heading"><span class="page-symbol" aria-hidden="true">↧</span><h2 id="files-title" tabindex="-1">Files</h2></div>
-          <p class="muted">Downloads from Monty's browser and files Monty made for you. Download up to 20 MB per file.</p>
-          <p id="files-status" role="status"></p>
-          <ul id="file-list" aria-label="Workspace files"></ul>
-          <button id="refresh-files" class="secondary">Refresh</button>
-        </div>
-      </section>
       <section id="signins" class="page" aria-labelledby="signins-title" hidden>
         <div class="page-content">
           <button class="secondary back">Back to chat</button>

@@ -108,12 +108,66 @@ public struct ChatMessage: Codable, Equatable, Sendable {
         }
     }
     public let role: Role
+    /// May be empty for a message of files only.
     public let text: String
+    /// The files the user attached, or (on a reply) the ones Monty shared; older servers send none.
+    public let files: [Attachment]
 
-    public init(role: Role, text: String) {
+    enum CodingKeys: String, CodingKey {
+        case role, text, files
+    }
+
+    public init(role: Role, text: String, files: [Attachment] = []) {
         self.role = role
         self.text = text
+        self.files = files
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        role = try container.decode(Role.self, forKey: .role)
+        text = try container.decode(String.self, forKey: .text)
+        files = try container.decodeIfPresent([Attachment].self, forKey: .files) ?? []
+    }
+}
+
+/// A file in a chat: one the user attached (the upload's answer), or one on a message.
+public struct Attachment: Codable, Equatable, Hashable, Identifiable, Sendable {
+    /// How Monty reads it: it sees images and PDFs, reads text, and opens anything else with its code tools.
+    public enum Kind: String, Codable, Sendable {
+        case image, pdf, text, file
+
+        /// A kind this app doesn't know yet is just a file.
+        public init(from decoder: Decoder) throws {
+            self = Kind(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .file
+        }
+    }
+
+    public let id: String
+    public let name: String
+    public let mediaType: String
+    public let size: Int
+    public let kind: Kind?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, size, kind
+        case mediaType = "media_type"
+    }
+
+    public init(id: String, name: String, mediaType: String, size: Int, kind: Kind? = nil) {
+        self.id = id
+        self.name = name
+        self.mediaType = mediaType
+        self.size = size
+        self.kind = kind
+    }
+
+    /// The images the server serves as they are, which can be shown as a picture: by its type, and by its bytes when
+    /// the server says (a `.png` that isn't one is a `file`).
+    public var isImage: Bool { (kind ?? .image) == .image && Self.pictures.contains(mediaType.lowercased()) }
+    public var isPDF: Bool { mediaType.lowercased() == "application/pdf" }
+
+    static let pictures: Set<String> = ["image/png", "image/jpeg", "image/gif", "image/webp"]
 }
 
 public enum AskKind: String, Codable, Sendable {
@@ -458,32 +512,6 @@ public struct Memory: Codable, Equatable, Identifiable, Sendable {
 public struct SavedSite: Codable, Equatable, Identifiable, Sendable {
     public let site: String
     public var id: String { site }
-}
-
-public struct WorkspaceFile: Codable, Equatable, Identifiable, Sendable {
-    /// Relative to the user's workspace: "downloads/invoice-2024-05.pdf".
-    public let path: String
-    public let size: Int
-    public var id: String { path }
-    public var name: String { (path as NSString).lastPathComponent }
-    public var folder: String { (path as NSString).deletingLastPathComponent }
-    /// The folder as the user knows it: inside their workspace, not the sandbox's `/work`.
-    public var shownFolder: String {
-        var folder = folder
-        for prefix in ["/work/", "/work"] where folder.hasPrefix(prefix) { folder.removeFirst(prefix.count) }
-        return folder.hasPrefix("/") ? String(folder.dropFirst()) : folder
-    }
-}
-
-public struct FileList: Codable, Equatable, Sendable {
-    public let files: [WorkspaceFile]
-    public let truncated: Bool
-    public let maxDownloadBytes: Int
-
-    enum CodingKeys: String, CodingKey {
-        case files, truncated
-        case maxDownloadBytes = "max_download_bytes"
-    }
 }
 
 extension String {

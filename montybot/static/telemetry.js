@@ -29,7 +29,7 @@ const URL_KEYS = ['http.url', 'url.full', 'http.referrer', 'logfire.page.url.ful
 const PATH_KEYS = ['http.target', 'url.path', 'logfire.page.url.path'];
 const DROPPED_KEYS = ['url.query', 'url.fragment'];
 const PAGES = {
-  '': '/new', '#': '/new', '#/new': '/new', '#/files': '/files', '#/sign-ins': '/sign-ins', '#/integrations': '/integrations',
+  '': '/new', '#': '/new', '#/new': '/new', '#/sign-ins': '/sign-ins', '#/integrations': '/integrations',
   '#/schedules': '/schedules',
 };
 const ERROR_LEVEL = 17;  // Logfire's `error`

@@ -94,7 +94,7 @@ h1, h2 { letter-spacing: -.045em; font-weight: 600; line-height: 1.15; }
 #signout { color: #d8bdd7; margin-top: 8px; }
 .sidebar-note { margin: 20px 12px 0; font-size: .75rem; color: #d8bdd7; }
 #layout { flex: 1; display: flex; min-height: 0; }
-#chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#chat { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
 #messages { flex: 1; overflow-y: auto; padding: 32px max(24px, calc((100% - 780px) / 2)); display: flex; flex-direction: column; gap: 24px; overscroll-behavior: contain; }
 .msg { max-width: 88%; padding: 14px 18px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .96rem; line-height: 1.65; flex-shrink: 0; }
 .msg.event { align-self: center; max-width: 100%; padding: 4px 12px; border-radius: 999px; background: var(--lavender); color: var(--muted); font-size: .8rem; }
@@ -134,7 +134,11 @@ h1, h2 { letter-spacing: -.045em; font-weight: 600; line-height: 1.15; }
 .ask .row { display: flex; gap: 10px; flex-wrap: wrap; }
 .ask textarea { flex: 1 1 100%; }
 .composer-wrap { padding: 12px 24px max(16px, env(safe-area-inset-bottom)); width: 100%; max-width: 828px; margin: 0 auto; }
-#composer { display: flex; align-items: flex-end; gap: 12px; padding: 12px; border: 1px solid #cdbbd3; border-radius: 14px; background: var(--panel); box-shadow: 0 4px 16px #3e042b06; }
+#composer { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid #cdbbd3; border-radius: 14px; background: var(--panel); box-shadow: 0 4px 16px #3e042b06; }
+.composer-row { display: flex; align-items: flex-end; gap: 12px; }
+#attach { flex-shrink: 0; color: var(--muted); padding: .4em; }
+#attach:hover { color: var(--accent); }
+#attach .nav-icon { width: 22px; height: 22px; margin: 0; }
 #composer:focus-within { border-color: var(--accent); }
 #composer textarea { border: 0; border-radius: 0; padding: 8px; resize: none; max-height: 160px; }
 #composer textarea:focus-visible { outline-offset: 0; border-radius: 4px; }
@@ -143,6 +147,33 @@ h1, h2 { letter-spacing: -.045em; font-weight: 600; line-height: 1.15; }
 #notice { display: flex; align-items: center; gap: 12px; padding: 10px 16px 10px 24px; background: #fff0f4; color: var(--bad); border-bottom: 1px solid #edc5d1; font-size: .9rem; }
 #notice-text { flex: 1; }
 #composer-hint { text-align: center; font-size: .72rem; color: var(--muted); margin: 10px 0 0; }
+
+/* Files: chips in the composer while they upload, and in messages once sent. */
+#attachments { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.attachment { position: relative; display: flex; align-items: center; gap: 10px; max-width: 260px; padding: 6px 4px 6px 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); overflow: hidden; }
+.attachment img { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; flex-shrink: 0; }
+.attachment.failed { border-color: #edc5d1; background: #fff0f4; }
+.attachment.failed small { color: var(--bad); }
+.attachment.uploading img, .attachment.uploading .file-badge { opacity: .55; }
+.attachment button.icon { min-height: 32px; padding: 0 .5em; font-size: .85rem; color: var(--muted); }
+.attachment .progress { position: absolute; left: 0; bottom: 0; height: 3px; width: var(--done); background: var(--accent); transition: width .2s; }
+.file-badge { display: inline-flex; align-items: flex-end; justify-content: center; width: 32px; height: 40px; padding-bottom: 5px; flex-shrink: 0; border-radius: 4px 12px 4px 4px; background: var(--purple); color: #fff; font-size: .6rem; font-weight: 700; letter-spacing: .02em; }
+.file-label { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.file-label strong { font-size: .82rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-label small { font-size: .72rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg-files { display: flex; flex-wrap: wrap; gap: 8px; white-space: normal; }
+.msg-text + .msg-files, .msg.assistant .msg-files { margin-top: 10px; }
+.msg.user.files-only { background: none; padding: 0; }
+.msg.user .msg-files { justify-content: flex-end; }
+.file-image { display: block; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: var(--panel); }
+.file-image img { display: block; min-width: 72px; min-height: 72px; max-width: min(320px, 100%); max-height: 260px; object-fit: contain; }
+.file-card { display: flex; align-items: center; gap: 10px; max-width: 280px; padding: 8px 14px 8px 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); text-decoration: none; }
+.file-card:hover { border-color: var(--accent); }
+#drop-zone { position: absolute; inset: 12px; z-index: 6; display: flex; align-items: center; justify-content: center; border: 2px dashed var(--accent); border-radius: 16px; background: #faf8fcec; pointer-events: none; }
+#drop-zone > div { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; color: var(--text); }
+#drop-zone svg { width: 44px; height: 44px; fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+#drop-zone strong { font-size: 1.2rem; }
+#drop-zone span { color: var(--muted); font-size: .85rem; }
 
 #browser { width: 50%; min-width: 0; display: flex; flex-direction: column; background: #211524; border-left: 1px solid var(--line); }
 .panel-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; background: var(--lavender); border-bottom: 1px solid var(--line); color: var(--text); font-size: .85rem; }
@@ -208,7 +239,10 @@ h1, h2 { letter-spacing: -.045em; font-weight: 600; line-height: 1.15; }
   .suggestion { padding: 12px 0; gap: 12px; }
   .msg { max-width: 94%; }
   .composer-wrap { padding: 10px 14px max(12px, env(safe-area-inset-bottom)); }
-  #composer { padding: 8px; gap: 4px; }
+  #composer { padding: 8px; }
+  .composer-row { gap: 4px; }
+  #attachments { flex-wrap: nowrap; overflow-x: auto; }  /* one row that scrolls, so the chat keeps the screen */
+  .attachment { flex-shrink: 0; max-width: 220px; }
   #composer textarea { font-size: 16px; }
   #send { padding: .7em .8em; }
   .ask { margin: 10px 14px; padding: 16px; }
@@ -263,7 +297,3 @@ body.returned { overflow: auto; display: flex; align-items: center; justify-cont
   .header-fields { grid-template-columns: 1fr; gap: 0; }
   .server-panel { padding-left: 0; }
 }
-
-/* Workspace paths may be long, especially on a phone. */
-#file-list span { min-width: 0; overflow-wrap: anywhere; }
-#file-list button { flex-shrink: 0; }

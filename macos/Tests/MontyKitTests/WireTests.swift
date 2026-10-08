@@ -248,10 +248,6 @@ import Testing
         let apps = try JSONDecoder().decode([CatalogApp].self, from: Data(#"[{"slug": "gmail", "name": "Gmail", "logo": "", "description": "Email from Google", "categories": ["email"]}]"#.utf8))
         #expect(apps[0].matches("") && apps[0].matches("GMAIL") && apps[0].matches("google") && apps[0].matches("email"))
         #expect(!apps[0].matches("linear"))
-        // An older server's entry: an app, its key its slug, not featured.
-        #expect(apps[0].key == "gmail" && apps[0].id == "gmail" && apps[0].isApp && !apps[0].featured)
-        #expect(apps[0].kind == nil && apps[0].kindLabel == nil && apps[0].url == nil && apps[0].host == nil)
-        #expect(apps[0].matches(found.connections[0]) == false)
         let added = try JSONDecoder().decode(AddedServer.self, from: Data(#"{"connection": {"id": "s2", "key": "mcp:notes", "provider": "mcp", "name": "Notes", "detail": "notes.example.com", "logo": "", "state": "needs_sign_in"}, "sign_in_url": "https://auth.example.com/authorize?x=1"}"#.utf8))
         #expect(added.signInUrl == "https://auth.example.com/authorize?x=1" && added.connection.key == "mcp:notes")
         // Answering a connect ask sends only what the server reads for it.
@@ -259,33 +255,74 @@ import Testing
         #expect(body == ["connected": false])
     }
 
-    @Test func featuredIntegrationsAndKnownMcpServers() throws {
+    @Test func anUploadSaysWhatItIs() throws {
+        let json = #"{"id": "a1", "name": "photo.png", "media_type": "image/png", "size": 12345, "kind": "image"}"#
+        let file = try JSONDecoder().decode(Attachment.self, from: Data(json.utf8))
+        #expect(file == Attachment(id: "a1", name: "photo.png", mediaType: "image/png", size: 12345, kind: .image))
+        #expect(file.isImage && !file.isPDF)
+        let later = #"{"id": "a2", "name": "x.bin", "media_type": "application/x-new", "size": 1, "kind": "something-new"}"#
+        #expect(try JSONDecoder().decode(Attachment.self, from: Data(later.utf8)).kind == .file)  // not an error
+        // Named and typed a PNG, but the server found its bytes are not a picture: a file to save, not to show.
+        #expect(!Attachment(id: "a3", name: "fake.png", mediaType: "image/png", size: 4, kind: .file).isImage)
+        #expect(Attachment(id: "a4", name: "old.png", mediaType: "image/png", size: 4).isImage)  // a server that doesn't say
+    }
+
+    @Test func messagesCarryTheirFiles() throws {
         let json = #"""
-        [{"key": "posthog", "slug": "posthog", "name": "PostHog", "logo": "https://posthog.com/logo.png", "description": "Product analytics",
-          "categories": ["analytics"], "kind": "analytics", "kind_label": "Analytics", "featured": true, "provider": "mcp",
-          "url": "https://mcp.posthog.com/mcp", "host": "mcp.posthog.com"},
-         {"key": "linear", "slug": "linear", "name": "Linear", "logo": "", "description": "Issue tracking", "categories": [],
-          "kind": "issues", "kind_label": "Issues & projects", "featured": true, "provider": "composio", "url": null, "host": null}]
+        {"id": "t", "title": "Receipt", "messages": [
+            {"role": "user", "text": "", "files": [{"id": "a1", "name": "receipt.pdf", "media_type": "application/pdf", "size": 2048}]},
+            {"role": "assistant", "text": "Here's the summary.", "files": [{"id": "a2", "name": "summary.csv", "media_type": "text/csv", "size": 99}]},
+            {"role": "event", "text": "You approved: Pay"}],
+         "run": null}
         """#
-        let apps = try JSONDecoder().decode([CatalogApp].self, from: Data(json.utf8))
-        let posthog = apps[0], linear = apps[1]
-        #expect(posthog.key == "posthog" && posthog.featured && !posthog.isApp && posthog.kindLabel == "Analytics")
-        #expect(posthog.url == "https://mcp.posthog.com/mcp" && posthog.host == "mcp.posthog.com")
-        #expect(linear.isApp && linear.kind == "issues" && linear.url == nil && linear.matches("projects"))
-        // A connection is an entry's when it is the same app, or a server at the preset's host.
-        func connection(_ key: String, _ provider: String, _ detail: String) throws -> Connection {
-            let json = #"{"id": "x", "key": "\#(key)", "provider": "\#(provider)", "name": "N", "detail": "\#(detail)", "logo": "", "state": "connected"}"#
-            return try JSONDecoder().decode(Connection.self, from: Data(json.utf8))
+        let messages = try JSONDecoder().decode(ThreadDetail.self, from: Data(json.utf8)).messages
+        #expect(messages[0].text.isEmpty)  // files alone
+        #expect(messages[0].files == [Attachment(id: "a1", name: "receipt.pdf", mediaType: "application/pdf", size: 2048)])
+        #expect(messages[0].files.first?.isPDF == true && messages[0].files.first?.kind == nil)
+        #expect(messages[1].files.map(\.name) == ["summary.csv"])
+        #expect(messages[2].files.isEmpty)  // no key: no files, as from older servers
+        #expect(messages[2] == ChatMessage(role: .event, text: "You approved: Pay"))
+    }
+
+    @Test func anUploadIsTheFileItself() throws {
+        let client = APIClient(baseURL: URL(string: "https://monty.test")!)
+        let bytes = Data([0x89, 0x50, 0x4E, 0x47, 0, 1, 2])
+        let request = client.uploadRequest(data: bytes, name: "Façade plan #2.png", mediaType: "image/png")
+        #expect(request.httpMethod == "POST" && request.url?.path == "/api/attachments")
+        #expect(request.httpBody == bytes)  // not JSON, not multipart
+        #expect(request.value(forHTTPHeaderField: "Content-Type") == "image/png")
+        #expect(request.value(forHTTPHeaderField: "X-Filename") == "Fa%C3%A7ade%20plan%20%232.png")
+        let unknown = client.uploadRequest(data: Data(), name: "notes", mediaType: "")
+        #expect(unknown.value(forHTTPHeaderField: "Content-Type") == "application/octet-stream")
+    }
+
+    @Test func messagesNameTheirFilesByIdOnlyWhenThereAreSome() throws {
+        func body(_ attachments: [String]) throws -> [String: AnyHashable] {
+            let data = try JSONEncoder().encode(APIClient.MessageBody("", attachments, nil))
+            return try #require(try JSONSerialization.jsonObject(with: data) as? [String: AnyHashable])
         }
-        #expect(posthog.matches(try connection("mcp:posthog", "mcp", "mcp.posthog.com")))
-        #expect(!posthog.matches(try connection("mcp:other", "mcp", "other.example.com")))
-        #expect(linear.matches(try connection("linear", "composio", "Issue tracking")))
-        #expect(!linear.matches(try connection("mcp:linear", "mcp", "mcp.linear.app")))
-        // A chat offering the known server carries its address, to add it in one click.
-        let ask = #"{"id": "a", "kind": "connect", "prompt": "Connect PostHog", "integration": {"provider": "mcp", "key": "posthog", "name": "PostHog", "logo": "", "url": "https://mcp.posthog.com/mcp"}}"#
-        let offer = try #require(try JSONDecoder().decode(Ask.self, from: Data(ask.utf8)).integration)
-        #expect(offer == Offer(provider: "mcp", key: "posthog", name: "PostHog", url: "https://mcp.posthog.com/mcp"))
-        #expect(offer.isPreset && !offer.isApp)
+        #expect(try body(["a1", "a2"])["attachments"] == AnyHashable(["a1", "a2"]))
+        #expect(try body(["a1"])["text"] == AnyHashable(""))
+        #expect(try body([])["attachments"] == nil)  // as before, for older servers
+    }
+
+    @Test func theFilesPageIsGoneAndOpensANewTaskInstead() {
+        #expect(Route(stored: "files") == nil)  // kept from before: the app falls back to a new task
+        for route in [Route.chat(nil), .chat("t"), .schedules, .signIns, .integrations, .memory] {
+            #expect(Route(stored: route.stored) == route)
+        }
+    }
+
+    @MainActor @Test func aFileTooLargeIsNotUploaded() {
+        let id = "monty-test-\(UUID().uuidString)"
+        let app = AppModel(serverURL: URL(string: "http://127.0.0.1:9")!, cookies: .sharedCookieStorage(forGroupContainerIdentifier: id),
+                           defaults: UserDefaults(suiteName: id)!)
+        app.open(.chat(nil))
+        let chat = app.chat!
+        chat.attach(Data(count: ChatModel.maxAttachmentBytes + 1), name: "huge.mov", mediaType: "video/quicktime")
+        #expect(chat.attachments.isEmpty)
+        #expect(chat.notice?.isError == true && chat.notice?.text.contains("too large") == true)
+        #expect(!chat.canSend)
     }
 
     @Test func durationsReadAtAGlance() {
@@ -315,6 +352,35 @@ import Testing
     @Test func serverErrorsReadAsSentences() {
         #expect(APIError.server(status: 409, detail: "that was answered already").localizedDescription == "That was answered already.")
         #expect(APIError.server(status: 500, detail: nil).localizedDescription.contains("server had a problem"))
+    }
+
+    @Test func featuredIntegrationsAndKnownMcpServers() throws {
+        let json = #"""
+        [{"key": "posthog", "slug": "posthog", "name": "PostHog", "logo": "https://posthog.com/logo.png", "description": "Product analytics",
+          "categories": ["analytics"], "kind": "analytics", "kind_label": "Analytics", "featured": true, "provider": "mcp",
+          "url": "https://mcp.posthog.com/mcp", "host": "mcp.posthog.com"},
+         {"key": "linear", "slug": "linear", "name": "Linear", "logo": "", "description": "Issue tracking", "categories": [],
+          "kind": "issues", "kind_label": "Issues & projects", "featured": true, "provider": "composio", "url": null, "host": null}]
+        """#
+        let apps = try JSONDecoder().decode([CatalogApp].self, from: Data(json.utf8))
+        let posthog = apps[0], linear = apps[1]
+        #expect(posthog.key == "posthog" && posthog.featured && !posthog.isApp && posthog.kindLabel == "Analytics")
+        #expect(posthog.url == "https://mcp.posthog.com/mcp" && posthog.host == "mcp.posthog.com")
+        #expect(linear.isApp && linear.kind == "issues" && linear.url == nil && linear.matches("projects"))
+        // A connection is an entry's when it is the same app, or a server at the preset's host.
+        func connection(_ key: String, _ provider: String, _ detail: String) throws -> Connection {
+            let json = #"{"id": "x", "key": "\#(key)", "provider": "\#(provider)", "name": "N", "detail": "\#(detail)", "logo": "", "state": "connected"}"#
+            return try JSONDecoder().decode(Connection.self, from: Data(json.utf8))
+        }
+        #expect(posthog.matches(try connection("mcp:posthog", "mcp", "mcp.posthog.com")))
+        #expect(!posthog.matches(try connection("mcp:other", "mcp", "other.example.com")))
+        #expect(linear.matches(try connection("linear", "composio", "Issue tracking")))
+        #expect(!linear.matches(try connection("mcp:linear", "mcp", "mcp.linear.app")))
+        // A chat offering the known server carries its address, to add it in one click.
+        let ask = #"{"id": "a", "kind": "connect", "prompt": "Connect PostHog", "integration": {"provider": "mcp", "key": "posthog", "name": "PostHog", "logo": "", "url": "https://mcp.posthog.com/mcp"}}"#
+        let offer = try #require(try JSONDecoder().decode(Ask.self, from: Data(ask.utf8)).integration)
+        #expect(offer == Offer(provider: "mcp", key: "posthog", name: "PostHog", url: "https://mcp.posthog.com/mcp"))
+        #expect(offer.isPreset && !offer.isApp)
     }
 }
 

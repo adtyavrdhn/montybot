@@ -12,6 +12,8 @@ from pydantic_ai.models.anthropic import AnthropicModelSettings
 from pydantic_ai.models.function import FunctionModel
 
 from montybot import approvals, streaming
+from montybot.attachments import INSTRUCTIONS as FILE_INSTRUCTIONS
+from montybot.attachments import file_tools
 from montybot.browsing import browser_tools
 from montybot.code import INSTRUCTIONS as CODE_INSTRUCTIONS
 from montybot.code import code_tools
@@ -104,6 +106,7 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
             INSTRUCTIONS,
             CODE_INSTRUCTIONS,
             CPYTHON_INSTRUCTIONS,
+            FILE_INSTRUCTIONS,
             SCHEDULE_INSTRUCTIONS,
             INTEGRATION_INSTRUCTIONS,
             user_time,
@@ -115,6 +118,7 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
         toolsets=[
             code_tools,
             cpython_tools,
+            file_tools,
             browser_tools,
             user_tools,
             memory_tools,

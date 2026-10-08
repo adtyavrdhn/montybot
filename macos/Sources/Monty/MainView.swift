@@ -75,7 +75,6 @@ struct MainView: View {
                 case .chat:
                     if let chat = app.chat { ChatView(chat: chat).id(ObjectIdentifier(chat)) }
                 case .schedules: SchedulesView()
-                case .files: FilesView()
                 case .signIns: SavedSitesView()
                 case .integrations: IntegrationsView()
                 case .memory: MemoryView()
@@ -184,7 +183,6 @@ struct Sidebar: View {
                 Divider().overlay(Palette.outline)
                 VStack(spacing: 1) {
                     LibraryLink(title: "Schedules", icon: "calendar.badge.clock", route: .schedules)
-                    LibraryLink(title: "Files", icon: "doc.on.doc", route: .files)
                     LibraryLink(title: "Saved sign-ins", icon: "key", route: .signIns)
                     LibraryLink(title: "Integrations", icon: "puzzlepiece.extension", route: .integrations)
                     LibraryLink(title: "Memory", icon: "brain", route: .memory)

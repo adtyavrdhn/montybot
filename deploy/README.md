@@ -55,6 +55,13 @@ compose restart app                # unfinished runs carry on after the restart 
 compose exec backup backup now     # a backup now, into /opt/montybot/backups
 ```
 
+**The VM's own overrides:** `/opt/montybot/compose.local.yaml`, when it exists, goes on top of `compose.yaml` at every
+deploy, so a change only this server should have (such as trying another browser engine) survives deploys. It lives
+outside `src/`, which each deploy replaces. By hand, give compose both files:
+`COMPOSE_FILE=compose.yaml:/opt/montybot/compose.local.yaml` before `compose` (and `--preserve-env=COMPOSE_FILE` for
+`sudo`), or `-f compose.yaml -f /opt/montybot/compose.local.yaml`. A plain `compose up` without it drops the overrides
+until the next deploy. Delete the file and deploy again to go back.
+
 **Restore a backup** into a new database, check it, then point the app at it or rename it:
 
 ```bash
