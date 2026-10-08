@@ -609,7 +609,9 @@ struct AskCard: View {
                 .buttonStyle(.primary)
                 .disabled(chat.takingOver)
                 .accessibilityHint("Opens \(app.montyName)'s browser. VoiceOver reads the page; activating an item clicks it, and typing goes into the page. Shift-Command-T closes it, Command-Return hands it back.")
-                Text("You sign in on the page yourself, and \(app.montyName) waits until you're done. Password managers can't fill it in: copy your password and paste it with ⌘V. Afterwards \(app.montyName) stays signed in to this site; you can remove it in Saved sign-ins.")
+                // A hand-off is any step Monty gives the user (a sign-in, a code, a CAPTCHA, a payment, or just because
+                // they asked); Monty's reason above says which, so this note must hold for all of them.
+                Text("\(app.montyName) waits until you hand it back. Password managers can't fill in this page: copy a password and paste it with ⌘V. If you sign in to a site, \(app.montyName) stays signed in there; you can remove it in Saved sign-ins.")
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.onSurfaceVariant)
             }
@@ -948,7 +950,7 @@ struct BrowserPanel: View {
                 .onTapGesture(count: 2) { chat.browserExpanded = true }
                 .help("Double-click to make it fill the window")
             if chat.ask?.kind == .handoff {
-                // Monty is stopped at a sign-in: what the user came to the browser for is to do it.
+                // Monty is stopped at a hand-off: what the user came to the browser for is to take it over.
                 Button { Task { await chat.takeOver() } } label: {
                     HStack(spacing: 6) {
                         if chat.takingOver { ProgressView().controlSize(.mini).tint(Palette.onLink) }
@@ -958,7 +960,7 @@ struct BrowserPanel: View {
                 }
                 .buttonStyle(.primary)
                 .disabled(chat.takingOver)
-                Text("\(app.montyName) is waiting for you to sign in on this page.")
+                Text("\(app.montyName) is waiting for you to take over the browser.")
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.onSurfaceVariant)
             } else if let activity = chat.activity {
