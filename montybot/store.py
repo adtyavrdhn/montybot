@@ -516,6 +516,16 @@ async def list_activity(connection: Connection, user_id: str, run_id: str) -> li
     return [row['text'] for row in await cursor.fetchall()]
 
 
+async def last_scheduled_runs(connection: Connection, user_id: str) -> dict[str, Run]:
+    """The latest run each of the user's schedules started, by its thread id."""
+    cursor = await connection.execute(
+        f'SELECT DISTINCT ON (thread_id) {RUN_COLUMNS} FROM montybot.runs '
+        "WHERE user_id = %s AND trigger = 'schedule' ORDER BY thread_id, created_at DESC",
+        (user_id,),
+    )
+    return {str(row['thread_id']): run_from(row) for row in await cursor.fetchall()}
+
+
 async def list_thread_activity(connection: Connection, user_id: str, thread_id: str) -> dict[str, list[str]]:
     """Every run's steps in a thread, by run id, oldest first."""
     cursor = await connection.execute(

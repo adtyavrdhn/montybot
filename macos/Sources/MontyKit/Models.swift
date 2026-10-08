@@ -248,11 +248,34 @@ public struct Schedule: Codable, Equatable, Identifiable, Sendable {
     public let paused: Bool
     public let watch: Bool
     public let threadId: String
+    /// When it runs next (none while paused), when it last ran and how that went; older servers don't say.
+    let nextRunAt: String?
+    let lastRunAt: String?
+    public let lastStatus: RunStatus?
 
     enum CodingKeys: String, CodingKey {
         case id, name, when, paused, watch
         case threadId = "thread_id"
+        case nextRunAt = "next_run_at"
+        case lastRunAt = "last_run_at"
+        case lastStatus = "last_status"
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        when = try container.decode(String.self, forKey: .when)
+        paused = try container.decode(Bool.self, forKey: .paused)
+        watch = try container.decode(Bool.self, forKey: .watch)
+        threadId = try container.decode(String.self, forKey: .threadId)
+        nextRunAt = try container.decodeIfPresent(String.self, forKey: .nextRunAt)
+        lastRunAt = try container.decodeIfPresent(String.self, forKey: .lastRunAt)
+        lastStatus = try? container.decodeIfPresent(RunStatus.self, forKey: .lastStatus)  // a status not known yet: unsaid
+    }
+
+    public var nextRun: Date? { nextRunAt.flatMap(ThreadSummary.date) }
+    public var lastRun: Date? { lastRunAt.flatMap(ThreadSummary.date) }
 
     /// The schedule in words, without the cron line and time zone the server appends: "Mondays at 09:00".
     public var plainWhen: String {
@@ -311,5 +334,27 @@ extension String {
         let shortened = replacingOccurrences(of: #"https?://(www\.)?([^/\s?#]+)[^\s]*"#, with: "$2", options: .regularExpression)
         let trimmed = shortened.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Untitled" : trimmed
+    }
+}
+
+extension Schedule {
+    /// "Next: Mon 12 Oct at 09:00 · Last ran 2 hours ago", in this Mac's time; the last run said plainly if it failed.
+    public func times(now: Date = .now) -> (text: String, failed: Bool)? {
+        var parts: [String] = []
+        if let next = nextRun {
+            parts.append("Next: " + next.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()))
+        }
+        var failed = false
+        if let last = lastRun {
+            let ago = RelativeDateTimeFormatter().localizedString(for: last, relativeTo: now)
+            switch lastStatus {
+            case .failed: parts.append("Last run couldn't finish (\(ago))"); failed = true
+            case .stopped: parts.append("Last run stopped (\(ago))")
+            case .waiting: parts.append("Waiting for you since \(ago)")
+            case .queued, .running: parts.append("Running now")
+            default: parts.append("Last ran \(ago)")
+            }
+        }
+        return parts.isEmpty ? nil : (parts.joined(separator: " · "), failed)
     }
 }

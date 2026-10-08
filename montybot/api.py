@@ -16,6 +16,7 @@ import secrets
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime
 from typing import Annotated, Any, TypeVar
 from urllib.parse import quote, urlsplit
 
@@ -670,8 +671,12 @@ async def forget_sign_in(request: Request, user: User) -> Response:
 
 @auth.signed_in
 async def list_schedules(request: Request, user: User) -> Response:
-    found = await schedules.list_for(resources_of(request).pool, user.id)
-    return JSONResponse([schedule_json(s, paused) for s, paused in found])
+    pool = resources_of(request).pool
+    found = await schedules.list_for(pool, user.id)
+    async with pool.connection() as connection:
+        last = await store.last_scheduled_runs(connection, user.id)
+    now = datetime.now(UTC)
+    return JSONResponse([schedule_json(s, paused, last.get(s.thread_id), now) for s, paused in found])
 
 
 @auth.signed_in
@@ -686,8 +691,13 @@ async def resume_schedule(request: Request, user: User) -> Response:
 
 async def set_paused(request: Request, user: User, paused: bool) -> Response:
     schedule_id = str(request.path_params['schedule_id'])
-    schedule = await schedules.set_paused(resources_of(request).pool, user.id, schedule_id, paused)
-    return NOT_FOUND if schedule is None else JSONResponse(schedule_json(schedule, paused))
+    pool = resources_of(request).pool
+    schedule = await schedules.set_paused(pool, user.id, schedule_id, paused)
+    if schedule is None:
+        return NOT_FOUND
+    async with pool.connection() as connection:
+        last = await store.last_scheduled_runs(connection, user.id)
+    return JSONResponse(schedule_json(schedule, paused, last.get(schedule.thread_id), datetime.now(UTC)))
 
 
 @auth.signed_in
@@ -776,7 +786,8 @@ def user_json(user: User) -> dict[str, str]:
     return {'id': user.id, 'email': user.email, 'name': user.name}
 
 
-def schedule_json(schedule: Schedule, paused: bool) -> dict[str, Any]:
+def schedule_json(schedule: Schedule, paused: bool, last: Run | None, now: datetime) -> dict[str, Any]:
+    """With when it runs next (none while paused) and how its latest run went."""
     return {
         'id': schedule.id,
         'name': schedule.name,
@@ -784,6 +795,9 @@ def schedule_json(schedule: Schedule, paused: bool) -> dict[str, Any]:
         'paused': paused,
         'watch': schedule.watch,
         'thread_id': schedule.thread_id,
+        'next_run_at': None if paused else schedules.next_run(schedule, now).isoformat(),
+        'last_run_at': last.started_at.isoformat() if last and last.started_at else None,
+        'last_status': last.status if last else None,
     }
 
 

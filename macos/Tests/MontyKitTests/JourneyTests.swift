@@ -239,10 +239,13 @@ struct JourneyTests {
         await app.loadThreads()
         #expect(app.threads.contains { $0.id == schedule.threadId })  // a schedule reports in a chat of its own
 
+        let next = try #require(schedule.nextRun, "when it runs next")
+        #expect(next > .now && next < .now.addingTimeInterval(31 * 60))  // every 30 minutes
+
         await app.setPaused(schedule, true)
-        #expect(app.schedules?.first?.paused == true)
+        #expect(app.schedules?.first?.paused == true && app.schedules?.first?.nextRun == nil)  // paused: never next
         await app.setPaused(schedule, false)
-        #expect(app.schedules?.first?.paused == false)
+        #expect(app.schedules?.first?.paused == false && app.schedules?.first?.nextRun != nil)
         await app.delete(schedule)
         #expect(app.schedules == [])
         await app.loadSchedules()

@@ -182,6 +182,16 @@ import Testing
         #expect(threads[1].updatedAt == nil && threads[1].outcome == nil)
     }
 
+    @Test func aScheduleSaysWhenItRunsAndHowItWent() throws {
+        let json = #"{"id": "s", "name": "Slots", "when": "every 30 minutes (*/30 * * * *, UTC)", "paused": false, "watch": true, "thread_id": "t", "next_run_at": "2026-10-12T09:00:00+01:00", "last_run_at": "2026-10-12T07:00:00+00:00", "last_status": "failed"}"#
+        let schedule = try JSONDecoder().decode(Schedule.self, from: Data(json.utf8))
+        let last = try #require(schedule.lastRun)
+        let times = try #require(schedule.times(now: last.addingTimeInterval(7200)))
+        #expect(times.failed && times.text.hasPrefix("Next: ") && times.text.contains("couldn't finish"))
+        let old = #"{"id": "s", "name": "Slots", "when": "x", "paused": false, "watch": true, "thread_id": "t"}"#
+        #expect(try JSONDecoder().decode(Schedule.self, from: Data(old.utf8)).nextRun == nil)  // an older server
+    }
+
     @Test func whatAWaitingChatWaitsFor() throws {
         let json = #"[{"id": "a", "title": "Eggs", "status": "waiting", "waiting_for": "approval"}, {"id": "b", "title": "Hi", "status": "waiting", "waiting_for": "something-new"}]"#
         let threads = try JSONDecoder().decode([ThreadSummary].self, from: Data(json.utf8))
