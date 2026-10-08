@@ -5,7 +5,7 @@ Text messages are JSON objects with a `kind`. The user's input uses the contract
 JSON header of that length (`seq`, `width`, `height`, `mime`), then the image.
 
     page -> server   mouse_down {x, y, button}   mouse_move {x, y}   mouse_up {x, y, button}   click {x, y}
-                     type {text}   press {key, modifiers}   scroll {delta_x, delta_y, x?, y?}
+                     type {text}   press {key, modifiers}   scroll {delta_x, delta_y, x?, y?}   navigate {url}
                      switch_tab {tab_id}   viewport {width, height}   give_back {}   outline {}
     server -> page   hello {handoff_id, reason}   tabs {tabs: [{tab_id, url, title, active}]}   error {message}
                      ended {given_back}   outline {title, available, items: [{role, name, x, y, width, height, ...}]}
@@ -30,6 +30,7 @@ from montybot.browser.contract import (
     MouseDown,
     MouseMove,
     MouseUp,
+    Navigate,
     Point,
     Press,
     Scroll,
@@ -147,6 +148,8 @@ def decode_client(text: str) -> ClientMessage:
             return GiveBackRequest()
         case 'outline':
             return OutlineRequest()
+        case 'navigate':
+            return Navigate(url=_str(data, 'url'))
         case _:
             raise WireError('unknown kind')
 
@@ -174,6 +177,8 @@ def encode_client(message: ClientMessage) -> str:
                 data |= {'x': at.x, 'y': at.y}
         case SwitchTab(tab_id=tab_id):
             data = {'kind': message.kind, 'tab_id': tab_id}
+        case Navigate(url=url):
+            data = {'kind': message.kind, 'url': url}
         case ViewportSize(width=width, height=height):
             data = {'kind': message.kind, 'width': width, 'height': height}
         case GiveBackRequest() | OutlineRequest():

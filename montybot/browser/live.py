@@ -15,11 +15,22 @@ from dataclasses import dataclass
 from importlib.resources import files
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
-from montybot.browser.contract import BrowserBackend, Click, MouseDown, MouseMove, MouseUp, Press, Scroll, Type
+from montybot.browser.contract import (
+    BrowserBackend,
+    Click,
+    MouseDown,
+    MouseMove,
+    MouseUp,
+    Navigate,
+    Press,
+    Scroll,
+    Type,
+)
 
-LiveInput = Click | Type | Press | Scroll | MouseDown | MouseMove | MouseUp
-"""What the user can do in the live view: the contract's actions without `Navigate`. A `Click` there always targets a
-`Point`, and a `Type` never has a target: the user types where the page's caret is."""
+LiveInput = Click | Type | Press | Scroll | MouseDown | MouseMove | MouseUp | Navigate
+"""What the user can do in the live view: the contract's actions. A `Click` there always targets a `Point`, a `Type`
+never has a target (the user types where the page's caret is), and a `Navigate` is the address the user typed into
+the address bar, loaded in the active tab. The app checks that address before a source gets it."""
 
 
 @dataclass(frozen=True, kw_only=True)

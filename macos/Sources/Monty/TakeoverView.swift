@@ -6,15 +6,24 @@ import SwiftUI
 struct TakeoverView: View {
     let chat: ChatModel
     let live: LiveSession
+    /// Bumped to give the page the keyboard back, after the address bar.
+    @State private var pageFocus = 0
 
     var body: some View {
         VStack(spacing: 0) {
             bar
             Divider().overlay(Palette.outline)
+            if !live.tabs.isEmpty {
+                TabStrip(live: live)
+                Divider().overlay(Palette.outline)
+            }
             ZStack {
                 Palette.surface
                 if let frame = live.frame {
-                    LiveCanvas(frame: frame, live: live, host: live.activeTab.flatMap { URLComponents(string: $0.url)?.host } ?? "")
+                    LiveCanvas(
+                        frame: frame, live: live, host: live.activeTab.flatMap { URLComponents(string: $0.url)?.host } ?? "",
+                        focus: pageFocus
+                    )
                         .aspectRatio(frame.width / frame.height, contentMode: .fit)
                         .clipShape(RoundedRectangle(cornerRadius: Metrics.radiusMedium))
                         .overlay(RoundedRectangle(cornerRadius: Metrics.radiusMedium).strokeBorder(Palette.outline))
@@ -49,22 +58,8 @@ struct TakeoverView: View {
             }
             .frame(minWidth: 140, maxWidth: 360, alignment: .leading)
             Spacer(minLength: 12)
-            if live.tabs.count > 1 {
-                Menu {
-                    ForEach(live.tabs) { tab in
-                        Button { live.switchTab(tab) } label: {
-                            if tab.active { Label(tab.title.isEmpty ? tab.url : tab.title, systemImage: "checkmark") } else { Text(tab.title.isEmpty ? tab.url : tab.title) }
-                        }
-                    }
-                } label: {
-                    Label("\(live.tabs.count) tabs", systemImage: "square.on.square")
-                }
-                .menuStyle(.button)
-                .buttonStyle(.monty(.outline, small: true))
-                .fixedSize()
-            }
-            if let tab = live.activeTab {
-                AddressPill(url: tab.url)
+            if live.activeTab != nil {
+                AddressField(live: live) { pageFocus += 1 }
             }
             Spacer(minLength: 12)
             Button("Not now") { chat.leaveLiveView() }
@@ -127,42 +122,18 @@ struct TakeoverView: View {
     }
 }
 
-/// The page's address, as a browser shows it: the host stands out, the rest is quiet.
-struct AddressPill: View {
-    let url: String
-    var body: some View {
-        let parts = URLComponents(string: url)
-        let secure = parts?.scheme == "https"
-        HStack(spacing: 5) {
-            Image(systemName: secure ? "lock.fill" : "exclamationmark.triangle").font(.system(size: 10)).accessibilityHidden(true)
-            if !secure { Text("Not secure").font(.system(size: 11, weight: .medium)) }
-            Text(parts?.host ?? url).font(.mono(12, weight: .medium)).foregroundStyle(Palette.onSurface)
-            if let path = parts?.path, path.count > 1 {
-                Text(path).font(.mono(12)).lineLimit(1).truncationMode(.middle)
-            }
-            Spacer(minLength: 0)
-        }
-        .foregroundStyle(Palette.onSurfaceVariant)
-        .padding(.horizontal, 10)
-        .frame(minWidth: 160, idealWidth: 340, maxWidth: 420)
-        .frame(height: Metrics.controlSmall)
-        .background(RoundedRectangle(cornerRadius: Metrics.radiusMedium).fill(Palette.containerLow))
-        .overlay(RoundedRectangle(cornerRadius: Metrics.radiusMedium).strokeBorder(Palette.outlineVariant))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Address: \(url)\(secure ? "" : ", not secure")")
-        .help(url)
-    }
-}
-
 /// The remote page, drawn from the live view's frames, taking the mouse and keyboard.
 struct LiveCanvas: NSViewRepresentable {
     let frame: LiveFrame
     let live: LiveSession
     let host: String
+    /// A new value gives the page the keyboard.
+    var focus = 0
 
     func makeNSView(context: Context) -> CanvasView {
         let view = CanvasView()
         view.live = live
+        view.focus = focus
         DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
         return view
     }
@@ -170,6 +141,10 @@ struct LiveCanvas: NSViewRepresentable {
     func updateNSView(_ view: CanvasView, context: Context) {
         view.live = live
         view.host = host
+        if view.focus != focus {
+            view.focus = focus
+            DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
+        }
         view.show(frame)
         view.outlineChanged(live.outline)
     }
@@ -179,6 +154,7 @@ struct LiveCanvas: NSViewRepresentable {
     final class CanvasView: NSView, @preconcurrency NSTextInputClient {
         var live: LiveSession?
         var host = ""
+        var focus = 0
         private var marked = ""
         private var elements: [PageElement] = []
         private var shownOutline: PageOutline?

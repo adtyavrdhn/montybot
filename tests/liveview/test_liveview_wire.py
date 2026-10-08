@@ -4,7 +4,18 @@ import time
 
 import pytest
 
-from montybot.browser.contract import Click, MouseDown, MouseMove, MouseUp, Point, Press, Scroll, Selector, Type
+from montybot.browser.contract import (
+    Click,
+    MouseDown,
+    MouseMove,
+    MouseUp,
+    Navigate,
+    Point,
+    Press,
+    Scroll,
+    Selector,
+    Type,
+)
 from montybot.browser.live import Frame, Outline, OutlineItem, Tab, Tabs
 from montybot.liveview.activity import Activity
 from montybot.liveview.keys import key_for
@@ -44,6 +55,7 @@ AT = Point(x=10.5, y=20)
         Scroll(delta_y=120),
         Scroll(delta_x=-5, delta_y=0, at=AT),
         SwitchTab(tab_id='2'),
+        Navigate(url='https://shop.test/cart?x=1'),
         ViewportSize(width=390, height=700),
         GiveBackRequest(),
         OutlineRequest(),
@@ -58,7 +70,8 @@ def test_client_messages_round_trip(message: ClientMessage) -> None:
     [
         'not json',
         '[]',
-        '{"kind": "navigate", "url": "http://a.test/"}',
+        '{"kind": "navigate"}',
+        '{"kind": "navigate", "url": 1}',
         '{"kind": "mouse_down", "x": "1", "y": 2}',
         '{"kind": "mouse_down", "x": NaN, "y": 2}',
         '{"kind": "mouse_down", "x": true, "y": 2}',

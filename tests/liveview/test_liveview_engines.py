@@ -128,6 +128,18 @@ async def test_popups_are_followed_and_the_run_keeps_its_tab(engine: str) -> Non
             assert (await backend.snapshot()).url == f'{origin}/popup'  # the agent is back on its own tab
 
 
+async def test_the_address_bar_loads_in_the_active_tab(engine: str) -> None:
+    with serve_fixtures() as origin:
+        async with opened_source(engine, f'{origin}/popup') as (backend, source):
+            updates = source.updates()
+            await source.send(Navigate(url=f'{origin}/popup-target'))
+            tabs = await next_update(updates, Tabs)
+            while not (isinstance(tabs, Tabs) and [t.url for t in tabs.tabs] == [f'{origin}/popup-target']):
+                tabs = await next_update(updates, Tabs)
+            assert (await backend.snapshot()).url == f'{origin}/popup-target'
+            await updates.aclose()  # pyright: ignore[reportAttributeAccessIssue]
+
+
 async def settled_text(service: StubBrowserService) -> str:
     """The page's text once it stops changing. Headless Chrome resizes the window by a pixel just after its first
     page loads, and the size page shows each resize."""

@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from montybot.browser.contract import Click, MouseDown, MouseMove, MouseUp, Press, Scroll, Type
+from montybot.browser.contract import Click, MouseDown, MouseMove, MouseUp, Navigate, Press, Scroll, Type
 from montybot.browser.live import LiveInput, Tabs
 
 
@@ -33,8 +33,8 @@ class Activity:
                 self.characters += len(text)
             case Scroll():
                 self.scrolls += 1
-            case MouseMove() | MouseUp():
-                pass
+            case MouseMove() | MouseUp() | Navigate():
+                pass  # where the user went shows in the address they left it on
 
     def saw(self, tabs: Tabs) -> None:
         ids = {tab.tab_id for tab in tabs.tabs}

@@ -29,6 +29,7 @@ from montybot.browser.contract import (
     MouseDown,
     MouseMove,
     MouseUp,
+    Navigate,
     NotSupported,
     Point,
     Press,
@@ -301,6 +302,9 @@ class CdpFrameSource:
                 raise NotSupported('ref', engine=f'{ENGINE} live view')
             case Type():
                 raise NotSupported('selector', engine=f'{ENGINE} live view')
+            case Navigate(url=url):
+                # Waits only for the response: the screencast shows the rest loading, as a browser window would.
+                await self._active.goto(url, wait_until='commit')
 
     async def _mouse(self, cdp: CDPSession, kind: str, at: Point, button: MouseButton | str) -> None:
         self._pointer = at

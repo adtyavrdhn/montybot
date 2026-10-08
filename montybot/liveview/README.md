@@ -47,6 +47,9 @@ user's browser                     live view app (this package)              bro
 - **Popups and new tabs** become the active tab, as in a browser window; the page shows a tab picker when there is
   more than one. When a popup closes, and when the hand-off ends, the run's own tab is active again. Tabs the user left
   open stay open.
+- **The address bar** (`navigate {url}`) opens an address in the active tab. The app checks it first with
+  `refuse_url`: only http and https, and in montybot only public addresses, the same rule the agent's `goto` has. A
+  refused address gets an `error` and the connection stays.
 
 ## The WebSocket
 
@@ -55,7 +58,7 @@ JSON header (`seq`, `width`, `height` in CSS pixels, `mime`), then the image. Se
 
 ```
 page -> server   mouse_down {x, y, button}  mouse_move {x, y}  mouse_up {x, y, button}  click {x, y}
-                 type {text}  press {key, modifiers}  scroll {delta_x, delta_y, x?, y?}  switch_tab {tab_id}
+                 type {text}  press {key, modifiers}  scroll {delta_x, delta_y, x?, y?}  switch_tab {tab_id}  navigate {url}
                  viewport {width, height}  give_back
 server -> page   hello {handoff_id, reason}  tabs {tabs}  error {message}  ended {given_back}  + binary frames
 ```

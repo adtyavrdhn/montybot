@@ -17,6 +17,7 @@ given to the run. The run gets a `GiveBack` with a summary in words.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from importlib.resources import files
 from typing import Protocol
@@ -28,7 +29,7 @@ from starlette.responses import HTMLResponse, Response
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from montybot.browser.contract import BrowserError, NotSupported
+from montybot.browser.contract import BrowserError, Navigate, NotSupported
 from montybot.browser.live import Frame, FrameSource, Outline, OutlineSource, Viewport
 from montybot.browser.service import Handoff, HandoffEnded, HandoffId, HandoffNotActive, RunId, UnknownRun, UserId
 from montybot.liveview.activity import Activity
@@ -78,6 +79,16 @@ class LiveViewService(Protocol):
     async def end_handoff(self, *, run_id: RunId, user_id: UserId, handoff_id: HandoffId) -> HandoffEnded: ...
 
 
+RefuseUrl = Callable[[str], Awaitable[str | None]]
+"""Why the user may not open an address from the address bar, or None."""
+
+
+async def web_only(url: str) -> str | None:
+    """Only http and https addresses: the address bar is for web pages, never `file:` or `chrome:` ones."""
+    parts = urlsplit(url)
+    return None if parts.scheme in ('http', 'https') and parts.hostname else 'Only web addresses can be opened.'
+
+
 def live_view_app(
     *,
     service: LiveViewService,
@@ -85,10 +96,14 @@ def live_view_app(
     auth: Authenticator,
     allowed_origins: frozenset[str] = frozenset(),
     frame_ancestors: str = "'self'",
+    refuse_url: RefuseUrl = web_only,
 ) -> Starlette:
     """The app. `allowed_origins` lists page origins, such as `https://app.example`, that may open the WebSocket
-    besides the app's own host; `frame_ancestors` is the CSP list of sites that may embed the page."""
-    live = _LiveView(service=service, handoffs=handoffs, auth=auth, allowed_origins=allowed_origins)
+    besides the app's own host; `frame_ancestors` is the CSP list of sites that may embed the page. `refuse_url` checks
+    each address the user types into the address bar before the browser opens it."""
+    live = _LiveView(
+        service=service, handoffs=handoffs, auth=auth, allowed_origins=allowed_origins, refuse_url=refuse_url
+    )
     headers = {
         'Content-Security-Policy': (
             "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; "
@@ -130,12 +145,19 @@ class _Slot:
 
 class _LiveView:
     def __init__(
-        self, *, service: LiveViewService, handoffs: Handoffs, auth: Authenticator, allowed_origins: frozenset[str]
+        self,
+        *,
+        service: LiveViewService,
+        handoffs: Handoffs,
+        auth: Authenticator,
+        allowed_origins: frozenset[str],
+        refuse_url: RefuseUrl,
     ) -> None:
         self._service = service
         self._handoffs = handoffs
         self._auth = auth
         self._allowed_origins = allowed_origins
+        self._refuse_url = refuse_url
         self._slots: dict[HandoffId, _Slot] = {}
         self._activity: dict[HandoffId, Activity] = {}
 
@@ -178,6 +200,7 @@ class _LiveView:
                 slot=slot,
                 service=self._service,
                 handoffs=self._handoffs,
+                refuse_url=self._refuse_url,
             )
             try:
                 await connection.run()
@@ -223,8 +246,10 @@ class _Connection:
         slot: _Slot,
         service: LiveViewService,
         handoffs: Handoffs,
+        refuse_url: RefuseUrl,
     ) -> None:
         self._websocket = websocket
+        self._refuse_url = refuse_url
         self._source = source
         self._handoff = handoff
         self._activity = activity
@@ -305,6 +330,8 @@ class _Connection:
                         await self._send(
                             await source.outline() if isinstance(source, OutlineSource) else Outline(available=False)
                         )
+                    case Navigate(url=url) if (refused := await self._refuse_url(url)) is not None:
+                        await self._send(ErrorMessage(message=refused.removeprefix('Error: ')))
                     case _:
                         self._activity.record(decoded)
                         await self._source.send(decoded)

@@ -129,6 +129,27 @@ public final class LiveSession {
 
     public func switchTab(_ tab: LiveTab) { send(.switchTab(tab.id)) }
 
+    /// Opens what the user typed into the address bar in the active tab, as a browser's address bar does.
+    public func go(to typed: String) {
+        guard let url = Self.address(for: typed) else { return }
+        input(.navigate(url))
+    }
+
+    /// What a browser's address bar makes of `typed`: an address as it is, a bare host ("walmart.com",
+    /// "localhost:8000/x") over https, and anything else a web search. Nil for nothing at all.
+    public static func address(for typed: String) -> String? {
+        let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        let lower = text.lowercased()
+        if lower.hasPrefix("http://") || lower.hasPrefix("https://") { return text }
+        let host = text.prefix { $0 != "/" && $0 != "?" && $0 != "#" }
+        let looksLikeHost = !text.contains(" ") && (host.contains(".") || host.hasPrefix("localhost"))
+        if looksLikeHost, let url = URL(string: "https://\(text)"), url.host() != nil { return url.absoluteString }
+        var search = URLComponents(string: "https://www.google.com/search")!
+        search.queryItems = [URLQueryItem(name: "q", value: text)]
+        return search.url!.absoluteString
+    }
+
     // MARK: input
 
     /// Mouse moves and scrolls are coalesced to one message per display frame; everything else goes at once, after

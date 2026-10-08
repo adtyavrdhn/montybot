@@ -184,6 +184,18 @@ async def test_the_user_sees_and_drives_while_the_agent_is_refused() -> None:
         assert len(performed(setup.browser)) == len(actions)
 
 
+async def test_the_user_can_go_to_an_address_but_only_a_web_one() -> None:
+    async with live() as setup, setup.connect() as client:
+        await client.wait_until(lambda: client.hello is not None)
+        for refused in ('file:///etc/passwd', 'chrome://settings', 'javascript:alert(1)', 'https://'):
+            await client.send(Navigate(url=refused))
+        await client.wait_until(lambda: len(client.errors) == 4)
+        assert set(client.errors) == {'Only web addresses can be opened.'}
+        await client.send(Navigate(url='http://shop.test/cart'))
+        await eventually(lambda: setup.browser.actions[-1:] == [Navigate(url='http://shop.test/cart')])
+        assert await client.wait_for_url(lambda url: url == 'http://shop.test/cart') == 'http://shop.test/cart'
+
+
 async def test_an_input_the_engine_cannot_do_is_reported_and_the_connection_stays() -> None:
     async with live(not_supported={'scroll'}) as setup, setup.connect() as client:
         await client.wait_until(lambda: client.hello is not None)
