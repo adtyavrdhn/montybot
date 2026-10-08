@@ -66,7 +66,7 @@ def assert_fits_the_window(page: Page, selector: str) -> FloatRect:
 def test_chat(app: App, person: Page) -> None:
     sign_up(person, app)
     send(person, 'Say hello.')
-    expect(person.locator('.msg.assistant')).to_have_text('Hello! I am monty-bot.')
+    expect(person.locator('.msg.assistant')).to_have_text('Hello! I am Sammy.')
     expect(person.locator('#threads li')).to_have_count(1)
 
 
@@ -111,7 +111,7 @@ def test_take_over_on_a_phone(app: App, shop: Shop, request: pytest.FixtureReque
         send(phone, f'Order eggs from {shop.url}')
         phone.get_by_role('button', name='Take over the browser').click()
         live = phone.frame_locator('#live')
-        expect(live.locator('#reason')).to_contain_text('Monty needs you:')
+        expect(live.locator('#reason')).to_contain_text('Sammy needs you:')
         expect(live.locator('#url')).to_contain_text('/login')
         if request.config.getoption('--browser') == 'chromium':
             expect(live.locator('#view')).to_have_attribute('width', re.compile(r'^3\d\d$'))  # phone-sized frames
@@ -130,7 +130,7 @@ def test_works_on_a_phone(app: App) -> None:
         phone = browser.new_page(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True)
         sign_up(phone, app)
         send(phone, 'Say hello.')
-        expect(phone.locator('.msg.assistant')).to_have_text('Hello! I am monty-bot.')
+        expect(phone.locator('.msg.assistant')).to_have_text('Hello! I am Sammy.')
         phone.click('#menu-button')
         expect(phone.locator('#drawer')).to_have_class('drawer open')
         browser.close()
@@ -150,7 +150,7 @@ def test_repeated_enter_creates_one_chat_and_preserves_a_new_draft(app: App, per
     person.fill('#message', 'My next question')
     assert len(pending) == 1
     pending[0].continue_()
-    expect(person.locator('.msg.assistant')).to_have_text('Hello! I am monty-bot.')
+    expect(person.locator('.msg.assistant')).to_have_text('Hello! I am Sammy.')
     expect(person.locator('#message')).to_have_value('My next question')
     expect(person.locator('#threads li')).to_have_count(1)
 
@@ -168,7 +168,7 @@ def test_attach_files_and_see_them_in_the_chat(app: App, person: Page) -> None:
         ],
     )
     expect(person.locator('#attachments li')).to_have_count(2)
-    expect(person.locator('#attachments li').last).to_contain_text('Monty reads it')  # uploaded
+    expect(person.locator('#attachments li').last).to_contain_text('Sammy reads it')  # uploaded
     send(person, 'Describe what I attached')
     reply = person.locator('.msg.assistant')
     expect(reply).to_contain_text('image/png 64x48')

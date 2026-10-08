@@ -1,5 +1,5 @@
 """Frame rate and input latency of the live view, end to end on localhost: engine, frame source, app, WebSocket,
-client. Opt in with `MONTYBOT_MEASURE=1 uv run pytest tests/liveview/test_liveview_measure.py -s`.
+client. Opt in with `SAMMY_MEASURE=1 uv run pytest tests/liveview/test_liveview_measure.py -s`.
 
 - Frame rate: frames the client receives per second while `/animate` changes every animation frame.
 - Input latency: from sending `mouse_down` (or `mouse_up`) to receiving the first frame where `/bench` has turned
@@ -18,15 +18,15 @@ import pytest
 from liveview_harness import StubBrowserService, backends, serve_app, serve_fixtures
 from PIL import Image
 
-from montybot.browser.contract import MouseDown, MouseUp, Navigate, Point
-from montybot.liveview.app import live_view_app
-from montybot.liveview.auth import StubAuthenticator
-from montybot.liveview.client import LiveViewClient, ReceivedFrame
-from montybot.liveview.handoffs import InMemoryHandoffs
+from sammy.browser.contract import MouseDown, MouseUp, Navigate, Point
+from sammy.liveview.app import live_view_app
+from sammy.liveview.auth import StubAuthenticator
+from sammy.liveview.client import LiveViewClient, ReceivedFrame
+from sammy.liveview.handoffs import InMemoryHandoffs
 
 pytestmark = [
     pytest.mark.anyio,
-    pytest.mark.skipif(os.environ.get('MONTYBOT_MEASURE') != '1', reason='set MONTYBOT_MEASURE=1 to measure'),
+    pytest.mark.skipif(os.environ.get('SAMMY_MEASURE') != '1', reason='set SAMMY_MEASURE=1 to measure'),
 ]
 
 SECONDS = 5

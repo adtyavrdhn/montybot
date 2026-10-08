@@ -43,13 +43,13 @@ def test_a_sign_in_is_saved_and_reused(app: App, client: Client, shop: Shop, dat
     # A visible reply means the browser's lease is already free, not pending workflow cleanup.
     run_id = client.thread(second)['run']['id']
     with psycopg.connect(database_url) as connection:
-        lease = connection.execute('SELECT run_id FROM montybot.jar_leases WHERE run_id = %s', (run_id,)).fetchone()
+        lease = connection.execute('SELECT run_id FROM sammy.jar_leases WHERE run_id = %s', (run_id,)).fetchone()
     assert lease is None
 
     # Saved encrypted: the session cookie's value is nowhere in the row.
     (sid,) = shop.sessions
     with psycopg.connect(database_url) as connection:
-        row = connection.execute('SELECT state, version FROM montybot.sign_ins').fetchone()
+        row = connection.execute('SELECT state, version FROM sammy.sign_ins').fetchone()
     assert row is not None and sid.encode() not in bytes(row[0]) and b'127.0.0.1' not in bytes(row[0])
 
     assert client.http.get('/api/sign-ins').json() == [{'site': '127.0.0.1'}]

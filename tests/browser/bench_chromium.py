@@ -25,9 +25,9 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-from montybot.browser.chromium import ChromiumBackend, ChromiumOptions
-from montybot.browser.contract import Navigate
-from montybot.browser.state import BrowserState, Cookie
+from sammy.browser.chromium import ChromiumBackend, ChromiumOptions
+from sammy.browser.contract import Navigate
+from sammy.browser.state import BrowserState, Cookie
 
 ROOT = Path(__file__).resolve().parents[2]
 SETTLE = 2.0
@@ -96,7 +96,7 @@ def usage(workdir: Path) -> Usage:
 
 def start_demo_shop() -> tuple[str, Cookie]:
     """Serve `poc/`'s demo shop on a free port, sign in, and return its origin and the HttpOnly login cookie."""
-    spec = importlib.util.spec_from_file_location('demo_site', ROOT / 'poc/montybot_poc/demo_site.py')
+    spec = importlib.util.spec_from_file_location('demo_site', ROOT / 'poc/sammy_poc/demo_site.py')
     assert spec and spec.loader
     demo_site = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(demo_site)

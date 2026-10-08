@@ -1,0 +1,10 @@
+{
+  "name": "Sammy | Your web assistant",
+  "short_name": "Sammy",
+  "description": "Your assistant for tasks on the web, built with Pydantic AI.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#faf8fc",
+  "theme_color": "#3e042b",
+  "icons": []
+}

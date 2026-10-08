@@ -1,7 +1,7 @@
 """`run_code` on local Monty: what the model sees when code fails, times out or floods output, and that the session's
 variables survive what they should. The browser functions are not called here; the end-to-end tests cover them.
 
-The user's files (#21) are checked on local Monty and, with `MONTYBOT_TEST_MONTY_URL`, on Full Monty, whose OS calls
+The user's files (#21) are checked on local Monty and, with `SAMMY_TEST_MONTY_URL`, on Full Monty, whose OS calls
 come back over the WebSocket.
 """
 
@@ -17,13 +17,13 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
-from montybot.code import OUTPUT_LIMIT, SESSION_LOST, looks_irreversible, open_monty, run_snippet
-from montybot.settings import Settings
-from montybot.workspaces import Workspaces
+from sammy.code import OUTPUT_LIMIT, SESSION_LOST, looks_irreversible, open_monty, run_snippet
+from sammy.settings import Settings
+from sammy.workspaces import Workspaces
 
 pytestmark = pytest.mark.anyio
 USER = str(uuid.uuid4())
-FULL_MONTY = os.environ.get('MONTYBOT_TEST_MONTY_URL')
+FULL_MONTY = os.environ.get('SAMMY_TEST_MONTY_URL')
 
 
 @pytest.fixture
@@ -54,7 +54,7 @@ async def resources(tmp_path: Path) -> AsyncIterator[Any]:
 async def any_monty(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[Any]:
     """Local Monty, and Full Monty when the test run names one."""
     if request.param == 'full' and not FULL_MONTY:
-        pytest.skip('Full Monty: set MONTYBOT_TEST_MONTY_URL')
+        pytest.skip('Full Monty: set SAMMY_TEST_MONTY_URL')
     settings = settings_on(FULL_MONTY if request.param == 'full' else None, tmp_path)
     async with open_monty(settings) as monty:
         yield SimpleNamespace(settings=settings, monty=monty, workspaces=Workspaces(tmp_path), browser=None, pool=None)
@@ -157,8 +157,8 @@ async def test_one_snippet_uses_returned_pages_without_extra_reads(
 
     Fake only the browser session: execute real Monty and the real host-function guards.
     """
-    from montybot import code as code_module
-    from montybot.browser.contract import Navigate, Press, Ref, Type
+    from sammy import code as code_module
+    from sammy.browser.contract import Navigate, Press, Ref, Type
 
     calls: list[str] = []
 
@@ -225,7 +225,7 @@ if '[1] searchbox "Search"' in page:
 async def test_ordinary_input_cannot_submit_checkout(
     resources: Any, snippet: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from montybot import code as code_module
+    from sammy import code as code_module
 
     class Checkout:
         def __init__(self, *args: Any) -> None:

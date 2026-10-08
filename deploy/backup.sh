@@ -3,21 +3,21 @@
 # BACKUP_AT (UTC, HH:MM) into /backups, deleting dumps older than BACKUP_KEEP_DAYS. `backup now` takes one at once.
 #
 # Restore into a new database (pg_restore reads the custom format pg_dump writes here):
-#   docker compose exec backup createdb montybot_restored
-#   docker compose exec backup pg_restore --no-owner -d montybot_restored /backups/montybot-YYYYMMDDTHHMMSSZ.dump
+#   docker compose exec backup createdb sammy_restored
+#   docker compose exec backup pg_restore --no-owner -d sammy_restored /backups/sammy-YYYYMMDDTHHMMSSZ.dump
 set -eu
 umask 077  # the dumps hold everything; only root on the host reads them
 
 # Each step checked by hand: `set -e` does not apply inside a function called from `dump || ...`. A failed dump
 # leaves no file and deletes no old ones.
 dump() {
-    file=/backups/montybot-$(date -u +%Y%m%dT%H%M%SZ).dump
+    file=/backups/sammy-$(date -u +%Y%m%dT%H%M%SZ).dump
     if ! pg_dump --format=custom --file="$file.part"; then
         rm -f "$file.part"
         return 1
     fi
     mv "$file.part" "$file" || return 1
-    find /backups -name 'montybot-*.dump' -mtime +"$BACKUP_KEEP_DAYS" -delete
+    find /backups -name 'sammy-*.dump' -mtime +"$BACKUP_KEEP_DAYS" -delete
     echo "backup: wrote $file ($(du -h "$file" | cut -f1))"
 }
 

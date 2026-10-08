@@ -20,16 +20,16 @@ import pytest
 from playwright.async_api import async_playwright
 from poc_chromium import PocChromium
 
-from montybot.browser.conformance import BrowserBackendConformance, Site
-from montybot.browser.contract import BrowserBackend, Click, Navigate, Selector, Type
-from montybot.browser.host import CRASHED, BrowserHost
-from montybot.browser.jar import InMemoryJar, InMemoryJarLease
-from montybot.browser.service import Restarted, Started
-from montybot.browser.state import BLANK_URL
+from sammy.browser.conformance import BrowserBackendConformance, Site
+from sammy.browser.contract import BrowserBackend, Click, Navigate, Selector, Type
+from sammy.browser.host import CRASHED, BrowserHost
+from sammy.browser.jar import InMemoryJar, InMemoryJarLease
+from sammy.browser.service import Restarted, Started
+from sammy.browser.state import BLANK_URL
 
 pytestmark = pytest.mark.anyio
 
-DEMO_SITE = Path(__file__).parents[2] / 'poc' / 'montybot_poc' / 'demo_site.py'
+DEMO_SITE = Path(__file__).parents[2] / 'poc' / 'sammy_poc' / 'demo_site.py'
 ALICE = {'run_id': 'run-1', 'user_id': 'alice'}
 
 

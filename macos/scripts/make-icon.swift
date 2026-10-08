@@ -1,4 +1,4 @@
-// Draws Monty's app icon: the Pydantic logomark in Pydantic pink on Logfire's near-black, in the macOS icon grid.
+// Draws Sammy's app icon: the Pydantic logomark in Pydantic pink on Logfire's near-black, in the macOS icon grid.
 // `swift scripts/make-icon.swift Resources/AppIcon.iconset`, then `iconutil -c icns` (build-app.sh does both).
 import AppKit
 

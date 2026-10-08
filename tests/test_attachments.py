@@ -1,4 +1,4 @@
-"""Files in chats (`montybot.attachments`): what a file is, by its bytes, and the stored history keeping notes, not
+"""Files in chats (`sammy.attachments`): what a file is, by its bytes, and the stored history keeping notes, not
 files. Uploading, the model seeing files and sharing them back are end to end, in `e2e/test_attachments.py`."""
 
 from __future__ import annotations
@@ -9,8 +9,8 @@ import pytest
 from PIL import Image
 from pydantic_ai.messages import BinaryContent, ModelRequest, ModelResponse, TextContent, TextPart, UserPromptPart
 
-from montybot.attachments import MODEL_IMAGE_SIDE, inspect, note, prompt, without_files
-from montybot.models import Attachment
+from sammy.attachments import MODEL_IMAGE_SIDE, inspect, note, prompt, without_files
+from sammy.models import Attachment
 
 
 def image(width: int, height: int, format: str = 'PNG', mode: str = 'RGB', orientation: int | None = None) -> bytes:

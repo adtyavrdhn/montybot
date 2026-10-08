@@ -69,7 +69,7 @@ def schedules(client: Client) -> list[dict[str, Any]]:
 
 def fire(dbos: DBOSClient, schedule: dict[str, Any]) -> WorkflowHandle[None]:
     """One occurrence, now."""
-    return dbos.trigger_schedule(f'montybot-schedule-{schedule["id"]}')
+    return dbos.trigger_schedule(f'sammy-schedule-{schedule["id"]}')
 
 
 def finished(handle: WorkflowHandle[None]) -> None:
@@ -83,7 +83,7 @@ def finished(handle: WorkflowHandle[None]) -> None:
 def runs_in(database_url: str, thread_id: str) -> int:
     with psycopg.connect(database_url) as connection:
         row = connection.execute(
-            "SELECT count(*) FROM montybot.runs WHERE thread_id = %s AND trigger = 'schedule'", (thread_id,)
+            "SELECT count(*) FROM sammy.runs WHERE thread_id = %s AND trigger = 'schedule'", (thread_id,)
         ).fetchone()
     assert row is not None
     return row[0]
@@ -167,7 +167,7 @@ def test_a_weekly_cart_fill_over_two_weeks(
 def approvals_in(database_url: str, thread_id: str) -> int:
     with psycopg.connect(database_url) as connection:
         row = connection.execute(
-            'SELECT count(*) FROM montybot.asks a JOIN montybot.runs r ON r.id = a.run_id '
+            'SELECT count(*) FROM sammy.asks a JOIN sammy.runs r ON r.id = a.run_id '
             "WHERE r.thread_id = %s AND a.kind = 'approval'",
             (thread_id,),
         ).fetchone()
@@ -222,7 +222,7 @@ def test_a_slot_watch_notifies_once(
     for _ in range(2):
         finished(fire(dbos, watch))
         assert reply_of(client, thread) == 'Not yet.'
-    assert mails(mailbox, 'Monty found') == 0 and mails(mailbox, 'Monty finished') == 0
+    assert mails(mailbox, 'Sammy found') == 0 and mails(mailbox, 'Sammy finished') == 0
 
     slots.open_slot = SLOT
     finished(fire(dbos, watch))
@@ -234,7 +234,7 @@ def test_a_slot_watch_notifies_once(
     # Later occurrences (one enqueued before the pause, say) do not tell the user again.
     finished(fire(dbos, watch))
     assert runs_in(database_url, thread) == 3
-    assert mails(mailbox, 'Monty found') == 1 and mails(mailbox, 'Monty finished') == 0
+    assert mails(mailbox, 'Sammy found') == 1 and mails(mailbox, 'Sammy finished') == 0
 
     assert client.wait_for_reply(client.ask(f'Delete the schedule {watch["id"]}')) == 'Deleted.'
     assert schedules(client) == []

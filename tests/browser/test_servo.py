@@ -1,6 +1,6 @@
 """The Servo backend (#12): the conformance suite and Servo's own behaviour, against a real servoshell.
 
-Needs servoshell at `montybot.browser.servo.default_binary()` (set `MONTYBOT_SERVO_BINARY` to move it); the tests that
+Needs servoshell at `sammy.browser.servo.default_binary()` (set `SAMMY_SERVO_BINARY` to move it); the tests that
 start Servo are skipped without it. Each test starts its own Servo on a free port and kills it at the end.
 """
 
@@ -18,11 +18,11 @@ from pathlib import Path
 
 import pytest
 
-from montybot.browser.chromium_linux import bwrap_command
-from montybot.browser.conformance import BrowserBackendConformance, Site, serve_site, wait_for_text
-from montybot.browser.contract import ActionFailed, BrowserBackend, Navigate, NotSupported
-from montybot.browser.servo import CHROME_USER_AGENT, ServoBackend, ServoOptions, default_binary
-from montybot.browser.state import BrowserState, Cookie
+from sammy.browser.chromium_linux import bwrap_command
+from sammy.browser.conformance import BrowserBackendConformance, Site, serve_site, wait_for_text
+from sammy.browser.contract import ActionFailed, BrowserBackend, Navigate, NotSupported
+from sammy.browser.servo import CHROME_USER_AGENT, ServoBackend, ServoOptions, default_binary
+from sammy.browser.state import BrowserState, Cookie
 
 pytestmark = pytest.mark.anyio
 

@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 from test_host import ALICE, SHOP, Setup, page_text, shop_pages, sign_in_and_add_eggs
 
-from montybot.browser.fake import FakeBrowser
-from montybot.browser.host import BrowserHost, Detour, _duration
-from montybot.browser.service import Started, UnknownRun
+from sammy.browser.fake import FakeBrowser
+from sammy.browser.host import BrowserHost, Detour, _duration
+from sammy.browser.service import Started, UnknownRun
 
 pytestmark = pytest.mark.anyio
 
@@ -51,7 +51,7 @@ async def test_the_next_run_carries_on_in_the_kept_browser() -> None:
 
 
 async def test_the_kept_browser_can_still_be_watched() -> None:
-    """The Mac app's browser panel stays open after the task: it shows the browser where Monty left it."""
+    """The Mac app's browser panel stays open after the task: it shows the browser where Sammy left it."""
     setup = Setup()
     host = keeping(setup)
     await host.start(**ALICE)

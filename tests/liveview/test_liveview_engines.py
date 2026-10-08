@@ -2,7 +2,7 @@
 CloakBrowser over the same pipe (`cloak`, headless) and Servo (servoshell, headless WebDriver).
 
 Chromium and Servo are driven directly by stand-in backends from `liveview_harness`, not by #11's or #12's backends;
-`cdp` is the real `ChromiumCDPBackend`. Servo tests skip when servoshell is not installed (set `MONTYBOT_SERVO` to its
+`cdp` is the real `ChromiumCDPBackend`. Servo tests skip when servoshell is not installed (set `SAMMY_SERVO` to its
 path).
 """
 
@@ -16,8 +16,8 @@ from urllib.parse import urlsplit
 import pytest
 from liveview_harness import HOLD_CENTRE, StubBrowserService, backends, serve_app, serve_demo_shop, serve_fixtures
 
-from montybot.browser.conformance import BUTTON_CENTRE, HOLD_END, HOLD_START, serve_site, wait_for_text
-from montybot.browser.contract import (
+from sammy.browser.conformance import BUTTON_CENTRE, HOLD_END, HOLD_START, serve_site, wait_for_text
+from sammy.browser.contract import (
     ActionFailed,
     Click,
     MouseDown,
@@ -29,15 +29,15 @@ from montybot.browser.contract import (
     Scroll,
     Type,
 )
-from montybot.browser.live import ControlsSource, Frame, FrameSource, LiveViewBackend, Tab, Tabs
-from montybot.browser.service import HandoffActive
-from montybot.browser.state import BrowserState
-from montybot.liveview.app import live_view_app
-from montybot.liveview.auth import StubAuthenticator
-from montybot.liveview.client import LiveViewClient
-from montybot.liveview.handoffs import InMemoryHandoffs
-from montybot.liveview.scripted_user import press_and_hold, sign_in_to_demo_shop
-from montybot.liveview.wire import ViewportSize
+from sammy.browser.live import ControlsSource, Frame, FrameSource, LiveViewBackend, Tab, Tabs
+from sammy.browser.service import HandoffActive
+from sammy.browser.state import BrowserState
+from sammy.liveview.app import live_view_app
+from sammy.liveview.auth import StubAuthenticator
+from sammy.liveview.client import LiveViewClient
+from sammy.liveview.handoffs import InMemoryHandoffs
+from sammy.liveview.scripted_user import press_and_hold, sign_in_to_demo_shop
+from sammy.liveview.wire import ViewportSize
 
 pytestmark = [pytest.mark.anyio, pytest.mark.parametrize('engine', ['chromium', 'cdp', 'cloak', 'servo'])]
 

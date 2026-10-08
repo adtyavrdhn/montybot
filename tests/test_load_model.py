@@ -10,10 +10,10 @@ from pydantic_ai.exceptions import UserError
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.anthropic import AnthropicModelSettings
 
-from montybot.agent import CACHE
-from montybot.resources import load_model
-from montybot.settings import Settings
-from montybot.vendor.claude_code import ClaudeCodeModel
+from sammy.agent import CACHE
+from sammy.resources import load_model
+from sammy.settings import Settings
+from sammy.vendor.claude_code import ClaudeCodeModel
 
 
 @pytest.fixture

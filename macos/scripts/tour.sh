@@ -10,15 +10,15 @@
 set -eu
 cd "$(dirname "$0")/.."
 DIR="${1:-build/tour}"
-APP=build/Monty.app/Contents/MacOS/Monty
+APP=build/Sammy.app/Contents/MacOS/Sammy
 [ -x "$APP" ] || scripts/build-app.sh >/dev/null
 DUMP=build/ax-dump
 [ "$DUMP" -nt scripts/ax-dump.swift ] || swiftc -O scripts/ax-dump.swift -o "$DUMP"
 rm -rf "$DIR"
 mkdir -p "$DIR"
 
-# The app is the one users get; the tour points it at the dev server for this run only (MONTY_TOUR_SERVER).
-"$APP" --tour "$DIR" --server "${MONTY_TOUR_SERVER:-http://127.0.0.1:8000}" &
+# The app is the one users get; the tour points it at the dev server for this run only (SAMMY_TOUR_SERVER).
+"$APP" --tour "$DIR" --server "${SAMMY_TOUR_SERVER:-http://127.0.0.1:8000}" &
 TOUR=$!
 while kill -0 "$TOUR" 2>/dev/null; do
     for want in "$DIR"/*.want; do

@@ -1486,7 +1486,7 @@ wheels = [
 ]
 
 [[package]]
-name = "montybot"
+name = "sammy"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [

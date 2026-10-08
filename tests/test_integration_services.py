@@ -22,12 +22,12 @@ from pydantic_ai_harness.posthog import _capability as harness_posthog
 from pydantic_ai_harness.pylon import _capability as harness_pylon
 from sites.integrations import API_KEY, NOTES_TOKEN, Account, FakeComposio, NotesServer
 
-from montybot import crypto, store
-from montybot.db import Pool, create_pool, migrate
-from montybot.integrations import Connection, Integrations, Offer, catalog, egress, mcp, oauth
-from montybot.integrations.base import IntegrationError
-from montybot.integrations.composio import Composio, Toolkit
-from montybot.settings import Settings
+from sammy import crypto, store
+from sammy.db import Pool, create_pool, migrate
+from sammy.integrations import Connection, Integrations, Offer, catalog, egress, mcp, oauth
+from sammy.integrations.base import IntegrationError
+from sammy.integrations.composio import Composio, Toolkit
+from sammy.settings import Settings
 
 pytestmark = pytest.mark.anyio
 KEY = crypto.deployment_key(crypto.new_key())
@@ -117,12 +117,10 @@ async def test_a_servers_secret_is_sealed_for_its_user_and_server(pool: Pool) ->
         assert not await mcp.delete(connection, bob.id, first.id)
 
         # A sealed secret moved onto another server, or another user's server, does not open.
-        cursor = await connection.execute('SELECT secret FROM montybot.mcp_servers WHERE id = %s', (first.id,))
+        cursor = await connection.execute('SELECT secret FROM sammy.mcp_servers WHERE id = %s', (first.id,))
         row = await cursor.fetchone()
         assert row is not None
-        await connection.execute(
-            'UPDATE montybot.mcp_servers SET secret = %s WHERE id = %s', (row['secret'], second.id)
-        )
+        await connection.execute('UPDATE sammy.mcp_servers SET secret = %s WHERE id = %s', (row['secret'], second.id))
         with pytest.raises(IntegrationError, match='could not be read'):
             await mcp.load_secret(connection, KEY, second)
         with pytest.raises(InvalidTag):
@@ -144,15 +142,15 @@ async def test_a_sign_in_flow_is_used_once(pool: Pool) -> None:
 
 
 async def test_a_users_apps_are_theirs_only_and_reconnecting_replaces_a_broken_one(composio: FakeComposio) -> None:
-    client = Composio(api_key=API_KEY, base_url=composio.url, user_prefix='montybot:')
+    client = Composio(api_key=API_KEY, base_url=composio.url, user_prefix='sammy:')
     try:
         assert await client.accounts('alice') == []  # the other app's user's account is not hers
         composio.accounts['ca_old'] = Account(
-            id='ca_old', user_id='montybot:alice', toolkit='linear', auth_config_id='ac', status='EXPIRED'
+            id='ca_old', user_id='sammy:alice', toolkit='linear', auth_config_id='ac', status='EXPIRED'
         )
         assert [(a.id, a.status) for a in await client.accounts('alice')] == [('ca_old', 'EXPIRED')]
         composio.accounts['ca_new'] = Account(
-            id='ca_new', user_id='montybot:alice', toolkit='linear', auth_config_id='ac', status='ACTIVE'
+            id='ca_new', user_id='sammy:alice', toolkit='linear', auth_config_id='ac', status='ACTIVE'
         )
         assert [(a.id, a.status) for a in await client.accounts('alice')] == [('ca_new', 'ACTIVE')]
         assert not await client.disconnect('bob', 'ca_new') and 'ca_new' in composio.accounts
@@ -229,7 +227,7 @@ async def test_the_service_the_model_names(pool: Pool, composio: FakeComposio, d
         assert isinstance(found, Connection) and (found.key, found.state) == ('mcp:acme-crm', 'connected')
         # Linear connected through Composio before its own server was listed: that connection, not a second one.
         composio.accounts['ca_linear'] = Account(
-            id='ca_linear', user_id=f'montybot:{user.id}', toolkit='linear', auth_config_id='ac', status='ACTIVE'
+            id='ca_linear', user_id=f'sammy:{user.id}', toolkit='linear', auth_config_id='ac', status='ACTIVE'
         )
         found = await offered('Linear issues')
         assert isinstance(found, Connection) and (found.provider, found.key) == ('composio', 'linear')
@@ -385,7 +383,7 @@ def test_a_blank_composio_key_means_no_composio(database_url: str) -> None:
 
 
 CLIENT = oauth.OAuthClient(
-    client_id='monty',
+    client_id='sammy',
     issuer='https://auth.example.com',
     authorization_endpoint='https://auth.example.com/authorize',
     token_endpoint='https://auth.example.com/token',
@@ -442,4 +440,4 @@ async def test_a_registration_that_cannot_be_sent_says_so() -> None:
     unauthorized = httpx2.Response(401, request=httpx2.Request('POST', 'https://mcp.example.com/mcp'))
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(server)) as http:
         with pytest.raises(IntegrationError, match='could not register'):
-            await oauth.register(http, 'https://mcp.example.com/mcp', unauthorized, 'https://monty.test/cb')
+            await oauth.register(http, 'https://mcp.example.com/mcp', unauthorized, 'https://sammy.test/cb')

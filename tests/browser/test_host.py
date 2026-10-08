@@ -9,12 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from montybot.browser.contract import Action, ActionFailed, Click, Feature, Navigate, NotSupported, Selector
-from montybot.browser.contract import TargetNotFound as TargetNotFoundError
-from montybot.browser.fake import FakeBrowser, FakeElement, FakePage
-from montybot.browser.host import CRASHED, SERVICE_RESTARTED, BrowserHost, Detour, _duration
-from montybot.browser.jar import InMemoryJar, InMemoryJarLease
-from montybot.browser.service import (
+from sammy.browser.contract import Action, ActionFailed, Click, Feature, Navigate, NotSupported, Selector
+from sammy.browser.contract import TargetNotFound as TargetNotFoundError
+from sammy.browser.fake import FakeBrowser, FakeElement, FakePage
+from sammy.browser.host import CRASHED, SERVICE_RESTARTED, BrowserHost, Detour, _duration
+from sammy.browser.jar import InMemoryJar, InMemoryJarLease
+from sammy.browser.service import (
     ActionResult,
     HandoffActive,
     HandoffNotActive,
@@ -23,7 +23,7 @@ from montybot.browser.service import (
     UnknownRun,
     UserBusy,
 )
-from montybot.browser.state import BLANK_URL, BrowserState, Cookie
+from sammy.browser.state import BLANK_URL, BrowserState, Cookie
 
 pytestmark = pytest.mark.anyio
 

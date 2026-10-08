@@ -25,10 +25,10 @@ from typing import Protocol
 from bench_chromium import usage
 from playwright.async_api import async_playwright
 
-from montybot.browser.cdp import CDPOptions, ChromiumCDPBackend, playwright_chromium
-from montybot.browser.chromium import ChromiumBackend, ChromiumOptions
-from montybot.browser.conformance import BUTTON_CENTRE, sample_state, serve_site
-from montybot.browser.contract import BrowserBackend, Click, Navigate, Selector, Type
+from sammy.browser.cdp import CDPOptions, ChromiumCDPBackend, playwright_chromium
+from sammy.browser.chromium import ChromiumBackend, ChromiumOptions
+from sammy.browser.conformance import BUTTON_CENTRE, sample_state, serve_site
+from sammy.browser.contract import BrowserBackend, Click, Navigate, Selector, Type
 
 STEPS = ('start', 'open with state', 'navigate', 'snapshot', 'click', 'type', 'screenshot', 'export', 'close')
 

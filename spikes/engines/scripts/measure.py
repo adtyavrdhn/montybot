@@ -1,4 +1,4 @@
-"""Measure one browser engine for the monty-bot engine spike.
+"""Measure one browser engine for the Sammy engine spike.
 
 usage (from spikes/engines, with scripts/server.py running on 127.0.0.1:8766):
 

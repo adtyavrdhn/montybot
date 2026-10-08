@@ -17,8 +17,8 @@ from unittest.mock import patch
 import pytest
 from test_egress import connect, echo_server
 
-from montybot.browser.egress import HOST_UNREACHABLE, NOT_ALLOWED, SUCCEEDED
-from montybot.browser.tunnel import CLOSE, DATA, OPEN, OPENED, WEB_PORTS, MacTunnel, Tunnels, message
+from sammy.browser.egress import HOST_UNREACHABLE, NOT_ALLOWED, SUCCEEDED
+from sammy.browser.tunnel import CLOSE, DATA, OPEN, OPENED, WEB_PORTS, MacTunnel, Tunnels, message
 
 pytestmark = pytest.mark.anyio
 
@@ -158,7 +158,7 @@ async def test_a_mac_that_never_answers_times_out_and_is_told(socket_dir: Path) 
     mac = FakeMac(silent=True)
     mac.attach(tunnels, 'alice')
     try:
-        with patch('montybot.browser.tunnel.CONNECT_TIMEOUT', 0.2):
+        with patch('sammy.browser.tunnel.CONNECT_TIMEOUT', 0.2):
             status, _, writer = await connect(await tunnels.egress('alice'), 'slow.example', 443)
         assert status == HOST_UNREACHABLE
         writer.close()

@@ -1,4 +1,4 @@
-"""Render every bot state from a montybot .blend.
+"""Render every bot state from a sammy .blend.
 
 Default: one MP4 + poster PNG per state (dark stage, for previews/README).
 ``--frames``: transparent RGBA PNG sequences per state for app loops; the
@@ -20,7 +20,7 @@ import bpy
 scene = bpy.context.scene
 render = scene.render
 blend = Path(bpy.data.filepath)
-states = json.loads(scene['montybot_states'])
+states = json.loads(scene['sammy_states'])
 script_args = sys.argv[sys.argv.index('--') + 1 :] if '--' in sys.argv else []
 transparent_frames = '--frames' in script_args
 
