@@ -292,7 +292,15 @@ async def test_saved_browser_data_includes_storage_and_forgets_subdomains(pool: 
         async def save(self, *, user_id: str, state: BrowserState) -> None:
             assert user_id == user.id
 
-    resources = SimpleNamespace(pool=pool, jar=Jar())
+    class Browser:
+        def __init__(self) -> None:
+            self.discarded: list[str] = []
+
+        async def discard_parked(self, user_id: str) -> None:
+            self.discarded.append(user_id)
+
+    browser = Browser()
+    resources = SimpleNamespace(pool=pool, jar=Jar(), browser=browser)
 
     def request(method: str, site: str = '') -> Request:
         return Request(
@@ -315,6 +323,7 @@ async def test_saved_browser_data_includes_storage_and_forgets_subdomains(pool: 
     assert state.session_storage == {} and state.url == BLANK_URL
     assert (await api.forget_sign_in(request('DELETE', 'storage-only.test'))).status_code == 200
     assert state.local_storage == {}
+    assert browser.discarded == [user.id, user.id]  # the kept browser goes each time, with the cookies it still has
 
 
 async def test_an_answered_run_shows_as_working_until_it_carries_on(pool: Pool) -> None:
