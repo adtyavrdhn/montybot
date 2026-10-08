@@ -431,7 +431,45 @@ import Testing
         let ask = #"{"id": "a", "kind": "connect", "prompt": "Connect PostHog", "integration": {"provider": "mcp", "key": "posthog", "name": "PostHog", "logo": "", "url": "https://mcp.posthog.com/mcp"}}"#
         let offer = try #require(try JSONDecoder().decode(Ask.self, from: Data(ask.utf8)).integration)
         #expect(offer == Offer(provider: "mcp", key: "posthog", name: "PostHog", url: "https://mcp.posthog.com/mcp"))
-        #expect(offer.isPreset && !offer.isApp)
+        #expect(offer.isPreset && !offer.isApp && !offer.needsToken)
+    }
+
+    @Test func harnessIntegrationsSayHowTheySignIn() throws {
+        let json = #"""
+        [{"key": "github", "slug": "github", "name": "GitHub", "logo": "", "description": "Code", "categories": [], "kind": "code",
+          "kind_label": "Code", "featured": true, "provider": "mcp", "url": "https://api.githubcopilot.com/mcp/",
+          "host": "api.githubcopilot.com", "auth": "token", "token_hint": "A GitHub personal access token", "token_header": "Authorization"},
+         {"key": "linear", "slug": "linear", "name": "Linear", "logo": "", "description": "Issues", "categories": [], "kind": "issues",
+          "featured": true, "provider": "mcp", "url": "https://mcp.linear.app/mcp", "host": "mcp.linear.app",
+          "auth": "oauth", "token_hint": null, "token_header": null},
+         {"key": "linear", "slug": "linear", "name": "Linear via Composio", "logo": "", "description": "Issues", "categories": [],
+          "featured": false, "provider": "composio", "url": null, "host": null, "auth": null},
+         {"slug": "gmail", "name": "Gmail", "logo": "", "description": "Email", "categories": ["email"]}]
+        """#
+        let apps = try JSONDecoder().decode([CatalogApp].self, from: Data(json.utf8))
+        let github = apps[0], linear = apps[1], composioLinear = apps[2], gmail = apps[3]
+        #expect(github.needsToken && github.auth == "token")
+        #expect(github.tokenHint == "A GitHub personal access token" && github.tokenHeader == "Authorization")
+        #expect(!linear.needsToken && linear.auth == "oauth" && linear.tokenHint == nil && linear.tokenHeader == nil)
+        #expect(!composioLinear.needsToken && composioLinear.auth == nil && composioLinear.isApp)
+        #expect(gmail.auth == nil && gmail.tokenHint == nil && !gmail.needsToken)
+        // The same key from two providers is two entries.
+        #expect(linear.id != composioLinear.id)
+        #expect(Set(apps.map(\.id)).count == apps.count)
+        // A pasted token goes in the named header as a bearer token; none without one.
+        #expect(AppModel.tokenHeaders("Authorization", " tok \n") == ["Authorization": "Bearer tok"])
+        #expect(AppModel.tokenHeaders(nil, "tok") == ["Authorization": "Bearer tok"])
+        #expect(AppModel.tokenHeaders("Authorization", "  ").isEmpty && AppModel.tokenHeaders("Authorization", nil).isEmpty)
+        // A chat offering it says so too.
+        let ask = #"""
+        {"id": "a", "kind": "connect", "prompt": "Connect GitHub", "integration": {"provider": "mcp", "key": "github", "name": "GitHub",
+         "logo": "", "url": "https://api.githubcopilot.com/mcp/", "auth": "token", "token_hint": "A GitHub personal access token",
+         "token_header": "Authorization"}}
+        """#
+        let offer = try #require(try JSONDecoder().decode(Ask.self, from: Data(ask.utf8)).integration)
+        #expect(offer == Offer(provider: "mcp", key: "github", name: "GitHub", url: "https://api.githubcopilot.com/mcp/", auth: "token",
+                               tokenHint: "A GitHub personal access token", tokenHeader: "Authorization"))
+        #expect(offer.isPreset && offer.needsToken)
     }
 }
 

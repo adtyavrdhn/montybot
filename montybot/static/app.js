@@ -692,7 +692,13 @@ function connectCard(ask) {
   const done = button("I've connected it", 'secondary', () => answer(ask, { connected: true }));
   done.hidden = true;
   const started = (text) => { done.hidden = false; note.textContent = text; };
-  if (offered.provider === 'mcp' && offered.url) {
+  let form = null;
+  if (offered.provider === 'mcp' && offered.url && offered.auth === 'token') {
+    form = tokenForm(offered, () => {
+      form.hidden = true;
+      started(`${name} is connected.`);
+    });
+  } else if (offered.provider === 'mcp' && offered.url) {
     row.append(button(`Connect ${name}`, 'good', async () => {
       const signingIn = await connectPreset(offered);
       started(signingIn ? `Finish signing in to ${name} in the window that opened. Monty carries on once you have.`
@@ -718,7 +724,7 @@ function connectCard(ask) {
     }));
   }
   row.append(done, notNow);
-  return [head, element('p', ask.prompt), note, row];
+  return [head, element('p', ask.prompt), ...(form ? [form] : []), note, row];
 }
 
 function logo(url, name) {
@@ -772,6 +778,52 @@ async function connectPreset(listed) {
     });
     return { url: created.sign_in_url };
   });
+}
+
+let tokenForms = 0;
+
+function tokenForm(listed, connected) {
+  // A listed MCP server that signs in with a token the user pastes (`auth: 'token'`, GitHub's): added under its own
+  // name with the token, sent as `Bearer <token>` as pydantic-ai-harness sends it. Nothing opens; the token is not
+  // traced, and is not left in the field.
+  const form = element('form', '', 'token-form');
+  const input = element('input');
+  input.id = `token-${tokenForms += 1}`;
+  input.type = 'password';
+  input.autocomplete = 'off';
+  input.maxLength = 4000;
+  input.required = true;
+  input.placeholder = 'Paste it here';
+  const label = element('label', listed.token_hint || `A token for ${listed.name}`);
+  label.htmlFor = input.id;
+  const submit = element('button', 'Connect', 'good');
+  submit.type = 'submit';
+  submit.setAttribute('aria-label', `Connect ${listed.name} with this token`);
+  const error = element('p', '', 'error');
+  error.setAttribute('role', 'alert');
+  const fields = element('div', '', 'token-fields');
+  fields.append(input, submit);
+  form.append(label, fields, error);
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    report((async () => {
+      error.textContent = '';
+      submit.disabled = true;
+      const headers = { [listed.token_header || 'Authorization']: `Bearer ${input.value.trim()}` };
+      try {
+        await telemetry.span('connect mcp server', { app: listed.key, with_token: true }, () => (
+          api('/api/integrations/servers', { method: 'POST', body: { name: listed.name, url: listed.url, headers } })));
+      } catch (failed) {
+        error.textContent = failed.message;
+        return;
+      } finally {
+        submit.disabled = false;
+      }
+      input.value = '';
+      await connected();
+    })());
+  });
+  return form;
 }
 
 async function signInsChanged() {
@@ -1242,7 +1294,7 @@ function integrationActions(entry, connection, name) {
     made.setAttribute('aria-label', `${text} ${name}`);  // each row has one: say which
     actions.append(made);
   };
-  if (!connection) add('Connect', 'secondary', () => connectEntry(entry));
+  if (!connection) add('Connect', 'secondary', () => connectEntry(entry, actions));
   else if (connection.state === 'needs_sign_in') add('Sign in', 'good', () => reconnect(connection));
   else if (connection.state !== 'connected') add('Reconnect', 'secondary', () => reconnect(connection));
   if (connection) {
@@ -1286,14 +1338,35 @@ $('more-apps').addEventListener('toggle', () => {
   if (!$('integration-search').value.trim()) moreAppsOpen = $('more-apps').open;  // not the search's opening it
 });
 
-async function connectEntry(entry) {
+async function connectEntry(entry, actions) {
   if (entry.provider !== 'mcp') {
     await connectApp(entry.key);
+    return;
+  }
+  if (entry.auth === 'token') {
+    toggleTokenForm(entry, actions);
     return;
   }
   const signingIn = await connectPreset(entry);
   if (signingIn) await loadIntegrations();  // listed as needing a sign-in until the window says it is done
   $('integrations-status').textContent = signingIn ? SIGNING_IN : `${entry.name} is connected.`;
+}
+
+function toggleTokenForm(entry, actions) {
+  // Its Connect opens the field for the token under the row, and closes it again.
+  const item = actions.closest('li');
+  const opener = actions.querySelector('button');
+  const open = item.querySelector('.token-form');
+  if (open) open.remove();
+  item.classList.toggle('with-form', !open);
+  opener.setAttribute('aria-expanded', String(!open));
+  if (open) return;
+  const form = tokenForm(entry, async () => {
+    await loadIntegrations();
+    $('integrations-status').textContent = `${entry.name} is connected.`;
+  });
+  item.append(form);
+  form.querySelector('input').focus();
 }
 
 async function connectApp(slug) {

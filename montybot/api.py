@@ -1028,8 +1028,8 @@ def schedule_json(schedule: Schedule, paused: bool, last: Run | None, now: datet
 
 def ask_json(ask: Ask) -> dict[str, Any]:
     """A hand-off's id stays on the server: the live view finds it from the signed-in user's open ask. A connect ask
-    says what to connect (`integration`: `provider`, `key`, `name`, `logo`, and `server_id` to sign in to a server
-    again)."""
+    says what to connect (`integration`: `provider`, `key`, `name`, `logo`, a listed MCP server's `url` and `auth`, and
+    `server_id` to sign in to a server again)."""
     shown: dict[str, Any] = {'id': ask.id, 'kind': ask.kind, 'prompt': ask.prompt}
     if ask.kind == 'connect':
         shown['integration'] = ask.integration

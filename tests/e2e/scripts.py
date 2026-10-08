@@ -362,6 +362,13 @@ def my_notes(turn: Turn) -> ModelResponse:
     return say(f'Your notes: {turn.last}')
 
 
+def my_gmail(turn: Turn) -> ModelResponse:
+    """ "Check my Gmail": connect Gmail, an app through Composio, and say how that went."""
+    if not turn.called('connect_integration'):
+        return call('connect_integration', service='Gmail', reason='Connect Gmail so I can check your email.')
+    return say(turn.result_of('connect_integration'))
+
+
 def acme_wiki(turn: Turn) -> ModelResponse:
     """A service no app is offered for: the chat offers to add an MCP server for it."""
     if not turn.called('connect_integration'):
@@ -372,6 +379,7 @@ def acme_wiki(turn: Turn) -> ModelResponse:
 SCRIPTS: dict[str, Script] = {
     "yo what's on my linear": my_linear,
     'Search my Acme Wiki': acme_wiki,
+    'Check my Gmail': my_gmail,
     'Create a Linear issue called': new_linear_issue,
     'What notes are in': my_notes,
     'Every Monday at 9, fill my cart at': schedule(

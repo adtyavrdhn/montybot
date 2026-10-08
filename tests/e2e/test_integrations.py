@@ -71,24 +71,31 @@ def connections(client: Client) -> list[dict[str, str]]:
     return response.json()['connections']
 
 
-def test_mentioning_linear_offers_to_connect_it_and_then_uses_it(client: Client, composio: FakeComposio) -> None:
+def test_mentioning_linear_offers_its_own_server_and_an_app_connected_instead_is_used(
+    client: Client, composio: FakeComposio
+) -> None:
     client.sign_up()
     me = user_id(client)
     thread = client.ask("yo what's on my linear")
 
+    # Linear's own MCP server (pydantic-ai-harness integrates it) is what the card offers, in one click.
     ask = client.wait_for_ask(thread, 'connect')
     assert ask['prompt'] == 'Connect Linear so I can look up your issues.'
     assert ask['integration'] == {
-        'provider': 'composio',
+        'provider': 'mcp',
         'key': 'linear',
         'name': 'Linear',
         'logo': 'https://logos.composio.dev/api/linear',
+        'url': 'https://mcp.linear.app/mcp',
+        'auth': 'oauth',
     }
     listed = client.http.get('/api/threads').json()
     assert [(t['id'], t['waiting_for']) for t in listed] == [(thread, 'connect')]
 
+    # The user connects Linear through Composio instead (under More apps), and says so on the card.
     page = connect_app(client, 'linear')
     assert page.status_code == 200 and 'Linear is connected' in page.text
+    client.answer(ask, connected=True)
 
     reply = client.wait_for_reply(thread)
     assert 'Fix the login page' in reply
@@ -105,13 +112,37 @@ def test_mentioning_linear_offers_to_connect_it_and_then_uses_it(client: Client,
 
     assert [(c['key'], c['provider'], c['state']) for c in connections(client)] == [('linear', 'composio', 'connected')]
     apps = client.http.get('/api/integrations/apps').json()
-    # The featured ones by kind (code, issues, email, analytics): apps only where Composio has them, PostHog's own server.
+    # The featured ones by kind, the MCP servers pydantic-ai-harness integrates first in theirs, and apps only where
+    # Composio has them; then the other apps, Composio's own GitHub and Linear among them.
     assert [(a['key'], a['provider'], a['featured']) for a in apps] == [
-        ('github', 'composio', True),
-        ('linear', 'composio', True),
+        ('github', 'mcp', True),
+        ('linear', 'mcp', True),
+        ('notion', 'mcp', True),
         ('gmail', 'composio', True),
+        ('grain', 'mcp', True),
+        ('day_ai', 'mcp', True),
         ('posthog', 'mcp', True),
+        ('logfire', 'mcp', True),
+        ('logfire_eu', 'mcp', True),
+        ('pylon', 'mcp', True),
+        ('github', 'composio', False),
+        ('linear', 'composio', False),
     ]
+    assert [a['name'] for a in apps if not a['featured']] == ['GitHub via Composio', 'Linear via Composio']
+
+
+def test_mentioning_gmail_offers_its_app_and_the_run_carries_on_once_connected(client: Client) -> None:
+    client.sign_up()
+    thread = client.ask('Check my Gmail')
+
+    ask = client.wait_for_ask(thread, 'connect')
+    assert ask['integration'] == {'provider': 'composio', 'key': 'gmail', 'name': 'Gmail', 'logo': ''}
+    page = connect_app(client, 'gmail')
+    assert page.status_code == 200 and 'Gmail is connected' in page.text
+
+    # Composio's page coming back is the answer: the run carries on by itself.
+    assert 'Gmail is connected now, as `gmail`' in client.wait_for_reply(thread)
+    assert {'role': 'event', 'text': 'You connected Gmail'} in client.thread(thread)['messages']
 
 
 def test_a_change_in_an_app_waits_for_approval(client: Client, composio: FakeComposio) -> None:
@@ -155,17 +186,20 @@ def test_users_see_and_use_only_their_own_connections(app: App, client: Client, 
         assert client.http.delete('/api/integrations/apps/accounts/ca_other').status_code == 404
         assert alices['id'] in composio.accounts and 'ca_other' in composio.accounts
 
-        # Bob's chat asks him to connect his own Linear; Alice's does not count.
-        thread = bob.ask("yo what's on my linear")
+        # Bob's chat asks him to connect his own Gmail; Alice's does not count.
+        thread = bob.ask('Check my Gmail')
         bobs_ask = bob.wait_for_ask(thread, 'connect')
 
         # A sign-in coming back for Alice wakes nothing of Bob's, and a made-up one is refused.
-        assert connect_app(client, 'linear').status_code == 200
+        assert connect_app(client, 'gmail').status_code == 200
         assert in_a_browser(f'{app.url}/integrations/composio/callback?state=made-up').status_code == 400
         assert bob.thread(thread)['run']['ask'] == bobs_ask
+        connect_app(bob, 'gmail')
+        assert 'Gmail is connected now' in bob.wait_for_reply(thread)
 
+        # Bob's own Linear, connected through Composio, is the one his chat uses; Alice's does not count.
         connect_app(bob, 'linear')
-        assert 'Fix the login page' in bob.wait_for_reply(thread)
+        assert 'Fix the login page' in bob.wait_for_reply(bob.ask("yo what's on my linear"))
         assert composio.executed[-1]['user_id'] == f'montybot:{bobs_id}'
         assert composio.accounts[composio.executed[-1]['connected_account_id']].user_id == f'montybot:{bobs_id}'
     finally:
@@ -175,7 +209,7 @@ def test_users_see_and_use_only_their_own_connections(app: App, client: Client, 
     for connection in connections(client):
         assert client.http.delete(f'/api/integrations/apps/accounts/{connection["id"]}').status_code == 200
     assert connections(client) == []
-    assert [a.user_id for a in composio.accounts.values()] == [OTHER_APP_USER, f'montybot:{bobs_id}']
+    assert [a.user_id for a in composio.accounts.values()] == [OTHER_APP_USER, *[f'montybot:{bobs_id}'] * 2]
 
 
 def test_an_mcp_server_with_a_token(app: App, client: Client, notes: NotesServer, database_url: str) -> None:

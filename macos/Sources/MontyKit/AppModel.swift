@@ -1010,10 +1010,21 @@ public final class AppModel {
         return true
     }
 
-    /// Adds a known MCP server, such as PostHog's, as the user would by hand; its sign-in opens in the browser.
-    public func connect(preset: CatalogApp) async {
-        guard let url = preset.url else { return }
-        await addServer(name: preset.name, url: url, headers: [:], ["monty.preset": .string(preset.key)])
+    /// Adds a known MCP server, such as PostHog's, as the user would by hand: one that signs in with OAuth opens its
+    /// sign-in in the browser; one that takes a token (GitHub's) sends the `token` the user pasted. True once added.
+    /// The token is never in telemetry.
+    @discardableResult
+    public func connect(preset: CatalogApp, token: String? = nil) async -> Bool {
+        guard let url = preset.url else { return false }
+        let headers = preset.needsToken ? Self.tokenHeaders(preset.tokenHeader, token) : [:]
+        if preset.needsToken && headers.isEmpty { return false }
+        return await addServer(name: preset.name, url: url, headers: headers, ["monty.preset": .string(preset.key)]) != nil
+    }
+
+    /// The header a known MCP server's token goes in, as `Bearer <token>`; none without a token.
+    nonisolated static func tokenHeaders(_ header: String?, _ token: String?) -> [String: String] {
+        let token = (token ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? [:] : [header ?? "Authorization": "Bearer \(token)"]
     }
 
     /// Adds an MCP server and opens its sign-in, if it wants one; `serverNote` says how that went (a name already
