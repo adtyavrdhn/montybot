@@ -20,6 +20,7 @@ run has the same id and topic on every replay, so a restarted run finds its ask 
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -148,8 +149,27 @@ async def redeliver_answers(resources: Resources) -> int:
     return len(rows)
 
 
+async def connected(resources: Resources, user_id: str, *, provider: str, key: str = '') -> int:
+    """The user connected something: answer each of their runs waiting for it, so they carry on. An app counts for
+    the asks that offered that app (`key`); any MCP server of theirs counts for the asks to add one. Returns how many
+    were answered. The run checks for itself what is connected, so an answer here only wakes it."""
+    async with resources.pool.connection() as connection:
+        asks = await store.open_connect_asks(connection, user_id)
+    woken = 0
+    for waiting in asks:
+        offered = waiting.integration
+        if offered.get('provider') == provider and (provider == 'mcp' or offered.get('key') == key):
+            woken += await answer(resources, user_id, waiting.id, {'connected': True})
+    return woken
+
+
 def describe(tool: str, args: dict[str, Any]) -> str:
     """What the user is asked to approve."""
+    if tool == 'call_integration_tool':
+        arguments = json.dumps(args.get('arguments') or {}, ensure_ascii=False)
+        if len(arguments) > 600:
+            arguments = arguments[:600] + '…'
+        return f'Use {args.get("integration")}: {args.get("tool")} {arguments}'
     if tool == 'schedule_task':
         kind = 'Watch' if args.get('watch') else 'Run'
         what = f'{kind} "{args.get("name")}" {args.get("when")} ({args.get("timezone")}): {args.get("prompt")}'

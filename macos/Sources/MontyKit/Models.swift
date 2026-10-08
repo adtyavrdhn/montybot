@@ -54,7 +54,8 @@ public struct ThreadSummary: Codable, Equatable, Identifiable, Sendable {
         status = try container.decodeIfPresent(RunStatus.self, forKey: .status)
         outcome = try container.decodeIfPresent(RunStatus.self, forKey: .outcome)
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt).flatMap(Self.date)
-        waitingFor = try? container.decodeIfPresent(AskKind.self, forKey: .waitingFor)  // a kind not known yet: unsaid
+        // A kind not known yet is left unsaid.
+        waitingFor = (try? container.decodeIfPresent(AskKind.self, forKey: .waitingFor)).flatMap { $0 == .other ? nil : $0 }
     }
 
     /// Python's `isoformat()`: "2026-10-07T15:58:18.123456+00:00", the fraction only when there is one.
@@ -115,17 +116,121 @@ public struct ChatMessage: Codable, Equatable, Sendable {
     }
 }
 
-public enum AskKind: String, Codable, Sendable { case question, approval, handoff }
+public enum AskKind: String, Codable, Sendable {
+    /// `connect`: Monty needs an app or MCP server connected (`Ask.integration` says which). `other`: a kind this app
+    /// doesn't know yet, shown as a card that sends the user to the web app rather than making the chat unreadable.
+    case question, approval, handoff, connect, other
+
+    public init(from decoder: Decoder) throws {
+        self = AskKind(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .other
+    }
+}
 
 public struct Ask: Codable, Equatable, Identifiable, Sendable {
     public let id: String
     public let kind: AskKind
     public let prompt: String
+    /// For a `connect` ask, what to connect.
+    public let integration: Offer?
 
-    public init(id: String, kind: AskKind, prompt: String) {
+    public init(id: String, kind: AskKind, prompt: String, integration: Offer? = nil) {
         self.id = id
         self.kind = kind
         self.prompt = prompt
+        self.integration = integration
+    }
+}
+
+// MARK: integrations: apps through Composio, and the user's own MCP servers
+
+/// What a chat asks the user to connect: an app (`composio`, `key` its slug), their own server to sign in to again
+/// (`mcp` with `serverId`), or (`mcp` without one) an MCP server for a service no app is offered for.
+public struct Offer: Codable, Equatable, Sendable {
+    public let provider: String
+    public let key: String
+    public let name: String
+    public let logo: String
+    public let serverId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case provider, key, name, logo
+        case serverId = "server_id"
+    }
+
+    public init(provider: String, key: String, name: String, logo: String = "", serverId: String? = nil) {
+        self.provider = provider
+        self.key = key
+        self.name = name
+        self.logo = logo
+        self.serverId = serverId
+    }
+
+    public var isApp: Bool { provider == "composio" }
+}
+
+/// One of the user's connections.
+public struct Connection: Codable, Equatable, Identifiable, Sendable {
+    /// What removing it names: Composio's account id, or the server's id.
+    public let id: String
+    /// What Monty calls it: "linear", "mcp:notes".
+    public let key: String
+    /// `composio` or `mcp`.
+    public let provider: String
+    public let name: String
+    /// The app's description, or the server's host.
+    public let detail: String
+    public let logo: String
+    /// `connected`, `needs_sign_in` or `broken`.
+    public let state: String
+
+    public var isApp: Bool { provider == "composio" }
+    public var isConnected: Bool { state == "connected" }
+}
+
+public struct Integrations: Codable, Equatable, Sendable {
+    /// Whether this server connects apps at all (it has a Composio key).
+    public let appsAvailable: Bool
+    public let connections: [Connection]
+
+    enum CodingKeys: String, CodingKey {
+        case connections
+        case appsAvailable = "apps_available"
+    }
+
+    public init(appsAvailable: Bool, connections: [Connection]) {
+        self.appsAvailable = appsAvailable
+        self.connections = connections
+    }
+}
+
+/// An app the user can connect in one click.
+public struct CatalogApp: Codable, Equatable, Identifiable, Sendable {
+    public let slug: String
+    public let name: String
+    public let logo: String
+    public let description: String
+    public let categories: [String]
+    public var id: String { slug }
+
+    /// Whether `query` is in its name, slug, description or categories.
+    public func matches(_ query: String) -> Bool {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        return query.isEmpty || ([name, slug, description] + categories).contains { $0.localizedCaseInsensitiveContains(query) }
+    }
+}
+
+public struct SignInLink: Codable, Equatable, Sendable {
+    public let url: String
+}
+
+public struct AddedServer: Codable, Equatable, Sendable {
+    public let connection: Connection
+    /// Where the user signs in, for a server with an OAuth sign-in; nil when it is ready.
+    public let signInUrl: String?
+
+    enum CodingKeys: String, CodingKey {
+        case connection
+        case signInUrl = "sign_in_url"
     }
 }
 

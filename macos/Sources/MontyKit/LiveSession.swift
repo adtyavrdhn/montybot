@@ -137,7 +137,7 @@ public final class LiveSession {
 
     /// What a browser's address bar makes of `typed`: an address as it is, a bare host ("walmart.com",
     /// "localhost:8000/x") over https, and anything else a web search. Nil for nothing at all.
-    public static func address(for typed: String) -> String? {
+    public nonisolated static func address(for typed: String) -> String? {
         let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
         let lower = text.lowercased()

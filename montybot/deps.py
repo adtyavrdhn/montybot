@@ -34,6 +34,14 @@ class Notified:
     done: bool = False
 
 
+@dataclass
+class Connected:
+    """The user's integrations, in words, as this run last looked them up (`montybot.integration_tools`); None to look
+    again. Set in workflow code from a step's recorded result, so a replay sees the same."""
+
+    text: str | None = None
+
+
 @dataclass(frozen=True)
 class RunDeps:
     resources: Resources
@@ -47,6 +55,7 @@ class RunDeps:
     asked: Asked = field(default_factory=Asked)
     code: CodeState = field(default_factory=CodeState)
     notified: Notified = field(default_factory=Notified)
+    connected: Connected = field(default_factory=Connected)
 
     @property
     def user_id(self) -> str:

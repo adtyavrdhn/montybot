@@ -29,6 +29,25 @@ Python (pandas, PDFs) runs through `run_python` in real CPython, in a bubblewrap
 Jev intent and navigation advice is disabled for now, even when `TYPESAFE_API_KEY` is set. The main agent handles
 these decisions directly. Experimental Jev helpers remain available in the source for later evaluation.
 
+## Integrations
+
+Users connect the services they use, and Monty works in them through three agent tools that never change
+(`montybot/integration_tools.py`): `list_integration_tools`, `call_integration_tool` (a tool that changes something
+asks the user first, as `commit` does) and `connect_integration`. When a request needs a service that is not
+connected ("yo what's on my linear"), the agent calls `connect_integration`, and the chat shows a card to connect it
+(an ask of kind `connect`); the run carries on once the sign-in finishes. Each user's connections are listed, added
+and removed on the Integrations page of the web and Mac apps.
+
+- **Apps through Composio** (`montybot/integrations/composio.py`): set `COMPOSIO_API_KEY` and every app with
+  Composio-managed OAuth (about 120: Linear, GitHub, Gmail, Notion, Slack...) connects in one click. Monty makes its
+  own auth config per app (`montybot-<app>`) on first use. Each user is `COMPOSIO_USER_PREFIX` + their id in
+  Composio; Monty lists, uses and removes only accounts under that id, and runs each tool on the user's own account,
+  so a Composio project can be shared with other apps (give each its own prefix).
+- **The user's own MCP servers** (`montybot/integrations/mcp.py`, `oauth.py`): a streamable HTTP URL with a header,
+  or an OAuth sign-in (discovery, dynamic client registration, PKCE, refresh). The URL, headers and tokens are sealed
+  with the user's data key. Requests go to public addresses only, checked as each connection opens
+  (`montybot/integrations/egress.py`), and are never traced, as a server's URL can hold a key.
+
 ## Observability
 
 `LOGFIRE_TOKEN` is optional: without it, no telemetry is sent to Logfire. What is exported is decided per field in
@@ -43,7 +62,8 @@ these decisions directly. Experimental Jev helpers remain available in the sourc
 - **With `LOGFIRE_INCLUDE_CONTENT` (default on, for the demo):** messages, replies, instructions (with the user's
   memories), the agent's code, page snapshots, and exception messages and tracebacks. Turn it off before real users'
   data flows through.
-- **Never:** cookies and browser state, saved sign-ins, passwords typed in live view, session cookies, app secrets,
+- **Never:** cookies and browser state, saved sign-ins, integration credentials and MCP server URLs, passwords typed
+  in live view, session cookies, app secrets,
   hand-off ids and links, push subscription URLs. None reach the agent. HTTP server requests are not traced. Logfire's default scrubbing stays on as a backstop: it replaces values that mention a password,
   cookie, session and so on, including a sign-in page's snapshot.
 

@@ -34,6 +34,8 @@ class MockAPI:
     calls: list[tuple[str, str, object]] = field(default_factory=list)
     traceparents: dict[tuple[str, str], str] = field(default_factory=dict)  # (method, path): the last one sent
     exported: list[tuple[str, str]] = field(default_factory=list)  # (path, raw body) POSTed to /api/telemetry/v1
+    connections: list[dict[str, str]] = field(default_factory=list)
+    apps: list[dict[str, object]] = field(default_factory=list)
 
     def handle(self, route: Route) -> None:
         request = route.request
@@ -130,6 +132,23 @@ class MockAPI:
                 content_type='image/svg+xml',
             )
             return
+        elif path == '/api/integrations':
+            result = {'apps_available': bool(self.apps), 'connections': self.connections}
+        elif path == '/api/integrations/apps':
+            result = self.apps
+        elif path.startswith('/api/integrations/') and path.endswith(('/connect', '/sign-in')):
+            result = {'url': 'http://monty.test/mock-sign-in'}
+        elif path == '/api/integrations/servers' and method == 'POST':
+            assert isinstance(body, dict)
+            added = {'id': 'server', 'key': 'mcp:notes', 'provider': 'mcp', 'name': body['name'], 'detail':
+                     'notes.example.test', 'logo': '', 'state': 'connected'}  # fmt: skip
+            self.connections.append(added)
+            result, status = {'connection': added, 'sign_in_url': None}, 201
+        elif path.startswith('/api/integrations/') and method == 'DELETE':
+            self.connections = [c for c in self.connections if not path.endswith(f'/{c["id"]}')]
+        elif path == '/mock-sign-in':
+            route.fulfill(body='<html><body>Sign in to the app</body></html>', content_type='text/html')
+            return
         elif path == '/api/push/key':
             result = {'public_key': None}
         elif path == '/api/push/subscriptions':
@@ -150,6 +169,8 @@ def frontend() -> Iterator[tuple[Page, MockAPI]]:
         # Every request stays local, including accidental external assets.
         page.route('**/*', lambda route: route.abort())
         page.route('http://monty.test/**', mock.handle)
+        # A sign-in opens in a window of its own, which the page's routes do not cover.
+        page.context.route('http://monty.test/mock-sign-in', mock.handle)
         # A controllable SSE transport. Delivering callbacks after close deliberately
         # models an already queued event, so tests exercise the view/run guards.
         page.add_init_script("""
@@ -1009,3 +1030,132 @@ def test_telemetry_leaves_the_chat_list_refresh_out(frontend: tuple[Page, MockAP
     assert ('GET', '/api/threads') not in mock.traceparents
     page.evaluate('loadThreads()')  # the user's own, such as after sending: traced
     assert mock.traceparents[('GET', '/api/threads')]
+
+
+LINEAR = {'provider': 'composio', 'key': 'linear', 'name': 'Linear', 'logo': ''}
+
+
+def signed_in_window(popup: Page) -> Page:
+    """The window a sign-in opened, once it is at the sign-in page."""
+    popup.wait_for_url('http://monty.test/mock-sign-in')
+    expect(popup.locator('body')).to_have_text('Sign in to the app')
+    return popup
+
+
+def connect_chat(page: Page, mock: MockAPI, integration: dict[str, str]) -> None:
+    mock.signed_in = True
+    mock.messages = [{'role': 'user', 'text': "yo what's on my linear"}]
+    mock.run = {
+        'id': 'run',
+        'status': 'waiting',
+        'activity': [],
+        'ask': {'id': 'ask', 'kind': 'connect', 'prompt': 'Connect Linear so I can look up your issues.',
+                'integration': integration},
+    }  # fmt: skip
+    page.goto(f'http://monty.test/#/t/{THREAD}')
+    expect(page.locator('#ask')).to_contain_text('Connect Linear so I can look up your issues.')
+
+
+@pytest.mark.parametrize('connected', [True, False])
+def test_a_chat_asks_to_connect_an_app(frontend: tuple[Page, MockAPI], connected: bool) -> None:
+    page, mock = frontend
+    connect_chat(page, mock, LINEAR)
+    expect(page.locator('#ask .connect-head')).to_have_text('LConnect Linear')  # its letter while there is no logo
+    expect(page.get_by_role('button', name="I've connected it")).to_be_hidden()
+    if connected:
+        with page.expect_popup() as opened:
+            page.get_by_role('button', name='Connect Linear').click()
+        popup = signed_in_window(opened.value)
+        assert popup.evaluate('window.opener') is None  # the sign-in pages cannot reach the app
+        assert ('POST', '/api/integrations/apps/linear/connect', {}) in mock.calls
+        expect(page.locator('#ask')).to_contain_text('Finish signing in to Linear in the window that opened.')
+        page.get_by_role('button', name="I've connected it").click()
+    else:
+        page.get_by_role('button', name='Not now').click()
+    assert ('POST', '/api/asks/ask', {'connected': connected}) in mock.calls
+    expect(page.locator('#ask')).to_be_hidden()
+
+
+def test_a_service_without_an_app_offers_an_mcp_server(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    connect_chat(page, mock, {'provider': 'mcp', 'key': '', 'name': 'Acme Wiki', 'logo': ''})
+    expect(page.locator('#ask')).to_contain_text("Acme Wiki isn't one of the apps Monty connects in one click")
+    page.get_by_role('button', name='Add an MCP server').click()
+    expect(page.locator('#integrations')).to_be_visible()
+    expect(page.locator('#server-name')).to_have_value('Acme Wiki')
+
+
+@pytest.mark.parametrize('width', [1440, 390])
+def test_integrations_page(frontend: tuple[Page, MockAPI], width: int) -> None:
+    page, mock = frontend
+    page.set_viewport_size({'width': width, 'height': 900})
+    mock.connections = [
+        {'id': 'ca_1', 'key': 'linear', 'provider': 'composio', 'name': 'Linear', 'detail': 'Issue tracking',
+         'logo': '', 'state': 'connected'},
+        {'id': 'srv', 'key': 'mcp:wiki', 'provider': 'mcp', 'name': 'Wiki', 'detail': 'wiki.example.test',
+         'logo': '', 'state': 'needs_sign_in'},
+    ]  # fmt: skip
+    mock.apps = [
+        {'slug': slug, 'name': name, 'logo': '', 'description': about, 'categories': []}
+        for slug, name, about in [('github', 'GitHub', 'Code hosting'), ('gmail', 'Gmail', 'Email'),
+                                  ('linear', 'Linear', 'Issue tracking')]
+    ]  # fmt: skip
+    workspace(page, mock)
+    page.goto('http://monty.test/#/integrations')
+    expect(page.locator('#integrations-title')).to_be_focused()
+    expect(page.locator('#connection-list li')).to_have_count(2)
+    expect(page.locator('#connection-list')).to_contain_text('Needs you to sign in')
+    expect(page.locator('.app-card')).to_have_count(3)
+    expect(page.locator('.app-card', has_text='Linear')).to_contain_text('Connected')  # no second Connect
+    no_overflow(page)
+
+    page.fill('#app-search', 'mail')
+    expect(page.locator('.app-card')).to_have_count(1)
+    with page.expect_popup() as opened:
+        page.locator('.app-card', has_text='Gmail').get_by_role('button', name='Connect').click()
+    assert signed_in_window(opened.value).evaluate('window.opener') is None
+    assert ('POST', '/api/integrations/apps/gmail/connect', {}) in mock.calls
+    page.fill('#app-search', 'nothing like it')
+    expect(page.locator('#app-list')).to_contain_text('No app matches')
+
+    with page.expect_popup():
+        page.locator('#connection-list li', has_text='Wiki').get_by_role('button', name='Sign in').click()
+    assert ('POST', '/api/integrations/servers/srv/sign-in', {}) in mock.calls
+
+    page.fill('#server-name', 'Notes')
+    page.fill('#server-url', 'https://notes.example.test/mcp')
+    page.fill('#server-header-name', 'Authorization')
+    page.fill('#server-header-value', 'Bearer secret')
+    page.click('#add-server')
+    expect(page.locator('#integrations-status')).to_have_text('Notes is connected.')
+    assert ('POST', '/api/integrations/servers', {'name': 'Notes', 'url': 'https://notes.example.test/mcp',
+            'headers': {'Authorization': 'Bearer secret'}}) in mock.calls  # fmt: skip
+    expect(page.locator('#server-header-value')).to_have_value('')  # not left on screen
+
+    page.once('dialog', lambda dialog: dialog.accept())  # "Remove Linear? ..."
+    page.locator('#connection-list li', has_text='Linear').get_by_role('button', name='Remove').click()
+    expect(page.locator('#connection-list li')).to_have_count(2)
+    assert ('DELETE', '/api/integrations/apps/accounts/ca_1', None) in mock.calls
+
+    # A sign-in that finishes in its own window updates the page.
+    mock.connections[0]['state'] = 'connected'
+    page.evaluate("new BroadcastChannel('montybot-integrations').postMessage({ok: true})")
+    expect(page.locator('#connection-list')).not_to_contain_text('Needs you to sign in')
+
+
+def test_integration_addresses_are_route_templates_in_telemetry(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    workspace(page, mock)
+    routes = page.evaluate("""async () => {
+        const { routePath } = await import('/static/telemetry.js');
+        return ['/api/integrations', '/api/integrations/apps', '/api/integrations/apps/linear/connect',
+                '/api/integrations/apps/accounts/ca_OmfoGFIzpmEu',
+                '/api/integrations/servers/11111111-1111-1111-1111-111111111111/sign-in'].map(routePath);
+    }""")
+    assert routes == [
+        '/api/integrations',
+        '/api/integrations/apps',
+        '/api/integrations/apps/{app}/connect',
+        '/api/integrations/apps/accounts/{account_id}',
+        '/api/integrations/servers/{server_id}/sign-in',
+    ]

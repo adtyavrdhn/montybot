@@ -18,6 +18,8 @@ from montybot.code import code_tools
 from montybot.cpython import INSTRUCTIONS as CPYTHON_INSTRUCTIONS
 from montybot.cpython import cpython_tools
 from montybot.deps import RunDeps
+from montybot.integration_tools import INSTRUCTIONS as INTEGRATION_INSTRUCTIONS
+from montybot.integration_tools import connected_integrations, integration_tools
 from montybot.memory import memory_tools, recall
 from montybot.schedule_tools import INSTRUCTIONS as SCHEDULE_INSTRUCTIONS
 from montybot.schedule_tools import schedule_tools, scheduled_run
@@ -103,8 +105,10 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
             CODE_INSTRUCTIONS,
             CPYTHON_INSTRUCTIONS,
             SCHEDULE_INSTRUCTIONS,
+            INTEGRATION_INSTRUCTIONS,
             user_time,
             your_name,
+            connected_integrations,
             recall,
             scheduled_run,
         ],
@@ -115,6 +119,7 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
             user_tools,
             memory_tools,
             schedule_tools,
+            integration_tools,
         ],
         capabilities=[
             HandleDeferredToolCalls(handler=approvals.handle_approvals),
