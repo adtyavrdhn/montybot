@@ -52,13 +52,18 @@ class NewMessage(BaseModel):
     text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20_000)]
     timezone: str | None = Field(default=None, max_length=64)
     """The IANA time zone of the user's browser, such as `Europe/London`."""
+    squirrel_name: Annotated[str, StringConstraints(strip_whitespace=True, max_length=24)] | None = None
+    """What the user named their squirrel in the Mac app; empty to forget it. The web app sends none."""
 
 
-async def remember_timezone(connection: Any, user: User, timezone: str | None) -> None:
-    """Keep the time zone the user's browser reports, if it is a real one and has changed."""
-    if timezone is None or timezone == user.timezone or not schedules.is_timezone(timezone):
-        return
-    await store.set_timezone(connection, user.id, timezone)
+async def remember_about_user(connection: Any, user: User, message: NewMessage) -> None:
+    """Keep what the user's app reports along with the message, where it has changed: the time zone (if it is a
+    real one) and the squirrel's name."""
+    timezone = message.timezone
+    if timezone is not None and timezone != user.timezone and schedules.is_timezone(timezone):
+        await store.set_timezone(connection, user.id, timezone)
+    if message.squirrel_name is not None and message.squirrel_name != user.squirrel_name:
+        await store.set_squirrel_name(connection, user.id, message.squirrel_name)
 
 
 class ThreadChange(BaseModel):
@@ -195,7 +200,7 @@ async def create_thread(request: Request, user: User) -> Response:
     resources = resources_of(request)
     run_id = str(uuid.uuid4())
     async with resources.pool.connection() as connection, connection.transaction():
-        await remember_timezone(connection, user, body.timezone)
+        await remember_about_user(connection, user, body)
         thread = await store.create_thread(connection, user.id, body.text.splitlines()[0])
         await store.create_run(
             connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt=body.text, trigger='message'
@@ -213,7 +218,7 @@ async def add_message(request: Request, user: User) -> Response:
         thread = await store.get_thread(connection, user.id, request.path_params['thread_id'])
         if thread is None:
             return NOT_FOUND
-        await remember_timezone(connection, user, body.timezone)
+        await remember_about_user(connection, user, body)
         try:
             await store.create_run(
                 connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt=body.text, trigger='message'

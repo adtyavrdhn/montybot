@@ -92,6 +92,11 @@ def users_time(turn: Turn) -> ModelResponse:
     return say(next(line for line in turn.instructions.splitlines() if 'For the user it is now' in line))
 
 
+def own_name(turn: Turn) -> ModelResponse:
+    named = (line for line in turn.instructions.splitlines() if 'The user named you' in line)
+    return say(next(named, 'Nobody has named me yet.'))
+
+
 def favourite_colour(turn: Turn) -> ModelResponse:
     if not turn.called('ask_user'):
         return call('ask_user', question='What is your favourite colour?')
@@ -345,6 +350,7 @@ SCRIPTS: dict[str, Script] = {
     'Say hello': hello,
     'Ask me my favourite colour': favourite_colour,
     'What time is it for me': users_time,
+    'What is your name': own_name,
     'Order eggs from': order_eggs,
     'Find the three cheapest flights to Lisbon next Friday': cheapest_flights,
     'What is on offer today at': todays_offer,

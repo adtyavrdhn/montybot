@@ -21,6 +21,8 @@ class User:
     name: str
     timezone: str = 'UTC'
     """An IANA zone, as the user's browser last reported it."""
+    squirrel_name: str = ''
+    """What the user named their squirrel in the Mac app, which is what Monty answers to. Empty until they pick one."""
 
 
 @dataclass(frozen=True, kw_only=True)
