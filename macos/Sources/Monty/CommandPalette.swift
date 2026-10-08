@@ -149,11 +149,11 @@ struct CommandPalette: View {
                 items.append(Item(id: "edit", title: "Edit and send again", icon: "pencil") { chat.editLastTask() })
             }
             if chat.run != nil {
-                items.append(Item(id: "watch", title: chat.watching ? "Hide Monty's browser" : "Watch Monty's browser", icon: "macwindow", shortcut: "⇧⌘B") {
+                items.append(Item(id: "watch", title: chat.watching ? "Hide \(app.montyName)'s browser" : "Watch \(app.montyName)'s browser", icon: "macwindow", shortcut: "⇧⌘B") {
                     chat.watching.toggle()
                 })
                 items.append(Item(
-                    id: "expand", title: chat.browserExpanded ? "Back to the chat" : "Expand Monty's browser",
+                    id: "expand", title: chat.browserExpanded ? "Back to the chat" : "Expand \(app.montyName)'s browser",
                     icon: chat.browserExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
                     shortcut: "⇧⌘F"
                 ) { chat.browserExpanded.toggle() })

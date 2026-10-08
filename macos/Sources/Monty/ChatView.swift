@@ -37,16 +37,16 @@ struct ChatView: View {
                 }
                 if chat.run != nil {
                     Button { chat.watching.toggle() } label: {
-                        Label(chat.watching ? "Hide Monty's browser" : "Watch Monty's browser", systemImage: "macwindow")
+                        Label(chat.watching ? "Hide \(app.montyName)'s browser" : "Watch \(app.montyName)'s browser", systemImage: "macwindow")
                     }
-                    .help(chat.watching ? "Hide Monty's browser (⇧⌘B)" : "Watch Monty's browser (⇧⌘B)")
+                    .help(chat.watching ? "Hide \(app.montyName)'s browser (⇧⌘B)" : "Watch \(app.montyName)'s browser (⇧⌘B)")
                 }
                 if let thread = app.openThread {
                     Menu {
                         let isPinned = app.pinned.contains(thread.id)
                         Button(isPinned ? "Unpin" : "Pin to Top") { app.setPinned(thread, !isPinned) }
                         Button("Rename…") { app.renaming = thread }
-                        Button("Copy Monty's Last Reply") { copy(lastReply) }.disabled(lastReply == nil)
+                        Button("Copy \(app.montyName)'s Last Reply") { copy(lastReply) }.disabled(lastReply == nil)
                         Divider()
                         Button("Delete Chat…", role: .destructive) { app.deleting = thread }
                     } label: {
@@ -63,7 +63,7 @@ struct ChatView: View {
         .onExitCommand { if chat.watching { chat.watching = false } }  // esc closes Monty's browser beside the chat
         .onChange(of: chat.run?.status) { old, new in
             guard old?.isActive == true, let new, !new.isActive else { return }
-            let words = new == .done ? "Monty finished." : new == .failed ? "Monty couldn't finish this task." : "Task stopped."
+            let words = new == .done ? "\(app.montyName) finished." : new == .failed ? "\(app.montyName) couldn't finish this task." : "Task stopped."
             AccessibilityNotification.Announcement(words).post()
         }
     }
@@ -82,7 +82,7 @@ struct ChatView: View {
     }
 
     private var subtitle: String {
-        if let ask = chat.ask { return AppModel.headline(for: ask.kind) }
+        if let ask = chat.ask { return AppModel.headline(for: ask.kind, from: app.montyName) }
         if chat.isWorking { return chat.reconnecting ? "Connection lost. Reconnecting…" : "Working" }
         switch chat.run?.status {
         case .failed: return "Couldn't finish"
@@ -105,7 +105,7 @@ struct ChatView: View {
                                 EmptyState(
                                     icon: "text.bubble",
                                     title: "Nothing here yet",
-                                    text: "When a schedule runs, Monty reports here. You can also write to Monty below."
+                                    text: "When a schedule runs, \(app.montyName) reports here. You can also write to \(app.montyName) below."
                                 )
                             }
                             ForEach(Array(chat.shownMessages.enumerated()), id: \.offset) { index, message in
@@ -274,6 +274,7 @@ struct EmptyState<Actions: View>: View {
 // MARK: - messages
 
 struct MessageView: View {
+    @Environment(AppModel.self) private var app
     let message: ChatMessage
     var draft = false
     @State private var hovering = false
@@ -329,7 +330,7 @@ struct MessageView: View {
             .onHover { hovering = $0 }
             .contextMenu { if !draft { Button("Copy") { copy(message.text) } } }
             .accessibilityElement(children: .contain)
-            .accessibilityLabel(draft ? "Monty is writing" : "Monty said")
+            .accessibilityLabel(draft ? "\(app.montyName) is writing" : "\(app.montyName) said")
             .accessibilityAction(named: "Copy") { copy(message.text) }
         case .event:
             // What happened along the way (an approval, a takeover): a quiet line, not a message.
@@ -355,6 +356,7 @@ struct MessageView: View {
 
 /// What Monty did in this run, one line per step: live while it works, then folded under the reply.
 struct StepsView: View {
+    @Environment(AppModel.self) private var app
     let chat: ChatModel
     @State private var expanded = false
 
@@ -409,7 +411,7 @@ struct StepsView: View {
             // A button, so the keyboard reaches it too (with keyboard navigation on), not only the pointer.
             .wrappedInButton(enabled: expandable) { withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() } }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(working ? "Monty is working: \(chat.activity ?? "starting")" : "\(summary), what Monty did")
+            .accessibilityLabel(working ? "\(app.montyName) is working: \(chat.activity ?? "starting")" : "\(summary), what \(app.montyName) did")
             .accessibilityAddTraits(expandable ? .isButton : [])
             .accessibilityAction { if expandable { expanded.toggle() } }
             .accessibilityValue(expandable ? (expanded ? "Shown" : "Hidden") : "")
@@ -462,6 +464,7 @@ struct StepList: View {
 
 /// What Monty did for an earlier reply: folded, as "Worked for 1m 3s · 5 steps", to open.
 struct PastStepsView: View {
+    @Environment(AppModel.self) private var app
     let steps: PastSteps
     @State private var expanded = false
 
@@ -483,7 +486,7 @@ struct PastStepsView: View {
             .contentShape(Rectangle())
             .wrappedInButton(enabled: true) { withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() } }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(steps.summary), what Monty did")
+            .accessibilityLabel("\(steps.summary), what \(app.montyName) did")
             .accessibilityAddTraits(.isButton)
             .accessibilityValue(expanded ? "Shown" : "Hidden")
             .accessibilityAction { expanded.toggle() }
@@ -518,6 +521,7 @@ struct BoundedHeight<Content: View>: View {
 }
 
 struct AskCard: View {
+    @Environment(AppModel.self) private var app
     @Bindable var chat: ChatModel
     let ask: Ask
     @State private var reason = ""
@@ -529,7 +533,7 @@ struct AskCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Text(AppModel.headline(for: ask.kind))
+                Text(AppModel.headline(for: ask.kind, from: app.montyName))
                     .font(.system(size: 13, weight: .semibold))
                     .accessibilityAddTraits(.isHeader)
                     .accessibilityFocused($announced)
@@ -575,7 +579,7 @@ struct AskCard: View {
         case .approval:
             if chat.denying {
                 HStack(spacing: 8) {
-                    TextField("Why not?", text: $reason, prompt: Text("Tell Monty why not (optional)"))
+                    TextField("Why not?", text: $reason, prompt: Text("Tell \(app.montyName) why not (optional)"))
                         .labelsHidden()
                         .accessibilityLabel("Why not? Optional")
                         .focused($focus, equals: .reason)
@@ -604,15 +608,15 @@ struct AskCard: View {
                 }
                 .buttonStyle(.primary)
                 .disabled(chat.takingOver)
-                .accessibilityHint("Opens Monty's browser. VoiceOver reads the page; activating an item clicks it, and typing goes into the page. Shift-Command-T closes it, Command-Return hands it back.")
-                Text("You sign in on the page yourself, and Monty waits until you're done. Password managers can't fill it in: copy your password and paste it with ⌘V. Afterwards Monty stays signed in to this site; you can remove it in Saved sign-ins.")
+                .accessibilityHint("Opens \(app.montyName)'s browser. VoiceOver reads the page; activating an item clicks it, and typing goes into the page. Shift-Command-T closes it, Command-Return hands it back.")
+                Text("You sign in on the page yourself, and \(app.montyName) waits until you're done. Password managers can't fill it in: copy your password and paste it with ⌘V. Afterwards \(app.montyName) stays signed in to this site; you can remove it in Saved sign-ins.")
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.onSurfaceVariant)
             }
         case .connect:
             ConnectControls(chat: chat, ask: ask)
         case .other:
-            Text("This app can't show what Monty needs here yet. Answer it in Monty on the web.")
+            Text("This app can't show what \(app.montyName) needs here yet. Answer it in Monty on the web.")
                 .font(.system(size: 12))
                 .foregroundStyle(Palette.onSurfaceVariant)
         }
@@ -633,6 +637,7 @@ struct AskCard: View {
 /// for a service no app is offered for; and "Not now". The server hears when a sign-in finishes and the run carries
 /// on by itself; "I've connected it" is for when the browser never came back.
 struct ConnectControls: View {
+    @Environment(AppModel.self) private var app
     @Bindable var chat: ChatModel
     let ask: Ask
 
@@ -645,7 +650,7 @@ struct ConnectControls: View {
                 Text(canSignIn ? "Connect \(offer.name)" : "Add \(offer.name)").font(.system(size: 13, weight: .medium))
             }
             if chat.connectingAsk == ask.id {
-                Text("Finish signing in to \(offer.name) in your browser. Monty carries on when you have.")
+                Text("Finish signing in to \(offer.name) in your browser. \(app.montyName) carries on when you have.")
                     .font(.system(size: 12)).foregroundStyle(Palette.onSurfaceVariant)
             } else if !canSignIn {
                 Text("\(offer.name) isn't one of the apps Monty connects in one click. If it has an MCP server, add it in Integrations.")
@@ -668,6 +673,7 @@ struct ConnectControls: View {
 // MARK: - the composer
 
 struct Composer: View {
+    @Environment(AppModel.self) private var app
     @Bindable var chat: ChatModel
     var prominent = false
     @FocusState private var focused: Bool
@@ -683,9 +689,9 @@ struct Composer: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             HStack(alignment: .bottom, spacing: 8) {
-                TextField("Message Monty", text: $chat.draft, prompt: Text(placeholder).foregroundStyle(Palette.onSurfaceVariant), axis: .vertical)
+                TextField("Message \(app.montyName)", text: $chat.draft, prompt: Text(placeholder).foregroundStyle(Palette.onSurfaceVariant), axis: .vertical)
                     .labelsHidden()
-                    .accessibilityLabel("Message Monty")
+                    .accessibilityLabel("Message \(app.montyName)")
                     .accessibilityHint(placeholder)
                     .textFieldStyle(.plain)
                     .font(.system(size: prominent ? 15 : 14))
@@ -753,22 +759,23 @@ struct Composer: View {
     private var placeholder: String {
         if let ask = chat.ask {
             switch ask.kind {
-            case .question: return "Answer Monty's question above"
+            case .question: return "Answer \(app.montyName)'s question above"
             case .approval: return "Approve or decline above to carry on"
-            case .handoff: return "Monty is waiting for you to take over the browser"
-            case .connect: return "Monty is waiting for you to connect \(ask.integration?.name ?? "an app")"
-            case .other: return "Monty is waiting for you: answer in the web app"
+            case .handoff: return "\(app.montyName) is waiting for you to take over the browser"
+            case .connect: return "\(app.montyName) is waiting for you to connect \(ask.integration?.name ?? "an app")"
+            case .other: return "\(app.montyName) is waiting for you: answer in the web app"
             }
         }
         if chat.queued != nil { return "Your next message is queued. Stop the task, or wait." }
-        if chat.isActive { return "Monty is on it. Write your next message: ↩ queues it for when it's done." }
-        if chat.threadId == nil { return "Ask Monty to do something on the web…" }
-        return "Reply to Monty…"
+        if chat.isActive { return "\(app.montyName) is on it. Write your next message: ↩ queues it for when it's done." }
+        if chat.threadId == nil { return "Ask \(app.montyName) to do something on the web…" }
+        return "Reply to \(app.montyName)…"
     }
 }
 
 /// The message the user queued while Monty works: it goes when the task is done; Edit takes it back to the box.
 struct QueuedMessage: View {
+    @Environment(AppModel.self) private var app
     let text: String
     let edit: () -> Void
     let remove: () -> Void
@@ -777,7 +784,7 @@ struct QueuedMessage: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "clock.arrow.circlepath").accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Sends when Monty is done").font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.onSurfaceVariant)
+                Text("Sends when \(app.montyName) is done").font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.onSurfaceVariant)
                 Text(text).lineLimit(2).foregroundStyle(Palette.onSurface)
             }
             Spacer(minLength: 4)
@@ -793,7 +800,7 @@ struct QueuedMessage: View {
         .padding(.trailing, 4)
         .background(RoundedRectangle(cornerRadius: Metrics.radiusMedium).fill(Palette.containerHigh))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Queued message, sends when Monty is done: \(text)")
+        .accessibilityLabel("Queued message, sends when \(app.montyName) is done: \(text)")
     }
 }
 
@@ -830,6 +837,7 @@ struct NoticeBar: View {
 // MARK: - a new task
 
 struct NewTaskView: View {
+    @Environment(AppModel.self) private var app
     @Bindable var chat: ChatModel
 
     let suggestions: [(String, String, String)] = [
@@ -848,10 +856,10 @@ struct NewTaskView: View {
                 }
                 .padding(.leading, -42)
                 .padding(.bottom, -6)
-                Text("What should Monty do?")
+                Text("What should \(app.montyName) do?")
                     .font(.system(size: 22, weight: .semibold))
                     .accessibilityAddTraits(.isHeader)
-                Text("Monty works on the web in its own browser and asks when it needs you.")
+                Text("\(app.montyName) works on the web in its own browser and asks when it needs you.")
                     .font(.system(size: 14))
                     .foregroundStyle(Palette.onSurfaceVariant)
                     .padding(.top, 4)
@@ -865,7 +873,7 @@ struct NewTaskView: View {
                 .padding(.top, 16)
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Image(systemName: "lock").font(.system(size: 11)).accessibilityHidden(true)
-                    Text("Monty asks before it buys or sends anything, and you sign in to sites yourself.")
+                    Text("\(app.montyName) asks before it buys or sends anything, and you sign in to sites yourself.")
                 }
                 .font(.system(size: 12))
                 .foregroundStyle(Palette.onSurfaceVariant)
@@ -915,12 +923,13 @@ struct SuggestionRow: View {
 // MARK: - watching Monty's browser
 
 struct BrowserPanel: View {
+    @Environment(AppModel.self) private var app
     let chat: ChatModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                Text("Monty's browser").sectionLabel()
+                Text("\(app.montyName)'s browser").sectionLabel()
                 Spacer()
                 Text(chat.ask != nil ? "Paused: waiting for you" : "View only")
                     .font(.system(size: 12))
@@ -931,8 +940,8 @@ struct BrowserPanel: View {
                     Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 11, weight: .semibold))
                 }
                 .buttonStyle(IconButtonStyle(size: 24))
-                .help("Make Monty's browser fill the window (⇧⌘F)")
-                .accessibilityLabel("Expand Monty's browser")
+                .help("Make \(app.montyName)'s browser fill the window (⇧⌘F)")
+                .accessibilityLabel("Expand \(app.montyName)'s browser")
             }
             BrowserPicture(chat: chat)
                 .aspectRatio(16 / 10, contentMode: .fit)
@@ -949,7 +958,7 @@ struct BrowserPanel: View {
                 }
                 .buttonStyle(.primary)
                 .disabled(chat.takingOver)
-                Text("Monty is waiting for you to sign in on this page.")
+                Text("\(app.montyName) is waiting for you to sign in on this page.")
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.onSurfaceVariant)
             } else if let activity = chat.activity {
@@ -964,6 +973,7 @@ struct BrowserPanel: View {
 
 /// Monty's browser as it works, as the latest picture, or what is coming.
 struct BrowserPicture: View {
+    @Environment(AppModel.self) private var app
     let chat: ChatModel
 
     var body: some View {
@@ -975,11 +985,11 @@ struct BrowserPicture: View {
                     .interpolation(.high)
                     .aspectRatio(contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: Metrics.radius))
-                    .accessibilityLabel("Monty's browser as it works")
+                    .accessibilityLabel("\(app.montyName)'s browser as it works")
             } else {
                 VStack(spacing: 8) {
                     if chat.isWorking { MontyMark(mood: .working, size: 18) }
-                    Text(chat.isWorking ? "Waiting for Monty to open a page…" : "No picture yet")
+                    Text(chat.isWorking ? "Waiting for \(app.montyName) to open a page…" : "No picture yet")
                         .font(.system(size: 12))
                         .foregroundStyle(Palette.onSurfaceVariant)
                 }
@@ -992,6 +1002,7 @@ struct BrowserPicture: View {
 /// Monty's browser filling the window, to see what it does; view only. The Mac's full screen is a click (or ⌃⌘F)
 /// away, and leaving this view leaves full screen too if this view entered it.
 struct ExpandedBrowserView: View {
+    @Environment(AppModel.self) private var app
     let chat: ChatModel
     @State private var fullScreen = false
     @State private var enteredFullScreen = false
@@ -1000,7 +1011,7 @@ struct ExpandedBrowserView: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Monty's browser").font(.system(size: 13, weight: .semibold))
+                    Text("\(app.montyName)'s browser").font(.system(size: 13, weight: .semibold))
                     Text(chat.ask != nil ? "Paused: waiting for you" : chat.activity ?? "View only")
                         .font(.system(size: 12))
                         .foregroundStyle(Palette.onSurfaceVariant)

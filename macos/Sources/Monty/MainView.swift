@@ -146,7 +146,7 @@ struct Sidebar: View {
                 Section("Chats") { ForEach([150, 110, 170], id: \.self) { SkeletonRow(width: $0) } }
             } else if rest.isEmpty, pinned.isEmpty {
                 Section("Chats") {
-                    Text(search.isEmpty ? (needs.isEmpty ? "Your chats with Monty appear here." : "No other chats.") : "No chats match “\(search)”.")
+                    Text(search.isEmpty ? (needs.isEmpty ? "Your chats with \(app.montyName) appear here." : "No other chats.") : "No chats match “\(search)”.")
                         .font(.system(size: 12))
                         .foregroundStyle(Palette.onSurfaceVariant)
                         .selectionDisabled()
@@ -306,6 +306,7 @@ struct LibraryLink: View {
 /// A chat in the sidebar: its title, and a mark for what Monty is doing in it. On hover, a button to delete it, as
 /// Codex shows Archive.
 struct ThreadRow: View {
+    @Environment(AppModel.self) private var app
     let thread: ThreadSummary
     /// Finished while the user looked elsewhere: bold, with a dot, until they open it, as unread mail.
     var unseen = false
@@ -356,13 +357,13 @@ struct ThreadRow: View {
             switch thread.outcome {
             case _ where unseen:
                 Circle().fill(Palette.link).frame(width: 7, height: 7)
-                    .help(thread.outcome == .failed ? "Monty couldn't finish this task" : "Monty finished: you haven't seen it yet")
+                    .help(thread.outcome == .failed ? "\(app.montyName) couldn't finish this task" : "\(app.montyName) finished: you haven't seen it yet")
             case _ where hasDraft:
                 Image(systemName: "pencil.line").font(.system(size: 11)).foregroundStyle(Palette.onSurfaceVariant)
                     .help("You started a message here and haven't sent it")
             case .failed:
                 Image(systemName: "exclamationmark.circle").font(.system(size: 11)).foregroundStyle(Palette.onSurfaceVariant)
-                    .help("Monty couldn't finish this task")
+                    .help("\(app.montyName) couldn't finish this task")
             case .stopped:
                 Image(systemName: "stop.circle").font(.system(size: 11)).foregroundStyle(Palette.onSurfaceVariant)
                     .help("You stopped this task")
