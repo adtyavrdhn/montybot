@@ -77,6 +77,7 @@ struct MainView: View {
                 case .schedules: SchedulesView()
                 case .files: FilesView()
                 case .signIns: SavedSitesView()
+                case .integrations: IntegrationsView()
                 case .memory: MemoryView()
                 }
             }
@@ -185,6 +186,7 @@ struct Sidebar: View {
                     LibraryLink(title: "Schedules", icon: "calendar.badge.clock", route: .schedules)
                     LibraryLink(title: "Files", icon: "doc.on.doc", route: .files)
                     LibraryLink(title: "Saved sign-ins", icon: "key", route: .signIns)
+                    LibraryLink(title: "Integrations", icon: "puzzlepiece.extension", route: .integrations)
                     LibraryLink(title: "Memory", icon: "brain", route: .memory)
                 }
                 .padding(.horizontal, 10)
@@ -376,6 +378,8 @@ struct ThreadRow: View {
         case .question: "Question"
         case .approval: "Approval"
         case .handoff: "Browser"
+        case .connect: "Connect"
+        case .other: "Needs you"
         }
     }
 

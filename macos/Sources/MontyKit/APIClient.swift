@@ -49,11 +49,14 @@ public struct AnswerBody: Encodable, Equatable, Sendable {
     public var reason: String?
     public var done: Bool?
     public var note: String?
+    public var connected: Bool?
 
     public static func text(_ text: String) -> AnswerBody { AnswerBody(text: text) }
     public static func approve() -> AnswerBody { AnswerBody(approved: true) }
     public static func deny(_ reason: String) -> AnswerBody { AnswerBody(approved: false, reason: reason) }
     public static func handBack(note: String = "") -> AnswerBody { AnswerBody(done: true, note: note) }
+    /// A connect ask: true once they have connected it (the run checks for itself), false for not now.
+    public static func connected(_ connected: Bool) -> AnswerBody { AnswerBody(connected: connected) }
 }
 
 /// What a run's event stream says: the run's state (authoritative), or a provisional preview of the reply.
@@ -309,6 +312,49 @@ public final class APIClient: Sendable {
     }
 
     public func files() async throws -> FileList { try await send("GET", "/api/files") }
+
+    // MARK: integrations
+
+    public func integrations() async throws -> Integrations { try await send("GET", "/api/integrations") }
+
+    public func apps() async throws -> [CatalogApp] { try await send("GET", "/api/integrations/apps") }
+
+    /// Where the user signs in to the app, in their browser. The server hears when they have.
+    public func connect(app slug: String) async throws -> URL {
+        let link: SignInLink = try await send("POST", "/api/integrations/apps/\(Self.pathPart(slug))/connect", body: [String: String]())
+        return try Self.url(link.url)
+    }
+
+    public func disconnect(app account: String) async throws {
+        let _: Ok = try await send("DELETE", "/api/integrations/apps/accounts/\(Self.pathPart(account))")
+    }
+
+    /// Adds an MCP server; one with an OAuth sign-in comes back with where to sign in.
+    public func addServer(name: String, url: String, headers: [String: String]) async throws -> AddedServer {
+        struct Body: Encodable { let name: String, url: String, headers: [String: String] }
+        return try await send("POST", "/api/integrations/servers", body: Body(name: name, url: url, headers: headers))
+    }
+
+    public func signIn(server: String) async throws -> URL {
+        let link: SignInLink = try await send("POST", "/api/integrations/servers/\(server)/sign-in", body: [String: String]())
+        return try Self.url(link.url)
+    }
+
+    public func remove(server: String) async throws {
+        let _: Ok = try await send("DELETE", "/api/integrations/servers/\(server)")
+    }
+
+    private static func pathPart(_ text: String) -> String {
+        text.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(["/"])) ?? text
+    }
+
+    /// A sign-in address, only if it is http or https: anything else (`file:`, an app's scheme) is refused.
+    static func url(_ text: String) throws -> URL {
+        guard let url = URL(string: text), ["https", "http"].contains(url.scheme?.lowercased() ?? "") else {
+            throw APIError.unexpected("not a sign-in address")
+        }
+        return url
+    }
 
     /// A file from the workspace, and the name the server suggests saving it as.
     public func download(_ path: String) async throws -> (data: Data, name: String) {

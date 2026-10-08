@@ -64,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
         notifications?.setNotificationCategories([UNNotificationCategory(identifier: "question", actions: [reply], intentIdentifiers: [])])
         app.notify = { [weak self] notice in self?.post(notice) }
+        app.openInBrowser = { url in NSWorkspace.shared.open(url) }  // sign-ins happen in the user's own browser
         app.threadsChanged = { [weak self] in self?.updateBadge() }
         app.firstTaskSent = { [weak self] in self?.requestNotifications() }
         // Seen in the app: what Notification Center says about the chat is old news.
@@ -304,6 +305,7 @@ struct MontyCommands: Commands {
                 Button("Files") { show(.files) }.keyboardShortcut("2", modifiers: [.command, .shift])
                 Button("Saved Sign-ins") { show(.signIns) }.keyboardShortcut("3", modifiers: [.command, .shift])
                 Button("Memory") { show(.memory) }.keyboardShortcut("4", modifiers: [.command, .shift])
+                Button("Integrations") { show(.integrations) }.keyboardShortcut("5", modifiers: [.command, .shift])
             }
             .disabled(app.user == nil || app.isTakingOver)
             Divider()

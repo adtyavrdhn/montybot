@@ -213,6 +213,48 @@ import Testing
         #expect(threads.map(\.waitingFor) == [.approval, nil])  // a kind not known yet is left unsaid, not an error
     }
 
+    @Test func aChatWaitingForAnAppToBeConnected() throws {
+        let json = #"""
+        {"id": "t", "title": "Linear", "messages": [{"role": "user", "text": "yo what's on my linear"}],
+         "run": {"id": "r", "thread_id": "t", "status": "waiting", "activity": [],
+                 "ask": {"id": "a", "kind": "connect", "prompt": "Connect Linear so I can look up your issues.",
+                         "integration": {"provider": "composio", "key": "linear", "name": "Linear", "logo": "https://logos.composio.dev/api/linear"}}}}
+        """#
+        let ask = try #require(try JSONDecoder().decode(ThreadDetail.self, from: Data(json.utf8)).run?.ask)
+        #expect(ask.kind == .connect)
+        #expect(ask.integration == Offer(provider: "composio", key: "linear", name: "Linear", logo: "https://logos.composio.dev/api/linear"))
+        #expect(ask.integration?.isApp == true)
+        let server = #"{"id": "a", "kind": "connect", "prompt": "Sign in again", "integration": {"provider": "mcp", "key": "mcp:wiki", "name": "Wiki", "logo": "", "server_id": "s1"}}"#
+        #expect(try JSONDecoder().decode(Ask.self, from: Data(server.utf8)).integration?.serverId == "s1")
+        let list = #"[{"id": "a", "title": "Linear", "status": "waiting", "waiting_for": "connect"}]"#
+        #expect(try JSONDecoder().decode([ThreadSummary].self, from: Data(list.utf8)).map(\.waitingFor) == [.connect])
+    }
+
+    @Test func anAskOfAKindNotKnownYetDoesNotBreakTheChat() throws {
+        let json = #"{"id": "r", "thread_id": "t", "status": "waiting", "activity": [], "ask": {"id": "a", "kind": "something-new", "prompt": "?"}}"#
+        let run = try JSONDecoder().decode(Run.self, from: Data(json.utf8))
+        #expect(run.ask?.kind == .other && run.ask?.integration == nil)
+    }
+
+    @Test func integrations() throws {
+        let json = #"""
+        {"apps_available": true, "connections": [
+            {"id": "ca_1", "key": "linear", "provider": "composio", "name": "Linear", "detail": "Issue tracking", "logo": "", "state": "connected"},
+            {"id": "s1", "key": "mcp:wiki", "provider": "mcp", "name": "Wiki", "detail": "wiki.example.com", "logo": "", "state": "needs_sign_in"}]}
+        """#
+        let found = try JSONDecoder().decode(Integrations.self, from: Data(json.utf8))
+        #expect(found.appsAvailable)
+        #expect(found.connections.map { [$0.isApp, $0.isConnected] } == [[true, true], [false, false]])
+        let apps = try JSONDecoder().decode([CatalogApp].self, from: Data(#"[{"slug": "gmail", "name": "Gmail", "logo": "", "description": "Email from Google", "categories": ["email"]}]"#.utf8))
+        #expect(apps[0].matches("") && apps[0].matches("GMAIL") && apps[0].matches("google") && apps[0].matches("email"))
+        #expect(!apps[0].matches("linear"))
+        let added = try JSONDecoder().decode(AddedServer.self, from: Data(#"{"connection": {"id": "s2", "key": "mcp:notes", "provider": "mcp", "name": "Notes", "detail": "notes.example.com", "logo": "", "state": "needs_sign_in"}, "sign_in_url": "https://auth.example.com/authorize?x=1"}"#.utf8))
+        #expect(added.signInUrl == "https://auth.example.com/authorize?x=1" && added.connection.key == "mcp:notes")
+        // Answering a connect ask sends only what the server reads for it.
+        let body = try JSONSerialization.jsonObject(with: JSONEncoder().encode(AnswerBody.connected(false))) as? [String: Bool]
+        #expect(body == ["connected": false])
+    }
+
     @Test func durationsReadAtAGlance() {
         #expect(spoken(0) == "0s" && spoken(12.9) == "12s" && spoken(63) == "1m 3s" && spoken(7500) == "2h 5m")
         #expect(spoken(-3) == "0s")  // a server clock a little ahead

@@ -26,6 +26,7 @@ from montybot.browser.tunnel import NOWHERE, Place, Tunnels
 from montybot.crypto import deployment_key
 from montybot.db import Pool, create_pool, migrate
 from montybot.imports import import_object
+from montybot.integrations import Integrations
 from montybot.settings import Settings
 from montybot.signins import PostgresJar, PostgresLease
 from montybot.workspaces import Workspaces
@@ -46,6 +47,7 @@ class Resources:
     workspaces: Workspaces
     tunnels: Tunnels | None = None
     """The users' Mac tunnels; None when `mac_tunnel` is off or the engine has no egress proxy to swap."""
+    integrations: Integrations
     # Retained for the experimental Jev helpers; production never constructs or calls this model.
     jev_model: Model | None = None
 
@@ -122,7 +124,9 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
     await migrate(settings.database_url)
     pool = create_pool(settings.database_url)
     await pool.open()
-    jar = PostgresJar(pool, deployment_key(settings.encryption_key.get_secret_value()))
+    key = deployment_key(settings.encryption_key.get_secret_value())
+    jar = PostgresJar(pool, key)
+    integrations = Integrations(pool, key, settings)
     # Runs of one user share the lease, and one browser in tabs, only on this server.
     lease = PostgresLease(pool, owner=settings.executor_id)
     new_backend = backend_factory(settings.browser_backend)
@@ -162,6 +166,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
             monty=monty,
             workspaces=Workspaces(settings.workspaces_dir),
             tunnels=tunnels,
+            integrations=integrations,
         )
         try:
             DBOS.launch()
@@ -171,4 +176,5 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
             _current = None
             if tunnels is not None:
                 await tunnels.aclose()
+            await integrations.aclose()
             await pool.close()

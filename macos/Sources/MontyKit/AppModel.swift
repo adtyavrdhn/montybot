@@ -8,6 +8,7 @@ public enum Route: Hashable, Sendable {
     case schedules
     case files
     case signIns
+    case integrations
     case memory
 
     /// The route as kept in settings, to come back to it at the next launch.
@@ -17,6 +18,7 @@ public enum Route: Hashable, Sendable {
         case .schedules: "schedules"
         case .files: "files"
         case .signIns: "signIns"
+        case .integrations: "integrations"
         case .memory: "memory"
         }
     }
@@ -26,6 +28,7 @@ public enum Route: Hashable, Sendable {
         case "schedules": self = .schedules
         case "files": self = .files
         case "signIns": self = .signIns
+        case "integrations": self = .integrations
         case "memory": self = .memory
         default:
             guard stored.hasPrefix("chat:") else { return nil }
@@ -43,7 +46,7 @@ public struct AnswerDraft: Equatable, Sendable {
 
 /// Something the user should hear about while they are not looking at it.
 public struct Notice: Equatable, Sendable {
-    public enum Kind: String, Sendable { case question, approval, handoff, finished }
+    public enum Kind: String, Sendable { case question, approval, handoff, connect, finished }
     public let kind: Kind
     public let threadId: String
     public let title: String
@@ -83,6 +86,15 @@ public final class AppModel {
     public private(set) var files: FileList?
     public private(set) var savedSites: [SavedSite]?
     public private(set) var memories: [Memory]?
+    public private(set) var integrations: Integrations?
+    /// Every app the user can connect in one click, once read: it changes rarely.
+    public private(set) var apps: [CatalogApp]?
+    /// A name for the add-server form, from a chat's "Add an MCP server".
+    public var serverName = ""
+    /// What adding an MCP server came to, or why it didn't work, for the form to say.
+    public var serverNote: ChatNotice?
+    /// Opens a sign-in page in the user's browser (set by the app; the server hears when they are done).
+    public var openInBrowser: (@MainActor (URL) -> Void)?
     public var libraryError: String?
 
     /// Monty's browser goes out to the web from this Mac, for tasks the user starts, while the app is open and signed
@@ -442,6 +454,9 @@ public final class AppModel {
         files = nil
         savedSites = nil
         memories = nil
+        integrations = nil
+        apps = nil
+        serverNote = nil
         route = .chat(nil)
         libraryError = nil
         threadsChanged?()
@@ -510,6 +525,7 @@ public final class AppModel {
         case .schedules: Task { await telemetry.action("open schedules") { _ in await loadSchedules() } }
         case .files: Task { await telemetry.action("open files") { _ in await loadFiles() } }
         case .signIns: Task { await telemetry.action("open saved sign-ins") { _ in await loadSavedSites() } }
+        case .integrations: Task { await telemetry.action("open integrations") { _ in await loadIntegrations() } }
         case .memory: Task { await telemetry.action("open memory") { _ in await loadMemories() } }
         }
     }
@@ -596,6 +612,7 @@ public final class AppModel {
         case .schedules: Task { await loadSchedules() }
         case .files: Task { await loadFiles() }
         case .signIns: Task { await loadSavedSites() }
+        case .integrations: Task { await loadIntegrations() }
         case .memory: Task { await loadMemories() }
         }
     }
@@ -744,7 +761,7 @@ public final class AppModel {
             if thread.status == .waiting, !looking {
                 guard let detail = try? await client.thread(thread.id) else { untold(thread, before); continue }
                 guard let ask = detail.run?.ask, notified.insert(ask.id).inserted else { continue }
-                let kind = Notice.Kind(rawValue: ask.kind.rawValue) ?? .question
+                let kind = Notice.Kind(rawValue: ask.kind.rawValue) ?? .approval  // a kind not known yet: no reply box
                 let notice = Notice(kind: kind, threadId: thread.id, title: Self.headline(for: ask.kind, from: montyName), body: ask.prompt, askId: ask.id)
                 notify(notice)
                 noticePosted(notice, run: detail.run?.id, ask: ask.id)
@@ -784,6 +801,8 @@ public final class AppModel {
         case .question: return "\(monty) has a question"
         case .approval: return "\(monty) needs your OK"
         case .handoff: return "\(monty) needs you in the browser"
+        case .connect: return "\(monty) needs an app connected"
+        case .other: return "\(monty) needs you"
         }
     }
 
@@ -938,6 +957,67 @@ public final class AppModel {
         if forgotten {
             memories?.removeAll { $0.id == memory.id }
         }
+    }
+
+    // MARK: integrations
+
+    public func loadIntegrations() async {
+        integrations = await library { try await self.client.integrations() } ?? integrations
+        if integrations?.appsAvailable == true, apps == nil {
+            apps = await library { try await self.client.apps() }
+        }
+    }
+
+    /// Opens where the user signs in to the app; the page updates when they come back to Monty.
+    public func connect(app slug: String) async {
+        let url = await telemetry.action("connect app", ["monty.app": .string(slug)]) { _ in
+            await library { try await self.client.connect(app: slug) }
+        }
+        if let url { openInBrowser?(url) }
+    }
+
+    /// Opens where the user signs in to their MCP server again.
+    public func signIn(server: String) async {
+        let url = await telemetry.action("sign in to mcp server") { _ in
+            await library { try await self.client.signIn(server: server) }
+        }
+        if let url { openInBrowser?(url) }
+    }
+
+    public func remove(_ connection: Connection) async {
+        let removed = await telemetry.action("remove integration", ["monty.integration.provider": .string(connection.provider)]) { _ in
+            await library {
+                if connection.isApp { try await self.client.disconnect(app: connection.id) } else { try await self.client.remove(server: connection.id) }
+            } != nil
+        }
+        if removed { await loadIntegrations() }
+    }
+
+    /// Adds the user's MCP server. True once the server has it; if it wants a sign-in, that opens in the browser.
+    /// The address and header are never in telemetry: either can hold a key.
+    public func addServer(name: String, url: String, header: String, value: String) async -> Bool {
+        let header = header.trimmingCharacters(in: .whitespaces)
+        let headers = header.isEmpty ? [:] : [header: value]
+        let added: AddedServer? = await telemetry.action("add mcp server", ["monty.with_header": .bool(!header.isEmpty)]) { _ in
+            do {
+                return try await self.client.addServer(name: name.trimmingCharacters(in: .whitespaces), url: url.trimmingCharacters(in: .whitespaces), headers: headers)
+            } catch APIError.signedOut {
+                self.sessionEnded()
+            } catch {
+                self.serverNote = .error(error.localizedDescription)
+            }
+            return nil
+        }
+        guard let added else { return false }
+        serverName = ""
+        if let link = added.signInUrl, let url = try? APIClient.url(link) {
+            serverNote = .info("Sign in to \(added.connection.name) in your browser to finish.")
+            openInBrowser?(url)
+        } else {
+            serverNote = .info("\(added.connection.name) is connected.")
+        }
+        await loadIntegrations()
+        return true
     }
 
     /// The file's name and path stay on the Mac; its size may go.

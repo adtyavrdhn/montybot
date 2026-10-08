@@ -262,11 +262,14 @@ public final class Telemetry: @unchecked Sendable {
         if path == "/live" || path.hasPrefix("/live/") || path.hasPrefix("live/") { return "/live/*" }
         var segments: [String] = []
         var previous = ""
+        let integrations = path.hasPrefix("/api/integrations/")
         for segment in path.split(separator: "/", omittingEmptySubsequences: false).map(String.init) {
             if previous == "sign-ins" { segments.append("{site}"); break }  // a site, then nothing that is not one
             if segment.isEmpty {
                 segments.append(segment)
             } else if let placeholder = placeholders[previous] {
+                segments.append(placeholder)
+            } else if integrations, segment != "accounts", let placeholder = integrationPlaceholders[previous] {
                 segments.append(placeholder)
             } else {
                 segments.append(isToken(segment) ? "{id}" : segment)
@@ -281,6 +284,9 @@ public final class Telemetry: @unchecked Sendable {
         "threads": "{thread_id}", "runs": "{run_id}", "asks": "{ask_id}", "schedules": "{schedule_id}",
         "memories": "{memory_id}",
     ]
+    /// Under /api/integrations/: the app after `apps` (but not the word `accounts`), and the ids after `accounts` and
+    /// `servers`. Composio's account ids look like words (`ca_OmfoGFIzpmEu`), so they are named, not guessed at.
+    static let integrationPlaceholders = ["apps": "{app}", "accounts": "{account_id}", "servers": "{server_id}"]
 
     /// Not one of the API's own words: a UUID, a number, something long with digits, or anything with a dot, `%` or `@`.
     static func isToken(_ segment: String) -> Bool {

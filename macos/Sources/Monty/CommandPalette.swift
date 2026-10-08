@@ -172,6 +172,7 @@ struct CommandPalette: View {
             Item(id: "files", title: "Files", icon: "doc.on.doc", shortcut: "⇧⌘2") { app.open(.files) },
             Item(id: "signins", title: "Saved sign-ins", icon: "key", shortcut: "⇧⌘3") { app.open(.signIns) },
             Item(id: "memory", title: "Memory", icon: "brain", shortcut: "⇧⌘4") { app.open(.memory) },
+            Item(id: "integrations", title: "Integrations", icon: "puzzlepiece.extension", shortcut: "⇧⌘5") { app.open(.integrations) },
             Item(id: "settings", title: "Settings…", icon: "gearshape", shortcut: "⌘,") {
                 NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
             },

@@ -20,6 +20,11 @@ import Testing
         #expect(Telemetry.route("/api/memories/\(thread)") == "/api/memories/{memory_id}")
         #expect(Telemetry.route("/api/sign-ins/shop.example.com") == "/api/sign-ins/{site}")
         #expect(Telemetry.route("/api/sign-ins/a%2Fb/c") == "/api/sign-ins/{site}")
+        #expect(Telemetry.route("/api/integrations") == "/api/integrations")
+        #expect(Telemetry.route("/api/integrations/apps") == "/api/integrations/apps")
+        #expect(Telemetry.route("/api/integrations/apps/linear/connect") == "/api/integrations/apps/{app}/connect")
+        #expect(Telemetry.route("/api/integrations/apps/accounts/ca_OmfoGFIzpmEu") == "/api/integrations/apps/accounts/{account_id}")
+        #expect(Telemetry.route("/api/integrations/servers/\(thread)/sign-in") == "/api/integrations/servers/{server_id}/sign-in")
     }
 
     @Test func noQueriesFragmentsOrTokens() {

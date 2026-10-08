@@ -51,6 +51,8 @@ public final class ChatModel {
     public var denying = false
     /// Answering the open question or approval failed (offline, the server's error): shown in its card.
     public var answerError: String?
+    /// The connect ask whose sign-in page the user opened: its card offers "I've connected it" now.
+    public private(set) var connectingAsk: String?
 
     public var draft: String {
         didSet { if !closed { app?.drafts[draftKey] = draft } }
@@ -483,12 +485,37 @@ public final class ChatModel {
 
     public func answer(_ body: AnswerBody) async {
         guard let ask, !answering, !closed else { return }
-        let name = body.approved == true ? "approve" : body.approved == false ? "deny" : body.done == true ? "hand back" : "answer question"
+        let name = body.approved == true ? "approve" : body.approved == false ? "deny" : body.done == true ? "hand back"
+            : body.connected == true ? "connected" : body.connected == false ? "not now" : "answer question"
         await telemetry.action(name, ids.merging(["monty.ask.kind": .string(ask.kind.rawValue)]) { $1 }) { span in
             span.content("monty.answer", body.text)
             span.content("monty.deny_reason", body.reason)
             span.content("monty.note", body.note)
             await answering(ask, body, span)
+        }
+    }
+
+    /// For a connect ask: opens where the user signs in, in their browser (the server hears when they are done, and
+    /// the run carries on). A service no app is offered for has nothing to sign in to: the Integrations page opens,
+    /// to add its MCP server.
+    public func connect() async {
+        guard let ask, ask.kind == .connect, let offer = ask.integration, let app else { return }
+        guard offer.isApp || offer.serverId != nil else {
+            app.serverName = offer.name
+            app.open(.integrations)
+            return
+        }
+        answerError = nil
+        await telemetry.action("connect", ids.merging(["monty.integration.provider": .string(offer.provider)]) { $1 }) { span in
+            do {
+                let url = offer.isApp ? try await client.connect(app: offer.key) : try await client.signIn(server: offer.serverId ?? "")
+                app.openInBrowser?(url)
+                connectingAsk = ask.id
+            } catch let error as APIError {
+                span.fail(error)
+                if error == .signedOut { app.sessionEnded(); return }
+                answerError = error.localizedDescription
+            } catch {}
         }
     }
 

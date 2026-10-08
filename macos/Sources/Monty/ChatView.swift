@@ -613,6 +613,12 @@ struct AskCard: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.onSurfaceVariant)
             }
+        case .connect:
+            ConnectControls(chat: chat, ask: ask)
+        case .other:
+            Text("This app can't show what \(app.montyName) needs here yet. Answer it in Monty on the web.")
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.onSurfaceVariant)
         }
     }
 
@@ -624,6 +630,43 @@ struct AskCard: View {
     private func deny() {
         let why = reason.trimmingCharacters(in: .whitespaces)
         Task { await chat.answer(.deny(why.isEmpty ? "The user said no." : why)) }
+    }
+}
+
+/// What a connect card offers: sign in to the app (or the user's own server) in the browser, or add an MCP server
+/// for a service no app is offered for; and "Not now". The server hears when a sign-in finishes and the run carries
+/// on by itself; "I've connected it" is for when the browser never came back.
+struct ConnectControls: View {
+    @Environment(AppModel.self) private var app
+    @Bindable var chat: ChatModel
+    let ask: Ask
+
+    var body: some View {
+        let offer = ask.integration ?? Offer(provider: "mcp", key: "", name: "the app")
+        let canSignIn = offer.isApp || offer.serverId != nil
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                AppLogo(url: offer.logo, name: offer.name, size: 28)
+                Text(canSignIn ? "Connect \(offer.name)" : "Add \(offer.name)").font(.system(size: 13, weight: .medium))
+            }
+            if chat.connectingAsk == ask.id {
+                Text("Finish signing in to \(offer.name) in your browser. \(app.montyName) carries on when you have.")
+                    .font(.system(size: 12)).foregroundStyle(Palette.onSurfaceVariant)
+            } else if !canSignIn {
+                Text("\(offer.name) isn't one of the apps Monty connects in one click. If it has an MCP server, add it in Integrations.")
+                    .font(.system(size: 12)).foregroundStyle(Palette.onSurfaceVariant)
+            }
+            HStack(spacing: 8) {
+                Button(canSignIn ? (offer.serverId == nil ? "Connect \(offer.name)" : "Sign in to \(offer.name)") : "Add an MCP server") {
+                    Task { await chat.connect() }
+                }
+                .buttonStyle(.primary)
+                if chat.connectingAsk == ask.id {
+                    Button("I've connected it") { Task { await chat.answer(.connected(true)) } }.buttonStyle(.outline)
+                }
+                Button("Not now") { Task { await chat.answer(.connected(false)) } }.buttonStyle(.ghost)
+            }
+        }
     }
 }
 
@@ -719,6 +762,8 @@ struct Composer: View {
             case .question: return "Answer \(app.montyName)'s question above"
             case .approval: return "Approve or decline above to carry on"
             case .handoff: return "\(app.montyName) is waiting for you to take over the browser"
+            case .connect: return "\(app.montyName) is waiting for you to connect \(ask.integration?.name ?? "an app")"
+            case .other: return "\(app.montyName) is waiting for you: answer in the web app"
             }
         }
         if chat.queued != nil { return "Your next message is queued. Stop the task, or wait." }
