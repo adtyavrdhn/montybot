@@ -221,21 +221,32 @@ h1, h2 { letter-spacing: -.045em; font-weight: 600; line-height: 1.15; }
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
 
-/* Integrations: connections, the apps to connect, and an MCP server of your own. */
-.section-title { font-size: 1.1rem; margin: 40px 0 0; letter-spacing: -.02em; }
+/* Integrations: one bordered list per kind of integration, a row each, as on Logfire's Connections page. */
 .app-logo { position: relative; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; background: var(--lavender); color: var(--accent); font-weight: 700; overflow: hidden; }
 .app-logo img { position: absolute; inset: 6px; width: 28px; height: 28px; object-fit: contain; background: var(--lavender); }
-.connection { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.connection > span:nth-child(2) { min-width: 0; }
+#integration-search { margin-top: 8px; }
+.group-title { display: block; font-size: .95rem; font-weight: 600; margin: 32px 0 10px; letter-spacing: -.01em; }
+.group-count { color: var(--muted); font-weight: 400; margin-left: 4px; }
+summary.group-title { display: list-item; cursor: pointer; }
+.page .integration-list { margin: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.page .integration-row { flex-wrap: nowrap; padding: 10px 14px; gap: 12px; border-bottom: 1px solid var(--line); overflow-wrap: normal; }
+.page .integration-row:last-child { border-bottom: 0; }
+.page .integration-row[hidden] { display: none; }
+.integration-about { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
+.integration-row .app-logo { width: 28px; height: 28px; border-radius: 7px; font-size: .85rem; }
+.integration-row .app-logo img { inset: 3px; width: 22px; height: 22px; }
+.integration-words { flex: 1; min-width: 0; }
+.integration-name { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+.integration-name strong { font-size: .92rem; }
+.integration-row.available .integration-name strong { color: var(--muted); }
+.integration-detail { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .8rem; }
+.page .integration-row .list-actions { flex-shrink: 0; flex-wrap: nowrap; width: auto; }
+.page .integration-row button { min-height: 36px; padding: .4em .9em; font-size: .82rem; }
 .badge.connected { background: #e3f3eb; color: var(--good); }
 .badge.needs_sign_in, .badge.broken { background: #fff0f4; color: var(--bad); }
-#app-search { margin-top: 16px; }
-.app-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin: 16px 0 8px; }
-.app-card { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); min-width: 0; }
-.app-card > span:nth-child(2) { flex: 1; min-width: 0; }
-.app-card strong { display: block; font-size: .92rem; }
-.app-card small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--muted); font-size: .76rem; line-height: 1.4; }
-.app-card button { flex-shrink: 0; font-size: .8rem; padding: .4em .8em; }
+#add-server-row { flex-wrap: wrap; }
+.server-panel { flex-basis: 100%; padding: 4px 0 6px 40px; }
+.server-panel > .muted { margin: 0; font-size: .85rem; }
 .server-form { max-width: 560px; margin-top: 8px; }
 .server-form label:first-child { margin-top: 0; }
 .header-fields { display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; }
@@ -250,7 +261,7 @@ body.returned { overflow: auto; display: flex; align-items: center; justify-cont
 .returned-card .monty-mark { margin-bottom: 16px; }
 @media (max-width: 600px) {
   .header-fields { grid-template-columns: 1fr; gap: 0; }
-  .app-grid { grid-template-columns: 1fr; }
+  .server-panel { padding-left: 0; }
 }
 
 /* Workspace paths may be long, especially on a phone. */

@@ -15,9 +15,9 @@ from sites.integrations import API_KEY, NOTES_TOKEN, Account, FakeComposio, Note
 
 from montybot import crypto, store
 from montybot.db import Pool, create_pool, migrate
-from montybot.integrations import Connection, Integrations, Offer, egress, mcp, oauth
+from montybot.integrations import Connection, Integrations, Offer, catalog, egress, mcp, oauth
 from montybot.integrations.base import IntegrationError
-from montybot.integrations.composio import Composio
+from montybot.integrations.composio import Composio, Toolkit
 from montybot.settings import Settings
 
 pytestmark = pytest.mark.anyio
@@ -174,6 +174,14 @@ async def test_the_service_the_model_names(pool: Pool, composio: FakeComposio, d
         assert await offered('GitHub') == Offer(
             provider='composio', key='github', name='GitHub', logo='https://logos.composio.dev/api/github'
         )
+        # A listed MCP server: added and signed in to in one click.
+        assert await offered('PostHog') == Offer(
+            provider='mcp',
+            key='posthog',
+            name='PostHog',
+            logo='https://logos.composio.dev/api/posthog',
+            url='https://mcp.posthog.com/mcp',
+        )
         # Not an app Composio signs users in to, or nothing like one: their own MCP server.
         assert await offered('Acme CRM') == Offer(provider='mcp', key='', name='Acme CRM')
         assert await offered('Li') == Offer(provider='mcp', key='', name='Li')
@@ -188,6 +196,67 @@ async def test_the_service_the_model_names(pool: Pool, composio: FakeComposio, d
         assert isinstance(found, Connection) and (found.key, found.state) == ('mcp:acme-crm', 'connected')
     finally:
         await integrations.aclose()
+
+
+def app(slug: str, name: str) -> Toolkit:
+    return Toolkit(
+        slug=slug, name=name, logo=f'https://logos.example/{slug}', description=f'{name} things', categories=('x',)
+    )
+
+
+def test_the_page_lists_the_featured_by_kind_then_every_other_app() -> None:
+    apps = {
+        a.slug: a
+        for a in [
+            app('zoom', 'Zoom'),
+            app('gmail', 'Gmail'),
+            app('airtable', 'Airtable'),
+            app('slack', 'Slack'),
+            app('linear', 'Linear'),
+        ]
+    }
+    listed = catalog.entries(apps)
+    # Featured by kind (chat, issues, email, analytics), apps only where Composio has them; then the rest by name.
+    assert [(e['key'], e['kind'], e['featured']) for e in listed] == [
+        ('slack', 'chat', True),
+        ('linear', 'issues', True),
+        ('gmail', 'email', True),
+        ('posthog', 'analytics', True),
+        ('airtable', None, False),
+        ('zoom', None, False),
+    ]
+    assert listed[0] == {
+        'key': 'slack',
+        'slug': 'slack',
+        'name': 'Slack',
+        'logo': 'https://logos.example/slack',
+        'description': 'Slack things',
+        'categories': ['x'],
+        'kind': 'chat',
+        'kind_label': 'Chat',
+        'featured': True,
+        'provider': 'composio',
+        'url': None,
+        'host': None,
+    }
+    # Without Composio: only the MCP servers.
+    [posthog] = catalog.entries({})
+    assert (posthog['key'], posthog['provider'], posthog['url'], posthog['host'], posthog['kind_label']) == (
+        'posthog',
+        'mcp',
+        'https://mcp.posthog.com/mcp',
+        'mcp.posthog.com',
+        'Analytics and monitoring',
+    )
+    assert posthog['logo'] == 'https://logos.composio.dev/api/posthog' and posthog['description']
+
+
+def test_a_named_service_with_a_listed_mcp_server() -> None:
+    for name in ('PostHog', 'posthog events'):
+        preset = catalog.mcp_preset(name)
+        assert preset is not None and (preset.key, preset.url) == ('posthog', 'https://mcp.posthog.com/mcp')
+    assert catalog.mcp_preset('Linear') is None  # through Composio
+    assert catalog.mcp_preset('Acme CRM') is None
 
 
 def test_a_blank_composio_key_means_no_composio(database_url: str) -> None:

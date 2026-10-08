@@ -120,31 +120,47 @@
           <button class="secondary back">Back to chat</button>
           <div class="page-heading"><span class="page-symbol" aria-hidden="true">⌁</span><h2 id="integrations-title" tabindex="-1">Integrations</h2></div>
           <p class="muted">Connect the apps you use, and Monty can work in them for you. It asks before it changes anything.</p>
+          <label for="integration-search" class="sr-only">Search integrations</label>
+          <input id="integration-search" type="search" placeholder="Search integrations…" autocomplete="off">
           <p id="integrations-status" role="status"></p>
-          <h3 class="section-title">Connected</h3>
-          <ul id="connection-list" aria-label="Your connections"></ul>
-          <div id="apps-section" hidden>
-            <h3 class="section-title">Apps</h3>
-            <label for="app-search" class="sr-only">Search apps</label>
-            <input id="app-search" type="search" placeholder="Search apps: Linear, GitHub, Gmail…" autocomplete="off">
-            <div id="app-list" class="app-grid" aria-label="Apps you can connect"></div>
-          </div>
-          <h3 class="section-title">Add an MCP server</h3>
-          <p class="muted">Any MCP server that speaks streamable HTTP. Leave the header empty if it signs you in itself.</p>
-          <form id="server-form" class="server-form">
-            <label for="server-name">Name</label>
-            <input id="server-name" maxlength="60" placeholder="My notes" required>
-            <label for="server-url">Server address</label>
-            <input id="server-url" type="url" maxlength="2000" placeholder="https://example.com/mcp" required>
-            <div class="header-fields">
-              <div><label for="server-header-name">Header (optional)</label>
-              <input id="server-header-name" maxlength="100" placeholder="Authorization" autocomplete="off"></div>
-              <div><label for="server-header-value">Value</label>
-              <input id="server-header-value" type="password" maxlength="4000" placeholder="Bearer …" autocomplete="off"></div>
-            </div>
-            <p id="server-error" class="error" role="alert"></p>
-            <button type="submit" id="add-server">Add server</button>
-          </form>
+          <div id="integration-groups"></div>
+          <p id="integration-empty" class="muted" hidden></p>
+          <section class="integration-group" aria-labelledby="custom-title">
+            <h3 id="custom-title" class="group-title">Custom <span id="custom-count" class="group-count"></span></h3>
+            <ul id="custom-list" class="integration-list" aria-labelledby="custom-title">
+              <li id="add-server-row" class="integration-row">
+                <span class="integration-about">
+                  <span class="app-logo" aria-hidden="true">+</span>
+                  <span class="integration-words">
+                    <span class="integration-name"><strong>Add a custom MCP server</strong></span>
+                    <span class="integration-detail" title="Any MCP server that speaks streamable HTTP.">Any MCP server that speaks streamable HTTP.</span>
+                  </span>
+                </span>
+                <span class="list-actions"><button id="show-server-form" type="button" class="secondary" aria-expanded="false" aria-controls="server-panel" aria-label="Add a custom MCP server">Add</button></span>
+                <div id="server-panel" class="server-panel" hidden>
+                  <p class="muted">Leave the header empty if the server signs you in itself.</p>
+                  <form id="server-form" class="server-form">
+                    <label for="server-name">Name</label>
+                    <input id="server-name" maxlength="60" placeholder="My notes" required>
+                    <label for="server-url">Server address</label>
+                    <input id="server-url" type="url" maxlength="2000" placeholder="https://example.com/mcp" required>
+                    <div class="header-fields">
+                      <div><label for="server-header-name">Header (optional)</label>
+                      <input id="server-header-name" maxlength="100" placeholder="Authorization" autocomplete="off"></div>
+                      <div><label for="server-header-value">Value</label>
+                      <input id="server-header-value" type="password" maxlength="4000" placeholder="Bearer …" autocomplete="off"></div>
+                    </div>
+                    <p id="server-error" class="error" role="alert"></p>
+                    <button type="submit" id="add-server">Add server</button>
+                  </form>
+                </div>
+              </li>
+            </ul>
+          </section>
+          <details id="more-apps" class="integration-group" hidden>
+            <summary class="group-title">More apps <span id="more-count" class="group-count"></span></summary>
+            <ul id="more-list" class="integration-list" aria-label="More apps"></ul>
+          </details>
         </div>
       </section>
       <section id="schedules" class="page" aria-labelledby="schedules-title" hidden>

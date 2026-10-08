@@ -105,7 +105,13 @@ def test_mentioning_linear_offers_to_connect_it_and_then_uses_it(client: Client,
 
     assert [(c['key'], c['provider'], c['state']) for c in connections(client)] == [('linear', 'composio', 'connected')]
     apps = client.http.get('/api/integrations/apps').json()
-    assert [a['slug'] for a in apps] == ['github', 'gmail', 'linear']  # by name; only one-click apps
+    # The featured ones by kind (code, issues, email, analytics): apps only where Composio has them, PostHog's own server.
+    assert [(a['key'], a['provider'], a['featured']) for a in apps] == [
+        ('github', 'composio', True),
+        ('linear', 'composio', True),
+        ('gmail', 'composio', True),
+        ('posthog', 'mcp', True),
+    ]
 
 
 def test_a_change_in_an_app_waits_for_approval(client: Client, composio: FakeComposio) -> None:

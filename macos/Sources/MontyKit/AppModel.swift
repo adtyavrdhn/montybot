@@ -87,7 +87,7 @@ public final class AppModel {
     public private(set) var savedSites: [SavedSite]?
     public private(set) var memories: [Memory]?
     public private(set) var integrations: Integrations?
-    /// Every app the user can connect in one click, once read: it changes rarely.
+    /// What the Integrations page lists (featured by kind, then every other app), once read: it changes rarely.
     public private(set) var apps: [CatalogApp]?
     /// A name for the add-server form, from a chat's "Add an MCP server".
     public var serverName = ""
@@ -963,7 +963,7 @@ public final class AppModel {
 
     public func loadIntegrations() async {
         integrations = await library { try await self.client.integrations() } ?? integrations
-        if integrations?.appsAvailable == true, apps == nil {
+        if integrations != nil, apps == nil {  // listed MCP servers (PostHog) are there without Composio too
             apps = await library { try await self.client.apps() }
         }
     }
@@ -998,9 +998,28 @@ public final class AppModel {
     public func addServer(name: String, url: String, header: String, value: String) async -> Bool {
         let header = header.trimmingCharacters(in: .whitespaces)
         let headers = header.isEmpty ? [:] : [header: value]
-        let added: AddedServer? = await telemetry.action("add mcp server", ["monty.with_header": .bool(!header.isEmpty)]) { _ in
+        let added = await addServer(
+            name: name.trimmingCharacters(in: .whitespaces), url: url.trimmingCharacters(in: .whitespaces), headers: headers,
+            ["monty.with_header": .bool(!header.isEmpty)]
+        )
+        guard added != nil else { return false }
+        serverName = ""
+        return true
+    }
+
+    /// Adds a known MCP server, such as PostHog's, as the user would by hand; its sign-in opens in the browser.
+    public func connect(preset: CatalogApp) async {
+        guard let url = preset.url else { return }
+        await addServer(name: preset.name, url: url, headers: [:], ["monty.preset": .string(preset.key)])
+    }
+
+    /// Adds an MCP server and opens its sign-in, if it wants one; `serverNote` says how that went (a name already
+    /// taken, say). The page reads itself again after.
+    @discardableResult
+    func addServer(name: String, url: String, headers: [String: String], _ attributes: [String: AttributeValue?]) async -> AddedServer? {
+        let added: AddedServer? = await telemetry.action("add mcp server", attributes) { _ in
             do {
-                return try await self.client.addServer(name: name.trimmingCharacters(in: .whitespaces), url: url.trimmingCharacters(in: .whitespaces), headers: headers)
+                return try await self.client.addServer(name: name, url: url, headers: headers)
             } catch APIError.signedOut {
                 self.sessionEnded()
             } catch {
@@ -1008,8 +1027,7 @@ public final class AppModel {
             }
             return nil
         }
-        guard let added else { return false }
-        serverName = ""
+        guard let added else { return nil }
         if let link = added.signInUrl, let url = try? APIClient.url(link) {
             serverNote = .info("Sign in to \(added.connection.name) in your browser to finish.")
             openInBrowser?(url)
@@ -1017,7 +1035,7 @@ public final class AppModel {
             serverNote = .info("\(added.connection.name) is connected.")
         }
         await loadIntegrations()
-        return true
+        return added
     }
 
     /// The file's name and path stay on the Mac; its size may go.
