@@ -11,6 +11,8 @@ Sources/Monty      the SwiftUI app: windows, sidebar, chat, takeover, library pa
                    (Logfire's design tokens)
 Tests              unit tests, and journeys: a person using the app's models against a real server
 scripts            dev_server.py, build-app.sh, make-icon.swift, tour.sh and ax-dump.swift
+Resources/Squirrel the mascot's loops (APNG), which build-app.sh copies into the app
+mascot             how those loops are made: a Meshy mesh painted, rigged and animated in Blender (`make mascot`)
 ```
 
 ## Run it
@@ -117,6 +119,10 @@ Decisions from review:
 - Reading further up a chat, it stays put while Monty writes, with a button back to the latest. Monty's browser
   beside the chat widens a narrow window to fit (or fills the window on a small screen) rather than squeeze both.
 - Monty's steps stay under its reply, folded; approvals and takeovers stay in the chat as one quiet line each.
+- Monty's squirrel (`MontySquirrel.swift`) sits by the composer and on the new-task screen, and reacts to the chat's
+  mood: a nod when it starts working, the typing dots while it works, a `?` when it needs you, a hop and a check when
+  it's done, and a slump when it fails. Small places (the toolbar, the sidebar, step rows) keep the prism, which reads
+  at 9pt where a squirrel can't.
 
 ## Not yet
 

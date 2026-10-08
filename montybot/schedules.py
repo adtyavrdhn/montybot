@@ -59,6 +59,11 @@ def check(cron: str, timezone: str) -> None:
         raise InvalidSchedule(f'{timezone!r} is not a known time zone')
 
 
+def next_run(schedule: Schedule, now: datetime) -> datetime:
+    """When the schedule fires next after `now`, in its own zone."""
+    return croniter(schedule.cron, now.astimezone(ZoneInfo(schedule.timezone))).get_next(datetime)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+
+
 def is_timezone(name: str) -> bool:
     """An IANA zone such as `Europe/London`."""
     try:

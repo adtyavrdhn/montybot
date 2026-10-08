@@ -486,6 +486,14 @@ public final class AppModel {
         return false
     }
 
+    /// The chats whose contents mention `query` (titles are matched here too, without asking); none if the server
+    /// can't say.
+    public func search(_ query: String) async -> Set<String> {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard query.count >= 2, let ids = try? await client.search(query) else { return [] }
+        return Set(ids)
+    }
+
     /// Marks a chat as not seen yet, to come back to it, as Mail's Mark as Unread.
     public func markUnread(_ thread: ThreadSummary) {
         unseen.insert(thread.id)

@@ -239,10 +239,13 @@ struct JourneyTests {
         await app.loadThreads()
         #expect(app.threads.contains { $0.id == schedule.threadId })  // a schedule reports in a chat of its own
 
+        let next = try #require(schedule.nextRun, "when it runs next")
+        #expect(next > .now && next < .now.addingTimeInterval(31 * 60))  // every 30 minutes
+
         await app.setPaused(schedule, true)
-        #expect(app.schedules?.first?.paused == true)
+        #expect(app.schedules?.first?.paused == true && app.schedules?.first?.nextRun == nil)  // paused: never next
         await app.setPaused(schedule, false)
-        #expect(app.schedules?.first?.paused == false)
+        #expect(app.schedules?.first?.paused == false && app.schedules?.first?.nextRun != nil)
         await app.delete(schedule)
         #expect(app.schedules == [])
         await app.loadSchedules()
@@ -730,6 +733,42 @@ struct JourneyTests {
         await app.delete(try #require(app.threads.first { $0.id == b }))
         app.goForward()
         #expect(app.route != .chat(b))  // gone: skipped
+    }
+
+    @Test func anEarlierReplyKeepsWhatMontyDid() async throws {
+        let app = try await person()
+        let chat = try await say("Find the three cheapest flights to Lisbon next Friday at \(try site("flights"))", in: app)
+        try await eventually("the first reply") { chat.run?.status == .done }
+        let browsed = chat.run?.activity ?? []
+        try #require(!browsed.isEmpty, "the scripted flights task opened no pages")
+        let reply = try #require(chat.messages.lastIndex { $0.role == .assistant })
+        chat.draft = "Say hello"
+        await chat.send()
+        try await eventually("the second reply") { chat.run?.status == .done && chat.messages.count > reply + 1 }
+
+        let id = try #require(chat.threadId)
+        app.open(.chat(nil))
+        app.open(.chat(id))  // read again from the server
+        let reopened = try #require(app.chat)
+        try await eventually("the chat to load") { reopened.messages.count == chat.messages.count }
+        let past = try #require(reopened.pastSteps[reply], "the first reply's steps")
+        #expect(past.activity == browsed)
+        #expect(past.summary.hasPrefix("Worked for "))
+    }
+
+    @Test func chatsAreFoundByWhatMontySaid() async throws {
+        let app = try await person()
+        let chat = try await say("Say hello", in: app)
+        try await eventually("the reply") { chat.run?.status == .done }
+        let reply = try #require(chat.messages.last { $0.role == .assistant }?.text)
+        // A word only the reply has: found by the task or the title, it would prove nothing about replies.
+        let asked = "say hello"
+        let word = try #require(
+            reply.split(whereSeparator: { !$0.isLetter }).map(String.init).first { $0.count >= 4 && !asked.contains($0.lowercased()) },
+            "a word only in: \(reply)"
+        )
+        #expect(await app.search(word).contains(try #require(chat.threadId)))
+        #expect(await app.search("zz-nothing-says-this-zz").isEmpty)
     }
 
     @Test func theChatListSaysWhatAChatWaitsFor() async throws {

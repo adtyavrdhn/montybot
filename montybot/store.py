@@ -516,6 +516,41 @@ async def list_activity(connection: Connection, user_id: str, run_id: str) -> li
     return [row['text'] for row in await cursor.fetchall()]
 
 
+async def last_scheduled_runs(connection: Connection, user_id: str) -> dict[str, Run]:
+    """The latest run each of the user's schedules started, by its thread id."""
+    cursor = await connection.execute(
+        f'SELECT DISTINCT ON (thread_id) {RUN_COLUMNS} FROM montybot.runs '
+        "WHERE user_id = %s AND trigger = 'schedule' ORDER BY thread_id, created_at DESC",
+        (user_id,),
+    )
+    return {str(row['thread_id']): run_from(row) for row in await cursor.fetchall()}
+
+
+async def search_threads(connection: Connection, user_id: str, query: str, limit: int = 50) -> list[str]:
+    """The user's threads whose title, a task or a reply has `query` in it (any case), latest first, by id."""
+    pattern = '%' + query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
+    cursor = await connection.execute(
+        'SELECT t.id FROM montybot.threads t LEFT JOIN montybot.runs r ON r.thread_id = t.id '
+        'WHERE t.user_id = %s AND (t.title ILIKE %s OR r.prompt ILIKE %s OR r.output ILIKE %s) '
+        'GROUP BY t.id ORDER BY max(coalesce(r.created_at, t.created_at)) DESC LIMIT %s',
+        (user_id, pattern, pattern, pattern, limit),
+    )
+    return [str(row['id']) for row in await cursor.fetchall()]
+
+
+async def list_thread_activity(connection: Connection, user_id: str, thread_id: str) -> dict[str, list[str]]:
+    """Every run's steps in a thread, by run id, oldest first."""
+    cursor = await connection.execute(
+        'SELECT a.run_id, a.text FROM montybot.activity a JOIN montybot.runs r ON r.id = a.run_id '
+        'WHERE r.thread_id = %s AND r.user_id = %s ORDER BY a.id',
+        (thread_id, user_id),
+    )
+    steps: dict[str, list[str]] = {}
+    for row in await cursor.fetchall():
+        steps.setdefault(str(row['run_id']), []).append(row['text'])
+    return steps
+
+
 # --- rows ---
 
 

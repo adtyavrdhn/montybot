@@ -101,8 +101,9 @@ struct ChatView: View {
                                     text: "When a schedule runs, Monty reports here. You can also write to Monty below."
                                 )
                             }
-                            ForEach(Array(chat.shownMessages.enumerated()), id: \.offset) { _, message in
+                            ForEach(Array(chat.shownMessages.enumerated()), id: \.offset) { index, message in
                                 MessageView(message: message).transition(.arrive)
+                                if let past = chat.pastSteps[index] { PastStepsView(steps: past) }
                             }
                             if let text = chat.preview?.text, !text.isEmpty, chat.isWorking {
                                 MessageView(message: ChatMessage(role: .assistant, text: text), draft: true)
@@ -167,29 +168,38 @@ struct ChatView: View {
                 .onChange(of: chat.ask?.id) { if atBottom { scrollToEnd(scroller) } else if chat.ask != nil { missed = true } }
                 .onChange(of: chat.preview?.text) { if atBottom { scroller.scrollTo("end", anchor: .bottom) } }
             }
-            // What Monty asks takes the message box's place, as in T3 Code: the user answers where they type.
-            Group {
-                if let ask = chat.ask {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let notice = chat.notice { NoticeBar(notice: notice) { chat.notice = nil } }
-                        AskCard(chat: chat, ask: ask)
-                            .id(ask.id)
+            HStack(alignment: .bottom, spacing: 2) {
+                // Monty keeps you company by the composer, reacting as the task goes. A new chat gets a fresh squirrel.
+                MontySquirrel(mood: mood, size: 112, layoutHeight: 52)
+                    .padding(.leading, -30)
+                    .padding(.trailing, -18)
+                    .padding(.bottom, -8)
+                    .id(chat.threadId)
+                // What Monty asks takes the message box's place, as in T3 Code: the user answers where they type.
+                Group {
+                    if let ask = chat.ask {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let notice = chat.notice { NoticeBar(notice: notice) { chat.notice = nil } }
+                            BoundedHeight {
+                                AskCard(chat: chat, ask: ask).id(ask.id)
+                            }
                             .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
-                        // What the user had written, or queued, stays in sight under the card, for after.
-                        if chat.queued != nil || !chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Composer(chat: chat)
+                            // What the user had written, or queued, stays in sight under the card, for after.
+                            if chat.queued != nil || !chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Composer(chat: chat)
+                            }
                         }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else {
+                        Composer(chat: chat).transition(.opacity)
                     }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                } else {
-                    Composer(chat: chat).transition(.opacity)
                 }
+                .motion(.spring(response: 0.38, dampingFraction: 0.88), value: chat.ask?.id)
             }
-            .motion(.spring(response: 0.38, dampingFraction: 0.88), value: chat.ask?.id)
-                .frame(maxWidth: Metrics.readingWidth)
-                .padding(.horizontal, Metrics.gutter)
-                .padding(.bottom, 16)
-                .frame(maxWidth: .infinity)
+            .frame(maxWidth: Metrics.readingWidth)
+            .padding(.horizontal, Metrics.gutter)
+            .padding(.bottom, 16)
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -398,31 +408,7 @@ struct StepsView: View {
             .accessibilityValue(expandable ? (expanded ? "Shown" : "Hidden") : "")
 
             if !shown.isEmpty {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(shown.enumerated()), id: \.offset) { index, step in
-                        let live = working && index == shown.count - 1
-                        HStack(alignment: .top, spacing: 10) {
-                            VStack(spacing: 0) {
-                                Circle()
-                                    .fill(live ? Palette.onSurfaceVariant : Palette.outlineHover)
-                                    .frame(width: 5, height: 5)
-                                    .padding(.top, 6)
-                                if index < shown.count - 1 { Rectangle().fill(Palette.outline).frame(width: 1).frame(maxHeight: .infinity) }
-                            }
-                            .frame(width: 6)
-                            .padding(.leading, 2)
-                            Text(step)
-                                .font(.mono(12))
-                                .foregroundStyle(live ? Palette.onSurface : Palette.onSurfaceVariant)
-                                .lineLimit(2)
-                                .padding(.bottom, index < shown.count - 1 ? 6 : 0)
-                            Spacer(minLength: 0)
-                        }
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .padding(.top, 6)
-                .transition(.opacity)
+                StepList(steps: shown, liveLast: working).padding(.top, 6).transition(.opacity)
             }
             if chat.reconnecting {
                 Text("Connection lost. Reconnecting…")
@@ -435,7 +421,94 @@ struct StepsView: View {
     }
 }
 
+/// Steps as a line down the side, oldest first; the last one stands out while Monty is on it.
+struct StepList: View {
+    let steps: [String]
+    var liveLast = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                let live = liveLast && index == steps.count - 1
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(spacing: 0) {
+                        Circle()
+                            .fill(live ? Palette.onSurfaceVariant : Palette.outlineHover)
+                            .frame(width: 5, height: 5)
+                            .padding(.top, 6)
+                        if index < steps.count - 1 { Rectangle().fill(Palette.outline).frame(width: 1).frame(maxHeight: .infinity) }
+                    }
+                    .frame(width: 6)
+                    .padding(.leading, 2)
+                    Text(step)
+                        .font(.mono(12))
+                        .foregroundStyle(live ? Palette.onSurface : Palette.onSurfaceVariant)
+                        .lineLimit(2)
+                        .padding(.bottom, index < steps.count - 1 ? 6 : 0)
+                    Spacer(minLength: 0)
+                }
+                .fixedSize(horizontal: false, vertical: true)  // inside the chat's scroll view: no window to stretch
+            }
+        }
+    }
+}
+
+/// What Monty did for an earlier reply: folded, as "Worked for 1m 3s · 5 steps", to open.
+struct PastStepsView: View {
+    let steps: PastSteps
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                    .motion(.spring(response: 0.3, dampingFraction: 0.8), value: expanded)
+                    .frame(width: 16, height: 18, alignment: .leading)
+                    .accessibilityHidden(true)
+                Text(steps.summary).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(Palette.onSurfaceVariant)
+            .frame(minHeight: 24)
+            .contentShape(Rectangle())
+            .wrappedInButton(enabled: true) { withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() } }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(steps.summary), what Monty did")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityValue(expanded ? "Shown" : "Hidden")
+            .accessibilityAction { expanded.toggle() }
+            if expanded {
+                StepList(steps: steps.steps).padding(.top, 6).transition(.opacity)
+            }
+        }
+    }
+}
+
 // MARK: - what Monty asks
+
+/// Its content at its own height, up to `limit`, and scrolling beyond: what sits under the chat can never ask for
+/// more height than the window has. (A card measured at the column's narrowest once claimed thousands of points, and
+/// the whole window was laid out taller than itself: an empty sidebar, an empty browser panel, the chat cut off.)
+struct BoundedHeight<Content: View>: View {
+    var limit: CGFloat = 320
+    @ViewBuilder let content: Content
+    @State private var height: CGFloat = 0
+
+    var body: some View {
+        ScrollView(.vertical) {
+            content
+                .padding(4)  // room for focus rings and the card's edge, which the scroll view would clip
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+        }
+        .padding(-4)
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollIndicators(.automatic)
+        .frame(height: min(height, limit))
+    }
+}
 
 struct AskCard: View {
     @Bindable var chat: ChatModel
@@ -528,7 +601,6 @@ struct AskCard: View {
                 Text("You sign in on the page yourself, and Monty waits until you're done. Password managers can't fill it in: copy your password and paste it with ⌘V. Afterwards Monty stays signed in to this site; you can remove it in Saved sign-ins.")
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.onSurfaceVariant)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -719,7 +791,7 @@ struct NewTaskView: View {
         VStack(spacing: 0) {
             Spacer()
             VStack(alignment: .leading, spacing: 0) {
-                MontyMark(mood: .idle, size: 34).padding(.leading, -12).padding(.bottom, 6)
+                MontySquirrel(mood: .idle, size: 168, layoutHeight: 120).padding(.leading, -42).padding(.bottom, -6)
                 Text("What should Monty do?")
                     .font(.system(size: 22, weight: .semibold))
                     .accessibilityAddTraits(.isHeader)
@@ -810,7 +882,21 @@ struct BrowserPanel: View {
                 .aspectRatio(16 / 10, contentMode: .fit)
                 .onTapGesture(count: 2) { chat.browserExpanded = true }
                 .help("Double-click to make it fill the window")
-            if let activity = chat.activity {
+            if chat.ask?.kind == .handoff {
+                // Monty is stopped at a sign-in: what the user came to the browser for is to do it.
+                Button { Task { await chat.takeOver() } } label: {
+                    HStack(spacing: 6) {
+                        if chat.takingOver { ProgressView().controlSize(.mini).tint(Palette.onLink) }
+                        Text("Take over the browser")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.primary)
+                .disabled(chat.takingOver)
+                Text("Monty is waiting for you to sign in on this page.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.onSurfaceVariant)
+            } else if let activity = chat.activity {
                 Text(activity).font(.mono(12)).foregroundStyle(Palette.onSurfaceVariant).lineLimit(2)
             }
             Spacer()

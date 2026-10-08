@@ -16,6 +16,7 @@ import secrets
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime
 from typing import Annotated, Any, TypeVar
 from urllib.parse import quote, urlsplit
 
@@ -226,6 +227,16 @@ async def add_message(request: Request, user: User) -> Response:
 
 
 @auth.signed_in
+async def search_threads(request: Request, user: User) -> Response:
+    """GET `?q=`. The ids of the user's threads whose title, tasks or replies mention `q`, latest first."""
+    query = request.query_params.get('q', '').strip()[:200]
+    if len(query) < 2:
+        return JSONResponse({'ids': []})
+    async with resources_of(request).pool.connection() as connection:
+        return JSONResponse({'ids': await store.search_threads(connection, user.id, query)})
+
+
+@auth.signed_in
 async def list_threads(request: Request, user: User) -> Response:
     """Each thread with the status of its unfinished run, if it has one: `running`, `waiting` (for the user) or
     `queued`; and otherwise how its latest run ended (`outcome`: `done`, `failed` or `stopped`); and when it last had
@@ -293,24 +304,40 @@ async def read_thread(request: Request, user: User) -> Response:
         runs = await store.list_runs(connection, user.id, thread.id)
         asks = await store.list_answered_asks(connection, user.id, thread.id)
         run_json = None if not runs else await run_view(connection, user, runs[-1])
-    messages = chat_messages(runs, asks)
-    return JSONResponse({'id': thread.id, 'title': thread.title, 'messages': messages, 'run': run_json})
+        activity = await store.list_thread_activity(connection, user.id, thread.id)
+    messages, replies = chat_messages(runs, asks)
+    # What Monty did for each earlier reply (the latest run's steps are in `run`): `after` is the reply's position in
+    # `messages`, where an app shows them folded.
+    steps = [
+        {
+            'after': replies[run.id],
+            'activity': activity[run.id],
+            'started_at': run.started_at.isoformat() if run.started_at else None,
+            'completed_at': run.completed_at.isoformat() if run.completed_at else None,
+        }
+        for run in runs[:-1]
+        if run.id in replies and activity.get(run.id)
+    ]
+    return JSONResponse({'id': thread.id, 'title': thread.title, 'messages': messages, 'run': run_json, 'steps': steps})
 
 
-def chat_messages(runs: list[Run], asks: list[Ask]) -> list[dict[str, str]]:
-    """The chat as the user sees it. Each run is their message, what Monty asked them and how they answered, and
-    Monty's reply once the run has finished. `event` lines record approvals and hand-offs."""
+def chat_messages(runs: list[Run], asks: list[Ask]) -> tuple[list[dict[str, str]], dict[str, int]]:
+    """The chat as the user sees it, and where each run's reply is in it, by run id. Each run is their message, what
+    Monty asked them and how they answered, and Monty's reply once the run has finished. `event` lines record
+    approvals and hand-offs."""
     asks_of_run: dict[str, list[Ask]] = {}
     for ask in asks:
         asks_of_run.setdefault(ask.run_id, []).append(ask)
     shown: list[dict[str, str]] = []
+    replies: dict[str, int] = {}
     for run in runs:
         shown.append({'role': 'user', 'text': run.prompt})
         for ask in asks_of_run.get(run.id, []):
             shown.extend(ask_messages(ask))
         if run.output:
+            replies[run.id] = len(shown)
             shown.append({'role': 'assistant', 'text': run.output})
-    return shown
+    return shown, replies
 
 
 def ask_messages(ask: Ask) -> list[dict[str, str]]:
@@ -654,8 +681,12 @@ async def forget_sign_in(request: Request, user: User) -> Response:
 
 @auth.signed_in
 async def list_schedules(request: Request, user: User) -> Response:
-    found = await schedules.list_for(resources_of(request).pool, user.id)
-    return JSONResponse([schedule_json(s, paused) for s, paused in found])
+    pool = resources_of(request).pool
+    found = await schedules.list_for(pool, user.id)
+    async with pool.connection() as connection:
+        last = await store.last_scheduled_runs(connection, user.id)
+    now = datetime.now(UTC)
+    return JSONResponse([schedule_json(s, paused, last.get(s.thread_id), now) for s, paused in found])
 
 
 @auth.signed_in
@@ -670,8 +701,13 @@ async def resume_schedule(request: Request, user: User) -> Response:
 
 async def set_paused(request: Request, user: User, paused: bool) -> Response:
     schedule_id = str(request.path_params['schedule_id'])
-    schedule = await schedules.set_paused(resources_of(request).pool, user.id, schedule_id, paused)
-    return NOT_FOUND if schedule is None else JSONResponse(schedule_json(schedule, paused))
+    pool = resources_of(request).pool
+    schedule = await schedules.set_paused(pool, user.id, schedule_id, paused)
+    if schedule is None:
+        return NOT_FOUND
+    async with pool.connection() as connection:
+        last = await store.last_scheduled_runs(connection, user.id)
+    return JSONResponse(schedule_json(schedule, paused, last.get(schedule.thread_id), datetime.now(UTC)))
 
 
 @auth.signed_in
@@ -760,7 +796,8 @@ def user_json(user: User) -> dict[str, str]:
     return {'id': user.id, 'email': user.email, 'name': user.name}
 
 
-def schedule_json(schedule: Schedule, paused: bool) -> dict[str, Any]:
+def schedule_json(schedule: Schedule, paused: bool, last: Run | None, now: datetime) -> dict[str, Any]:
+    """With when it runs next (none while paused) and how its latest run went."""
     return {
         'id': schedule.id,
         'name': schedule.name,
@@ -768,6 +805,9 @@ def schedule_json(schedule: Schedule, paused: bool) -> dict[str, Any]:
         'paused': paused,
         'watch': schedule.watch,
         'thread_id': schedule.thread_id,
+        'next_run_at': None if paused else schedules.next_run(schedule, now).isoformat(),
+        'last_run_at': last.started_at.isoformat() if last and last.started_at else None,
+        'last_status': last.status if last else None,
     }
 
 

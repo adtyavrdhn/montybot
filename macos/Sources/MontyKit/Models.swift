@@ -175,6 +175,44 @@ public struct ThreadDetail: Codable, Equatable, Sendable {
     public let title: String
     public let messages: [ChatMessage]
     public let run: Run?
+    /// What Monty did for each earlier reply (the latest run's steps are in `run`); older servers don't say.
+    public let steps: [PastSteps]?
+}
+
+/// The steps of an earlier run, shown folded under its reply: `after` is the reply's position in the messages.
+public struct PastSteps: Codable, Equatable, Sendable {
+    public let after: Int
+    public let activity: [String]
+    let startedAt: String?
+    let completedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case after, activity
+        case startedAt = "started_at"
+        case completedAt = "completed_at"
+    }
+
+    public init(after: Int, activity: [String]) {
+        self.after = after
+        self.activity = activity
+        startedAt = nil
+        completedAt = nil
+    }
+
+    /// The steps as a person reads them (pages of one site as one step).
+    public var steps: [String] { ChatModel.grouped(activity) }
+
+    /// "Worked for 1m 3s · 5 steps", or just the steps when the server doesn't say when.
+    public var summary: String {
+        let count = "\(steps.count) step\(steps.count == 1 ? "" : "s")"
+        guard let started = startedAt.flatMap(ThreadSummary.date), let completed = completedAt.flatMap(ThreadSummary.date)
+        else { return count }
+        return "Worked for \(spoken(completed.timeIntervalSince(started))) · \(count)"
+    }
+}
+
+struct SearchResult: Codable, Sendable {
+    let ids: [String]
 }
 
 public struct Created: Codable, Equatable, Sendable {
@@ -214,11 +252,34 @@ public struct Schedule: Codable, Equatable, Identifiable, Sendable {
     public let paused: Bool
     public let watch: Bool
     public let threadId: String
+    /// When it runs next (none while paused), when it last ran and how that went; older servers don't say.
+    let nextRunAt: String?
+    let lastRunAt: String?
+    public let lastStatus: RunStatus?
 
     enum CodingKeys: String, CodingKey {
         case id, name, when, paused, watch
         case threadId = "thread_id"
+        case nextRunAt = "next_run_at"
+        case lastRunAt = "last_run_at"
+        case lastStatus = "last_status"
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        when = try container.decode(String.self, forKey: .when)
+        paused = try container.decode(Bool.self, forKey: .paused)
+        watch = try container.decode(Bool.self, forKey: .watch)
+        threadId = try container.decode(String.self, forKey: .threadId)
+        nextRunAt = try container.decodeIfPresent(String.self, forKey: .nextRunAt)
+        lastRunAt = try container.decodeIfPresent(String.self, forKey: .lastRunAt)
+        lastStatus = try? container.decodeIfPresent(RunStatus.self, forKey: .lastStatus)  // a status not known yet: unsaid
+    }
+
+    public var nextRun: Date? { nextRunAt.flatMap(ThreadSummary.date) }
+    public var lastRun: Date? { lastRunAt.flatMap(ThreadSummary.date) }
 
     /// The schedule in words, without the cron line and time zone the server appends: "Mondays at 09:00".
     public var plainWhen: String {
@@ -228,8 +289,10 @@ public struct Schedule: Codable, Equatable, Identifiable, Sendable {
 
     /// The time zone the server appends, "Europe/London", or nil.
     public var timeZone: String? {
-        guard when.hasSuffix(")"), let comma = when.lastIndex(of: ",") else { return nil }
-        let zone = when[when.index(after: comma)...].dropLast().trimmingCharacters(in: .whitespaces)
+        // "(Europe/London)" from the server now; "(0 9 * * 1, Europe/London)" from older ones.
+        guard when.hasSuffix(")"), let open = when.lastIndex(of: "(") else { return nil }
+        let inside = when[when.index(after: open)...].dropLast()
+        let zone = (inside.split(separator: ",").last ?? inside).trimmingCharacters(in: .whitespaces)
         return zone.isEmpty ? nil : zone
     }
 }
@@ -277,5 +340,28 @@ extension String {
         let shortened = replacingOccurrences(of: #"https?://(www\.)?([^/\s?#]+)[^\s]*"#, with: "$2", options: .regularExpression)
         let trimmed = shortened.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Untitled" : trimmed
+    }
+}
+
+extension Schedule {
+    /// "Next: Mon 12 Oct at 09:00 · Last ran 2 hours ago", in this Mac's time; the last run said plainly if it failed.
+    public func times(now: Date = .now) -> (text: String, failed: Bool)? {
+        var parts: [String] = []
+        if let next = nextRun {
+            parts.append("Next: " + next.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()))
+        }
+        var failed = false
+        if let last = lastRun {
+            let ago = RelativeDateTimeFormatter().localizedString(for: last, relativeTo: now)
+            switch lastStatus {
+            case .failed: parts.append("Last run couldn't finish (\(ago))"); failed = true
+            case .stopped: parts.append("Last run stopped (\(ago))")
+            case .waiting: parts.append("Waiting for you since \(ago)")
+            case .queued: parts.append("About to run")
+            case .running: parts.append("Running now")
+            default: parts.append("Last ran \(ago)")
+            }
+        }
+        return parts.isEmpty ? nil : (parts.joined(separator: " · "), failed)
     }
 }

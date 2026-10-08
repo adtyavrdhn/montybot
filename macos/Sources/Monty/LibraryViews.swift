@@ -94,6 +94,11 @@ struct SchedulesView: View {
                     }
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.onSurfaceVariant)
+                    if let times = schedule.times() {
+                        Text(times.text)
+                            .font(.system(size: 11))
+                            .foregroundStyle(times.failed ? Palette.onWarningContainer : Palette.onSurfaceVariant)
+                    }
                 }
                 Spacer()
                 Menu {

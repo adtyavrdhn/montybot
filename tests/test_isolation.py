@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -15,7 +16,7 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 from montybot import crypto, memory, schedules, signins, store
 from montybot.browser.state import BrowserState, Cookie
 from montybot.db import Pool, create_pool, migrate
-from montybot.models import AskKind
+from montybot.models import AskKind, Schedule, Trigger
 from montybot.workspaces import WorkspaceFiles, Workspaces, save_download
 
 pytestmark = pytest.mark.anyio
@@ -413,3 +414,59 @@ async def test_the_chat_list_says_what_a_waiting_chat_waits_for(pool: Pool) -> N
         await store.set_run_status(connection, run_id, 'waiting')
         assert await store.waiting_for(connection, user.id) == {thread.id: 'approval'}
         assert await store.waiting_for(connection, other.id) == {}
+
+
+async def test_a_schedule_says_when_it_runs_next_and_how_it_last_went(pool: Pool) -> None:
+    """`last_scheduled_runs` has each thread's latest scheduled run, for its user only; `next_run` is in its zone."""
+    async with pool.connection() as connection:
+        user = await store.create_user(connection, 'sched-times@example.test', 'x')
+        other = await store.create_user(connection, 'other-sched-times@example.test', 'x')
+        assert user is not None and other is not None
+        thread = await store.create_thread(connection, user.id, 'slots')
+        runs: list[tuple[str, Trigger]] = [('first', 'schedule'), ('second', 'schedule'), ('by hand', 'message')]
+        for hours_ago, (prompt, trigger) in zip([3, 2, 1], runs, strict=True):
+            run_id = str(uuid.uuid4())
+            await store.create_run(
+                connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt=prompt, trigger=trigger
+            )
+            await store.finish_run(connection, run_id, 'done', output='ok')
+            await connection.execute(  # hours apart, as scheduled runs are
+                'UPDATE montybot.runs SET created_at = now() - make_interval(hours => %s) WHERE id = %s',
+                (hours_ago, run_id),
+            )
+        last = await store.last_scheduled_runs(connection, user.id)
+        assert last[thread.id].prompt == 'second'
+        assert await store.last_scheduled_runs(connection, other.id) == {}
+    weekly = Schedule(
+        id='s',
+        user_id=user.id,
+        thread_id=thread.id,
+        name='n',
+        cron='0 9 * * 1',
+        timezone='America/Toronto',
+        when='Mondays at 09:00',
+        prompt='p',
+        watch=False,
+    )
+    monday = schedules.next_run(weekly, datetime(2026, 10, 7, 23, 30, tzinfo=UTC))
+    assert monday.isoformat() == '2026-10-12T09:00:00-04:00'
+
+
+async def test_chats_are_found_by_what_was_said_in_them(pool: Pool) -> None:
+    """Search covers titles, tasks and replies, any case, for the user's own chats only; `%` is a character."""
+    async with pool.connection() as connection:
+        user = await store.create_user(connection, 'search@example.test', 'x')
+        other = await store.create_user(connection, 'other-search@example.test', 'x')
+        assert user is not None and other is not None
+        flights = await store.create_thread(connection, user.id, 'Trip')
+        run_id = str(uuid.uuid4())
+        await store.create_run(
+            connection, run_id=run_id, user_id=user.id, thread_id=flights.id, prompt='Find flights', trigger='message'
+        )
+        await store.finish_run(connection, run_id, 'done', output='The cheapest is Air Transat at CA$375, 100% sure.')
+        theirs = await store.create_thread(connection, other.id, 'Air Transat for them')
+        assert await store.search_threads(connection, user.id, 'air transat') == [flights.id]
+        assert await store.search_threads(connection, user.id, 'TRIP') == [flights.id]
+        assert await store.search_threads(connection, user.id, '100%') == [flights.id]
+        assert await store.search_threads(connection, user.id, '9%') == []  # not "9, then anything"
+        assert theirs.id in await store.search_threads(connection, other.id, 'transat')

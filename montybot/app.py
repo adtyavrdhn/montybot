@@ -47,6 +47,7 @@ def create_app(settings: Settings) -> ASGIApp:
             Route('/api/files', api.list_files),
             Route('/api/files/download', api.download_file, methods=['POST']),
             Route('/api/threads', api.list_threads),
+            Route('/api/search', api.search_threads),
             Route('/api/threads', api.create_thread, methods=['POST']),
             Route('/api/threads/{thread_id:uuid}', api.read_thread),
             Route('/api/threads/{thread_id:uuid}', api.rename_thread, methods=['PATCH']),
