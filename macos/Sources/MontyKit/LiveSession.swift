@@ -40,8 +40,12 @@ public final class LiveSession {
     /// The latest input the browser refused, in words; cleared after a few seconds.
     public private(set) var notice: String?
     public private(set) var givingBack = false
+    /// The browser has back, forward, reload, stop and opening and closing tabs; without them those buttons are off.
+    public private(set) var controls = false
 
     public var activeTab: LiveTab? { tabs.first(where: \.active) }
+    /// The user can drive now: connected, and not handing the browser back.
+    public var canDrive: Bool { state == .driving && !givingBack }
 
     private let request: URLRequest
     private let session: URLSession
@@ -128,6 +132,32 @@ public final class LiveSession {
     }
 
     public func switchTab(_ tab: LiveTab) { send(.switchTab(tab.id)) }
+
+    public func command(_ command: PageCommand) { input(.page(command)) }
+
+    public func newTab() { input(.newTab) }
+
+    /// Closes `tab`, unless it is the run's own: that one always stays, so there is never no tab.
+    public func close(_ tab: LiveTab) {
+        guard tab.closable else {
+            show("This is the task's own tab, so it stays open.")
+            return
+        }
+        input(.closeTab(tab.id))
+    }
+
+    /// Does a browser shortcut; the address bar's own (⌘L, and focusing it for ⌘T) are the view's.
+    public func perform(_ shortcut: BrowserShortcut) {
+        guard canDrive else { return }
+        switch shortcut {
+        case .page(let command): if controls { self.command(command) }
+        case .newTab: if controls { newTab() }
+        case .closeTab: if controls, let tab = activeTab { close(tab) }
+        case .editAddress: break
+        case .nextTab, .previousTab, .tab:
+            if let tab = BrowserShortcut.target(of: shortcut, in: tabs), !tab.active { switchTab(tab) }
+        }
+    }
 
     /// Opens what the user typed into the address bar in the active tab, as a browser's address bar does.
     public func go(to typed: String) {
@@ -250,8 +280,9 @@ public final class LiveSession {
 
     private func handle(_ message: LiveServerMessage) {
         switch message {
-        case .hello(_, let reason):
+        case .hello(_, let reason, let controls):
             self.reason = reason
+            self.controls = controls
             frame = nil  // a new connection numbers its frames from 1
             refreshOutline(after: 0)
         case .tabs(let tabs):

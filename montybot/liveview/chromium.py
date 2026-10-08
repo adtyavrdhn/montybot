@@ -6,6 +6,8 @@ events, the same as a real mouse and keyboard.
 
 The CDP session comes from Playwright (`BrowserContext.new_cdp_session`), so it travels over the pipe Playwright
 already holds, and no debugging port is opened. The Chromium backend (#11) returns one of these from `live_view()`.
+
+The backend works only in its own page, so the user may close any other tab or popup; the run's page stays open.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from playwright.async_api import CDPSession, Page
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Frame as PlaywrightFrame
 
+from montybot.browser.cdp_client import CDPParams
 from montybot.browser.contract import (
     ActionFailed,
     Click,
@@ -37,9 +40,19 @@ from montybot.browser.contract import (
     Scroll,
     Type,
 )
-from montybot.browser.live import OUTLINE_JS, Frame, LiveInput, Outline, Tab, Tabs, Viewport
+from montybot.browser.live import (
+    OUTLINE_JS,
+    Frame,
+    LiveInput,
+    Outline,
+    PageCommand,
+    Tabs,
+    Viewport,
+    neighbour,
+)
 from montybot.liveview.keys import MODIFIER_BITS, Key, key_for
 from montybot.liveview.latest import Latest
+from montybot.liveview.page_state import EVENTS, PageState
 
 ENGINE = 'chromium'
 _log = logging.getLogger(__name__)
@@ -70,6 +83,8 @@ class CdpFrameSource:
         self._listeners: list[tuple[Page, str, Callable[..., None]]] = []
         self._active = page
         self._cdp: CDPSession | None = None
+        self._page = PageState.none()
+        """The active tab's loading state and history."""
         self._buttons: list[MouseButton] = []
         self._pointer = Point(x=0, y=0)
         self._viewport: Viewport | None = None
@@ -115,10 +130,39 @@ class CdpFrameSource:
                 raise ActionFailed(f'{ENGINE}: {error.message}') from error
 
     async def switch_tab(self, tab_id: str) -> None:
+        await self._activate(self._tab(tab_id))
+
+    # --- ControlsSource ---
+
+    async def command(self, command: PageCommand) -> None:
+        try:
+            await self._page.command(command)
+        except PlaywrightError as error:
+            raise ActionFailed(f'{ENGINE}: {error.message}') from error
+
+    async def new_tab(self) -> None:
+        """The context's `page` event tracks and follows it, as for a popup."""
+        try:
+            await self._context.new_page()
+        except PlaywrightError as error:
+            raise ActionFailed(f'{ENGINE}: {error.message}') from error
+
+    async def close_tab(self, tab_id: str) -> None:
+        page = self._tab(tab_id)
+        if page is self._home:
+            raise ActionFailed("the run's own tab stays open")
+        if page is self._active and (next_tab := neighbour(list(self._tabs), tab_id)) is not None:
+            await self._activate(self._tabs[next_tab])
+        try:
+            await page.close()
+        except PlaywrightError as error:
+            raise ActionFailed(f'{ENGINE}: {error.message}') from error
+
+    def _tab(self, tab_id: str) -> Page:
         page = self._tabs.get(tab_id)
         if page is None:
             raise ActionFailed('no such tab')
-        await self._activate(page)
+        return page
 
     async def set_viewport(self, viewport: Viewport | None) -> None:
         async with self._lock:
@@ -186,7 +230,7 @@ class CdpFrameSource:
         async with self._lock:
             if self._closed or page.is_closed():
                 return
-            old, self._cdp = self._cdp, None
+            old, self._cdp, self._page = self._cdp, None, PageState.none()
             if old is not None:
                 await self._let_go(old)
             self._active = page
@@ -201,6 +245,15 @@ class CdpFrameSource:
 
             cdp.on('Page.screencastFrame', on_frame)
             self._cdp = cdp
+
+            async def send(method: str, params: CDPParams | None) -> CDPParams:
+                return await _call(cdp, method, params)
+
+            state = PageState(send, changed=lambda: self._spawn(self._refresh_tabs()), spawn=self._spawn)
+            for event in EVENTS:
+                cdp.on(event, state.handler(event))
+            self._page = state
+            await state.start()
             if self._viewport is not None:
                 await self._emulate(cdp, self._viewport)
             await _call(cdp, 'Page.startScreencast', {'format': 'jpeg', 'quality': self._quality})
@@ -242,7 +295,13 @@ class CdpFrameSource:
                 self._titles[tab_id] = await page.title()
         # No awaits from here on, so the tabs and the active one agree.
         tabs = [
-            Tab(tab_id=tab_id, url=page.url, title=self._titles.get(tab_id, ''), active=page is self._active)
+            self._page.tab(
+                tab_id=tab_id,
+                url=page.url,
+                title=self._titles.get(tab_id, ''),
+                active=page is self._active,
+                closable=page is not self._home,
+            )
             for tab_id, page in self._tabs.items()
             if not page.is_closed()
         ]

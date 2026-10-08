@@ -9,7 +9,7 @@ path).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
@@ -18,6 +18,7 @@ from liveview_harness import HOLD_CENTRE, StubBrowserService, backends, serve_ap
 
 from montybot.browser.conformance import BUTTON_CENTRE, HOLD_END, HOLD_START, serve_site, wait_for_text
 from montybot.browser.contract import (
+    ActionFailed,
     Click,
     MouseDown,
     MouseMove,
@@ -28,7 +29,7 @@ from montybot.browser.contract import (
     Scroll,
     Type,
 )
-from montybot.browser.live import Frame, FrameSource, LiveViewBackend, Tabs
+from montybot.browser.live import ControlsSource, Frame, FrameSource, LiveViewBackend, Tab, Tabs
 from montybot.browser.service import HandoffActive
 from montybot.browser.state import BrowserState
 from montybot.liveview.app import live_view_app
@@ -137,6 +138,62 @@ async def test_the_address_bar_loads_in_the_active_tab(engine: str) -> None:
             while not (isinstance(tabs, Tabs) and [t.url for t in tabs.tabs] == [f'{origin}/popup-target']):
                 tabs = await next_update(updates, Tabs)
             assert (await backend.snapshot()).url == f'{origin}/popup-target'
+            await updates.aclose()  # pyright: ignore[reportAttributeAccessIssue]
+
+
+async def tabs_until(updates: AsyncIterator[Frame | Tabs], condition: Callable[[tuple[Tab, ...]], bool]) -> Tabs:
+    """The first tab list that meets `condition`."""
+    while True:
+        tabs = await next_update(updates, Tabs)
+        if isinstance(tabs, Tabs) and condition(tabs.tabs):
+            return tabs
+
+
+def active(tabs: tuple[Tab, ...]) -> Tab:
+    return next(t for t in tabs if t.active)
+
+
+async def test_back_forward_reload_and_tabs(engine: str) -> None:
+    """The browser's buttons: back and forward through the tab's history, reload, a new blank tab, and closing it,
+    which shows the tab next to it. The run's own tab cannot be closed, so the agent keeps it."""
+    with serve_fixtures() as origin:
+        async with opened_source(engine, f'{origin}/popup') as (backend, source):
+            assert isinstance(source, ControlsSource)
+            updates = source.updates()
+            servo = engine == 'servo'  # WebDriver cannot tell whether there is history: None
+
+            def at(path: str, back: bool, forward: bool) -> Callable[[tuple[Tab, ...]], bool]:
+                def check(tabs: tuple[Tab, ...]) -> bool:
+                    tab = active(tabs)
+                    history = (tab.can_go_back, tab.can_go_forward)
+                    return tab.url.endswith(path) and history == ((None, None) if servo else (back, forward))
+
+                return check
+
+            await source.send(Navigate(url=f'{origin}/popup-target'))
+            await tabs_until(updates, at('/popup-target', back=True, forward=False))
+            await source.command('back')
+            await tabs_until(updates, at('/popup', back=True, forward=True))  # back to the page it opened on
+            await source.command('forward')
+            tabs = await tabs_until(updates, at('/popup-target', back=True, forward=False))
+            await source.command('reload')  # the same page again: no new tab list to wait for, but no error either
+
+            home = active(tabs.tabs)
+            assert not home.closable
+            with pytest.raises(ActionFailed):
+                await source.close_tab(home.tab_id)
+            await source.new_tab()
+            tabs = await tabs_until(updates, lambda tabs: len(tabs) == 2 and active(tabs).tab_id != home.tab_id)
+            blank = active(tabs.tabs)
+            assert blank.closable and blank.url == 'about:blank'
+            await source.send(Navigate(url=f'{origin}/popup'))
+            await tabs_until(
+                updates, lambda tabs: active(tabs).tab_id == blank.tab_id and active(tabs).url.endswith('/popup')
+            )
+            await source.close_tab(blank.tab_id)
+            tabs = await tabs_until(updates, lambda tabs: [t.tab_id for t in tabs] == [home.tab_id] and tabs[0].active)
+            await source.close()
+            assert (await backend.snapshot()).url == f'{origin}/popup-target'  # the agent's tab, where it was left
             await updates.aclose()  # pyright: ignore[reportAttributeAccessIssue]
 
 

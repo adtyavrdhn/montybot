@@ -21,6 +21,26 @@ import Testing
         #expect(object(.navigate("https://x.test/a?b=1")) == ["kind": "navigate", "url": "https://x.test/a?b=1"])
         #expect(object(.giveBack) == ["kind": "give_back"])
         #expect(object(.outline) == ["kind": "outline"])
+        #expect(object(.page(.back)) == ["kind": "back"])
+        #expect(object(.page(.forward)) == ["kind": "forward"])
+        #expect(object(.page(.reload)) == ["kind": "reload"])
+        #expect(object(.page(.stop)) == ["kind": "stop"])
+        #expect(object(.newTab) == ["kind": "new_tab"])
+        #expect(object(.closeTab("t2")) == ["kind": "close_tab", "tab_id": "t2"])
+    }
+
+    @Test func theBrowsersButtonsComeFromHelloAndTabs() {
+        #expect(LiveServerMessage(json: #"{"kind": "hello", "handoff_id": "h1", "reason": "Sign in", "controls": true}"#)
+            == .hello(handoffId: "h1", reason: "Sign in", controls: true))
+        #expect(LiveServerMessage(json: #"{"kind": "tabs", "tabs": [{"tab_id": "a", "url": "https://x.test/", "title": "X", "active": true, "closable": true, "loading": true, "can_go_back": true, "can_go_forward": false}]}"#)
+            == .tabs([LiveTab(id: "a", url: "https://x.test/", title: "X", active: true, closable: true, loading: true, canGoBack: true, canGoForward: false)]))
+    }
+
+    @Test func tabsAreNamedByTitleThenHost() {
+        #expect(LiveTab(id: "a", url: "https://x.test/a", title: "X shop", active: true).name == "X shop")
+        #expect(LiveTab(id: "a", url: "https://x.test/a", title: "", active: true).name == "x.test")
+        #expect(LiveTab(id: "a", url: "about:blank", title: "", active: true).name == "New Tab")
+        #expect(LiveTab(id: "a", url: "about:blank", title: "", active: true).isBlank)
     }
 
     @Test func theAddressBarOpensAddressesHostsAndSearches() {
@@ -139,6 +159,37 @@ import Testing
         #expect(action(51, "", option: true) == .send([.press(key: "Backspace", modifiers: ["Control"])]))
         #expect(action(123, "", command: true, shift: true) == .send([.press(key: "Home", modifiers: ["Shift"])]))
         #expect(action(51, "", command: true) == .send([.press(key: "Home", modifiers: ["Shift"]), .press(key: "Backspace", modifiers: [])]))
+    }
+
+    func shortcut(_ code: UInt16, _ chars: String, command: Bool = false, control: Bool = false, shift: Bool = false) -> BrowserShortcut? {
+        BrowserShortcut.shortcut(for: MacKey(keyCode: code, characters: chars, command: command, control: control, shift: shift))
+    }
+
+    @Test func browserShortcuts() {
+        #expect(shortcut(33, "[", command: true) == .page(.back))
+        #expect(shortcut(30, "]", command: true) == .page(.forward))
+        #expect(shortcut(15, "r", command: true) == .page(.reload))
+        #expect(shortcut(17, "t", command: true) == .newTab)
+        #expect(shortcut(13, "w", command: true) == .closeTab)
+        #expect(shortcut(37, "l", command: true) == .editAddress)
+        #expect(shortcut(18, "1", command: true) == .tab(1))
+        #expect(shortcut(25, "9", command: true) == .tab(9))
+        #expect(shortcut(48, "\t", control: true) == .nextTab)
+        #expect(shortcut(48, "\t", control: true, shift: true) == .previousTab)
+        #expect(shortcut(17, "T", command: true, shift: true) == nil)  // ⇧⌘T is "Not now"
+        #expect(shortcut(0, "a", command: true) == nil)  // select all, on the page
+        #expect(shortcut(29, "0", command: true) == nil)
+        #expect(shortcut(48, "\t") == nil)
+    }
+
+    @Test func tabShortcutsPickATab() {
+        let tabs = ["a", "b", "c"].map { LiveTab(id: $0, url: "", title: "", active: $0 == "c") }
+        #expect(BrowserShortcut.target(of: .nextTab, in: tabs)?.id == "a")  // wraps around
+        #expect(BrowserShortcut.target(of: .previousTab, in: tabs)?.id == "b")
+        #expect(BrowserShortcut.target(of: .tab(1), in: tabs)?.id == "a")
+        #expect(BrowserShortcut.target(of: .tab(9), in: tabs)?.id == "c")  // the last, as in a browser
+        #expect(BrowserShortcut.target(of: .tab(5), in: tabs) == nil)
+        #expect(BrowserShortcut.target(of: .nextTab, in: []) == nil)
     }
 
     @Test func appShortcutsStayWithTheApp() {

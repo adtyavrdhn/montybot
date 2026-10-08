@@ -14,6 +14,9 @@ Tested with Servo 0.7.0, which needs two workarounds, both measured on macOS:
   second, and right after any input.
 
 The Servo backend (#12) returns one of these from `live_view()`, on its own session.
+
+Back, forward and reload are WebDriver's own commands, which wait for the page to load, so a tab never shows as
+loading and Stop is refused. WebDriver cannot tell whether there is history either way, so tabs leave that out.
 """
 
 from __future__ import annotations
@@ -43,7 +46,7 @@ from montybot.browser.contract import (
     Scroll,
     Type,
 )
-from montybot.browser.live import Frame, LiveInput, Tab, Tabs, Viewport
+from montybot.browser.live import Frame, LiveInput, PageCommand, Tab, Tabs, Viewport, neighbour
 from montybot.liveview.keys import key_for
 from montybot.liveview.latest import Latest
 
@@ -52,6 +55,7 @@ TABS_EVERY = 0.5
 """Seconds between checks for new, closed or navigated tabs."""
 _BUTTONS: dict[MouseButton, int] = {'left': 0, 'middle': 1, 'right': 2}
 _PAGE_INFO = 'return [location.href, document.title, innerWidth, innerHeight]'
+_COMMANDS: dict[PageCommand, str] = {'back': '/back', 'forward': '/forward', 'reload': '/refresh'}
 _log = logging.getLogger(__name__)
 
 
@@ -130,6 +134,37 @@ class WebDriverFrameSource:
             await self._switch(tab_id)
         self._tabs_due = 0
 
+    # --- ControlsSource ---
+
+    async def command(self, command: PageCommand) -> None:
+        path = _COMMANDS.get(command)
+        if path is None:
+            raise ActionFailed(f'{ENGINE} cannot stop a page loading')
+        async with self._lock:
+            await self._session.call('POST', path, {})
+        self._tabs_due = 0
+
+    async def new_tab(self) -> None:
+        async with self._lock:
+            created = await self._session.call('POST', '/window/new', {'type': 'tab'})
+            handle = str(created['handle'])
+            self._pages[handle] = ('about:blank', '')
+            await self._switch(handle)
+        self._tabs_due = 0
+
+    async def close_tab(self, tab_id: str) -> None:
+        async with self._lock:
+            if tab_id not in self._pages:
+                raise ActionFailed('no such tab')
+            if tab_id == self._home:
+                raise ActionFailed("the run's own tab stays open")
+            back_to = neighbour(list(self._pages), tab_id) if tab_id == self._active else self._active
+            await self._switch(tab_id)
+            await self._session.call('DELETE', '/window')  # closes the current window
+            del self._pages[tab_id]
+            await self._switch(back_to or self._home)
+        self._tabs_due = 0
+
     async def set_viewport(self, viewport: Viewport | None) -> None:
         # WebDriver can only resize the window, which gives no phone layout and outlives the hand-off.
         raise NotSupported('viewport', engine=ENGINE)
@@ -187,7 +222,7 @@ class WebDriverFrameSource:
             self._pages[self._active] = (str(url), str(title))
             self._size = (int(width), int(height))
             tabs = tuple(
-                Tab(tab_id=handle, url=url, title=title, active=handle == self._active)
+                Tab(tab_id=handle, url=url, title=title, active=handle == self._active, closable=handle != self._home)
                 for handle, (url, title) in self._pages.items()
             )
         self._latest.put_tabs(Tabs(tabs=tabs))

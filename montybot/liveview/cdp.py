@@ -5,8 +5,10 @@ The same design as `CdpFrameSource` for Playwright (`chromium.py` here): frames 
 activated tab gets its own CDP session, detached when the user moves on, so the run's own session is never touched.
 
 Tabs come from target discovery (`Target.targetCreated`, `targetInfoChanged`, `targetDestroyed`), which also carries
-each tab's URL and title. Only the run's tab and tabs a page opened (they have an `openerId`) are shown: the backend's
-own hidden tabs, for reading storage, never are.
+each tab's URL and title. Only the run's tab, tabs a page opened (they have an `openerId`) and tabs the user opened are
+shown: the backend's own hidden tabs, for reading storage, and other runs' tabs never are. The user may close any of
+those but the run's tab, which the backend works in; the backend never follows popups, so closing one cannot break
+the run.
 """
 
 from __future__ import annotations
@@ -35,8 +37,18 @@ from montybot.browser.contract import (
     Scroll,
     Type,
 )
-from montybot.browser.live import OUTLINE_JS, Frame, LiveInput, Outline, Tab, Tabs, Viewport
+from montybot.browser.live import (
+    OUTLINE_JS,
+    Frame,
+    LiveInput,
+    Outline,
+    PageCommand,
+    Tabs,
+    Viewport,
+    neighbour,
+)
 from montybot.liveview.latest import Latest
+from montybot.liveview.page_state import EVENTS, PageState
 
 _log = logging.getLogger(__name__)
 
@@ -55,6 +67,10 @@ class CDPFrameSource:
         """Target id to its latest `TargetInfo`, in the order they opened."""
         self._tab_ids: dict[str, str] = {}
         """Target id to the tab id the user sees."""
+        self._opened: set[str] = set()
+        """Targets the user opened with `new_tab`."""
+        self._page = PageState.none()
+        """The active tab's loading state and history."""
         self._active = home
         self._session: str | None = None
         self._input: CDPInput | None = None
@@ -109,10 +125,45 @@ class CDPFrameSource:
                 raise ActionFailed(f'{ENGINE}: {error.message}') from error
 
     async def switch_tab(self, tab_id: str) -> None:
+        await self._activate(self._target(tab_id))
+
+    # --- ControlsSource ---
+
+    async def command(self, command: PageCommand) -> None:
+        try:
+            await self._page.command(command)
+        except CDPError as error:
+            raise ActionFailed(f'{ENGINE}: {error.message}') from error
+
+    async def new_tab(self) -> None:
+        """A blank tab in its own window, as the backend opens its tabs, so it is never a background tab."""
+        connection = self._connection
+        try:
+            created = await connection.send('Target.createTarget', {'url': 'about:blank', 'newWindow': True})
+            target = str(created['targetId'])
+            self._opened.add(target)  # its `targetCreated` may have come and gone already: track it here
+            info = await connection.send('Target.getTargetInfo', {'targetId': target})
+        except CDPError as error:
+            raise ActionFailed(f'{ENGINE}: {error.message}') from error
+        self._track(cast(CDPParams, info['targetInfo']), follow=False)
+        await self._activate(target)
+
+    async def close_tab(self, tab_id: str) -> None:
+        target = self._target(tab_id)
+        if target == self._home:
+            raise ActionFailed("the run's own tab stays open")
+        if target == self._active and (next_tab := neighbour(list(self._tabs), target)) is not None:
+            await self._activate(next_tab)
+        try:
+            await self._connection.send('Target.closeTarget', {'targetId': target})
+        except CDPError as error:
+            raise ActionFailed(f'{ENGINE}: {error.message}') from error
+
+    def _target(self, tab_id: str) -> str:
         target = next((t for t, shown in self._tab_ids.items() if shown == tab_id and t in self._tabs), None)
         if target is None:
             raise ActionFailed('no such tab')
-        await self._activate(target)
+        return target
 
     async def set_viewport(self, viewport: Viewport | None) -> None:
         async with self._lock:
@@ -151,7 +202,8 @@ class CDPFrameSource:
     def _track(self, info: CDPParams, *, follow: bool) -> None:
         """Note a target's info. A page's new tab or popup is shown, and followed if `follow`."""
         target = str(info['targetId'])
-        if info.get('type') != 'page' or (target != self._home and info.get('openerId') not in self._tabs):
+        ours = target == self._home or target in self._opened or info.get('openerId') in self._tabs
+        if info.get('type') != 'page' or not ours:
             return  # not ours: another run's tab, or a hidden tab of the backend's
         new = target not in self._tabs
         self._tabs[target] = info
@@ -167,6 +219,7 @@ class CDPFrameSource:
 
     def _on_destroyed(self, params: CDPParams) -> None:
         target = str(params['targetId'])
+        self._opened.discard(target)
         if self._tabs.pop(target, None) is None:
             return
         if target == self._active and not self._closed:
@@ -182,11 +235,12 @@ class CDPFrameSource:
         if self._closed:
             return
         tabs = [
-            Tab(
+            self._page.tab(
                 tab_id=self._tab_ids[target],
                 url=str(info.get('url', '')),
                 title=str(info.get('title', '')),
                 active=target == self._active,
+                closable=target != self._home,
             )
             for target, info in self._tabs.items()
         ]
@@ -206,6 +260,15 @@ class CDPFrameSource:
             connection.on('Page.screencastFrame', lambda params: self._on_frame(session, params), session=session)
             self._session = session
             self._input = CDPInput(connection, session)
+
+            async def send(method: str, params: CDPParams | None) -> CDPParams:
+                return await connection.send(method, params, session=session)
+
+            page = PageState(send, changed=self._put_tabs, spawn=self._spawn)
+            for event in EVENTS:
+                connection.on(event, page.handler(event), session=session)
+            self._page = page
+            await page.start()
             if self._viewport is not None:
                 await self._emulate(session, self._viewport)
             metrics = await connection.send('Page.getLayoutMetrics', session=session)
@@ -219,6 +282,7 @@ class CDPFrameSource:
         our session detached. Each step on its own, so a failure cannot skip the next."""
         session, mouse = self._session, self._input
         self._session = self._input = None
+        self._page = PageState.none()
         if session is None:
             return
         if mouse is not None:

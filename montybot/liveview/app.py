@@ -30,16 +30,19 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from montybot.browser.contract import BrowserError, Navigate, NotSupported
-from montybot.browser.live import Frame, FrameSource, Outline, OutlineSource, Viewport
+from montybot.browser.live import ControlsSource, Frame, FrameSource, Outline, OutlineSource, Viewport
 from montybot.browser.service import Handoff, HandoffEnded, HandoffId, HandoffNotActive, RunId, UnknownRun, UserId
 from montybot.liveview.activity import Activity
 from montybot.liveview.auth import Authenticator
 from montybot.liveview.handoffs import GiveBack, Handoffs
 from montybot.liveview.wire import (
+    CloseTab,
+    Command,
     Ended,
     ErrorMessage,
     GiveBackRequest,
     Hello,
+    NewTab,
     OutlineRequest,
     ServerMessage,
     SwitchTab,
@@ -263,7 +266,8 @@ class _Connection:
         """The hand-off is over: given back here, or ended elsewhere."""
 
     async def run(self) -> None:
-        await self._send(Hello(handoff_id=self._handoff.handoff_id, reason=self._handoff.reason))
+        controls = isinstance(self._source, ControlsSource)
+        await self._send(Hello(handoff_id=self._handoff.handoff_id, reason=self._handoff.reason, controls=controls))
         pump = asyncio.create_task(self._pump())
         read = asyncio.create_task(self._read())
         replaced = asyncio.create_task(self._slot.replaced.wait())
@@ -330,6 +334,8 @@ class _Connection:
                         await self._send(
                             await source.outline() if isinstance(source, OutlineSource) else Outline(available=False)
                         )
+                    case Command() | NewTab() | CloseTab():
+                        await self._control(decoded)
                     case Navigate(url=url) if (refused := await self._refuse_url(url)) is not None:
                         await self._send(ErrorMessage(message=refused.removeprefix('Error: ')))
                     case _:
@@ -340,6 +346,21 @@ class _Connection:
                 return
             except BrowserError as error:
                 await self._send(ErrorMessage(message=str(error)))
+
+    async def _control(self, message: Command | NewTab | CloseTab) -> None:
+        """A browser button. None needs `refuse_url`: back and forward only revisit the tab's own history, reload
+        repeats its page, and a new tab is blank until an address typed there arrives as a checked `navigate`."""
+        source = self._source
+        if not isinstance(source, ControlsSource):
+            await self._send(ErrorMessage(message='This browser has no back, reload or tab buttons.'))
+            return
+        match message:
+            case Command(kind=command):
+                await source.command(command)
+            case NewTab():
+                await source.new_tab()
+            case CloseTab(tab_id=tab_id):
+                await source.close_tab(tab_id)
 
     async def _fit(self, size: ViewportSize) -> None:
         """Lay the browser out for a phone, or give it its own size back. The source restores the size when it
