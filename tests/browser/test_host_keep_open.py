@@ -96,6 +96,20 @@ async def test_kept_browsers_make_room_first() -> None:
     assert not setup.made[0].is_open and setup.made[1].is_open
 
 
+async def test_a_kept_browser_is_discarded_when_the_saved_state_changes() -> None:
+    """A forgotten sign-in: the next run starts from the jar, not from the kept browser's cookies."""
+    setup = Setup()
+    host = keeping(setup)
+    await host.start(**ALICE)
+    await sign_in_and_add_eggs(host)
+    await host.close(**ALICE)
+    await host.discard_parked('alice')
+    assert not setup.made[0].is_open and setup.jar.saves == 1  # closed, not saved again over the edited jar
+    await host.discard_parked('alice')  # nothing kept: nothing to do
+    await host.start(**NEXT)
+    assert len(setup.made) == 2  # a new browser, from the saved state
+
+
 async def test_a_kept_browser_that_stopped_is_replaced() -> None:
     setup = Setup()
     host = keeping(setup)

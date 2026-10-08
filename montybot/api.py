@@ -675,6 +675,9 @@ async def forget_sign_in(request: Request, user: User) -> Response:
         state.session_storage = {o: items for o, items in state.session_storage.items() if not of_site(o)}
         if of_site(state.url):
             state.url = BLANK_URL
+        # The browser kept open after the user's last run still has the site's cookies: it goes, so the next run starts
+        # from what is saved now.
+        await resources.browser.discard_parked(user.id)
         await resources.jar.save(user_id=user.id, state=state)
     finally:
         await lease.release(user_id=user.id, run_id=holder)
