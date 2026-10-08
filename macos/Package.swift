@@ -1,5 +1,5 @@
 // swift-tools-version: 6.0
-// Sammy for Mac: a native client of the sammy server. `scripts/build-app.sh` makes Sammy.app.
+// Sammy for Mac: a native client of the Sammy server. `scripts/build-app.sh` makes Sammy.app.
 import PackageDescription
 
 let package = Package(

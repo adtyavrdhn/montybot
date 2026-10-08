@@ -1,7 +1,7 @@
 # Sammy for Mac
 
-A native macOS app (SwiftUI, macOS 14+) for sammy: chat with Sammy, watch its browser, answer its questions and
-approvals, and take over its browser to sign in. Sammy itself runs on the sammy server; the app is its client, as
+A native macOS app (SwiftUI, macOS 14+) for Sammy: chat with it, watch its browser, answer its questions and
+approvals, and take over its browser to sign in. Sammy itself runs on the Sammy server; the app is its client, as
 the web app is.
 
 ```

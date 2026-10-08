@@ -103,7 +103,7 @@ def failure_notice(error: BaseException) -> str:
     return FAILURE_NOTICE
 
 
-@DBOS.workflow(name='sammy.run_thread_stream')  # the name runs were recorded under; keep it so they resume
+@DBOS.workflow(name='sammy.run_thread_stream')  # the name runs are recorded under; keep it so waiting runs resume
 async def run_thread(run_id: str) -> str:
     # Baggage puts run_id on every span of the run, model and browser calls included.
     with timing('run.lifecycle') as lifecycle, logfire.set_baggage(run_id=run_id):

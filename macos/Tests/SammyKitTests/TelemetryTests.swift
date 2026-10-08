@@ -174,7 +174,7 @@ func recording(includeContent: Bool, into telemetry: Telemetry = Telemetry()) ->
     return (telemetry, spans)
 }
 
-/// A stand-in sammy, one per test (its own host): `/api/telemetry` says `settings`, `/api/threads` is empty, the
+/// A stand-in Sammy server, one per test (its own host): `/api/telemetry` says `settings`, `/api/threads` is empty, the
 /// telemetry endpoints take anything, the rest is 404. Keeps every request it gets.
 final class Stub: @unchecked Sendable {
     let host = "stub-\(UUID().uuidString.prefix(8).lowercased()).test"

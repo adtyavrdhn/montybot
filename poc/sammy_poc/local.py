@@ -30,7 +30,7 @@ window.addEventListener('DOMContentLoaded', () => {
   bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;display:flex;gap:12px;'
     + 'align-items:center;justify-content:center;padding:10px;background:#111827;color:#f9fafb;font:14px system-ui';
   const label = document.createElement('span');
-  label.textContent = 'sammy needs you: ' + %s;
+  label.textContent = 'Sammy needs you: ' + %s;
   const button = document.createElement('button');
   button.id = 'sammy-return';
   button.textContent = 'Return control to agent';

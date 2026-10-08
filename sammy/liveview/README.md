@@ -49,7 +49,7 @@ user's browser                     live view app (this package)              bro
   more than one. When a popup closes, and when the hand-off ends, the run's own tab is active again. Tabs the user left
   open stay open.
 - **The address bar** (`navigate {url}`) opens an address in the active tab. The app checks it first with
-  `refuse_url`: only http and https, and in sammy only public addresses, the same rule the agent's `goto` has. A
+  `refuse_url`: only http and https, and in Sammy only public addresses, the same rule the agent's `goto` has. A
   refused address gets an `error` and the connection stays.
 - **The browser's buttons** (`back`, `forward`, `reload`, `stop`, `new_tab`, `close_tab {tab_id}`) are for sources that
   are a `ControlsSource` (Chromium, Servo); `hello {controls}` says so, and elsewhere each gets an `error`. None needs

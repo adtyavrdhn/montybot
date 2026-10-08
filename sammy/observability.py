@@ -15,7 +15,7 @@ the agent. HTTP server requests are not traced.
 
 The web and Mac apps send their own telemetry through `/api/telemetry/v1/...` (`api.forward_telemetry`), which
 forwards it to Logfire with the server's token. Forwarded data is not scrubbed here, so each client keeps to the same
-lines itself (`sammy/static/telemetry.js`, `macos/Sources/MontyKit/Telemetry.swift`). A client that traces an
+lines itself (`sammy/static/telemetry.js`, `macos/Sources/SammyKit/Telemetry.swift`). A client that traces an
 action sends `traceparent`, and `ClientTraceContext` puts the server's spans for that request in the client's trace.
 A run started any other way is a trace of its own (`workflows.start`), and calls made all the time, such as the
 database calls behind polling, are recorded only inside a trace (`timing(..., only_in_trace=True)`).

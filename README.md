@@ -1,4 +1,4 @@
-# sammy
+# Sammy
 
 Notes and design for an always-on agent built on Monty and Pydantic AI: reachable from chat channels, running in
 Monty by default and in a real machine only when a process has to run, with computer use and human takeover.
@@ -13,7 +13,7 @@ Chromium, DBOS for schedules, and hand-off to the user when the agent gets stuck
 ```bash
 docker compose up -d          # Postgres
 cp .env.example .env          # then set SESSION_SECRET, MONTY_EXECUTION_KEY and your model's API key
-uv run sammy serve         # http://127.0.0.1:8000
+uv run sammy serve            # http://127.0.0.1:8000
 ```
 
 The app is Starlette plus DBOS in one process (`sammy/app.py`, `sammy/workflows.py`). A run is a DBOS workflow:

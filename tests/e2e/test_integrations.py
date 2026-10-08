@@ -239,11 +239,11 @@ def test_an_mcp_server_with_an_oauth_sign_in(app: App, client: Client, oauth_not
 
     # The user signs in on the server's page in their own browser, which comes back to Sammy.
     with httpx.Client(timeout=30) as browser:
-        to_monty = browser.get(sign_in_url).headers['location']
-        assert to_monty.startswith(f'{app.url}/integrations/mcp/callback?')
-        page = browser.get(to_monty)
+        to_sammy = browser.get(sign_in_url).headers['location']
+        assert to_sammy.startswith(f'{app.url}/integrations/mcp/callback?')
+        page = browser.get(to_sammy)
         assert page.status_code == 200 and 'Acme Wiki is connected' in page.text
-        assert browser.get(to_monty).status_code == 400  # a sign-in is used once
+        assert browser.get(to_sammy).status_code == 400  # a sign-in is used once
     assert [c['state'] for c in connections(client)] == ['connected']
 
     # The run looks again for itself, and finds the server by the name the user gave it.

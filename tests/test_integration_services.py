@@ -268,7 +268,7 @@ def test_a_blank_composio_key_means_no_composio(database_url: str) -> None:
 
 
 CLIENT = oauth.OAuthClient(
-    client_id='monty',
+    client_id='sammy',
     issuer='https://auth.example.com',
     authorization_endpoint='https://auth.example.com/authorize',
     token_endpoint='https://auth.example.com/token',
@@ -325,4 +325,4 @@ async def test_a_registration_that_cannot_be_sent_says_so() -> None:
     unauthorized = httpx2.Response(401, request=httpx2.Request('POST', 'https://mcp.example.com/mcp'))
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(server)) as http:
         with pytest.raises(IntegrationError, match='could not register'):
-            await oauth.register(http, 'https://mcp.example.com/mcp', unauthorized, 'https://monty.test/cb')
+            await oauth.register(http, 'https://mcp.example.com/mcp', unauthorized, 'https://sammy.test/cb')

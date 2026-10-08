@@ -1,5 +1,5 @@
 #!/bin/sh
-# Prepare an Ubuntu 24.04 VM for sammy. Safe to run on every deploy: each step does nothing once done.
+# Prepare an Ubuntu 24.04 VM for Sammy. Safe to run on every deploy: each step does nothing once done.
 # Runs on the VM as a user with sudo; deploy/deploy.sh calls it.
 set -eu
 
@@ -43,6 +43,10 @@ if [ -d /opt/montybot ] && [ ! -d "$ROOT" ]; then
         sudo docker image tag "$image" "sammy-${image#montybot-}"
     done
     sudo mv /opt/montybot "$ROOT"
+    # Settings that name the old package or path, such as BROWSER_BACKEND=montybot.engines:...
+    for file in "$ENV_FILE" "$ROOT/compose.local.yaml"; do
+        [ ! -f "$file" ] || sed -i 's#/opt/montybot#/opt/sammy#g; s#montybot\.#sammy.#g' "$file"
+    done
 fi
 
 sudo mkdir -p "$ROOT"

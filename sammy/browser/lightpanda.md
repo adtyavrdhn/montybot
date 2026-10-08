@@ -17,7 +17,7 @@ Get the binary for your platform from the [1.0.0 release](https://github.com/lig
 SHA-256). The backend looks for it at `$SAMMY_LIGHTPANDA_BINARY`, else `~/.cache/sammy/lightpanda/lightpanda`.
 CI pins `lightpanda-x86_64-linux` by its SHA-256, `aa5a4b8e...031c3`.
 
-Lightpanda is AGPL-3.0. sammy runs the unmodified release binary as a separate process and talks to it over CDP, a
+Lightpanda is AGPL-3.0. Sammy runs the unmodified release binary as a separate process and talks to it over CDP, a
 network protocol; nothing of Lightpanda is linked, vendored or changed. That is the usual reading of "aggregate" use,
 and the AGPL's network clause (section 13) applies to a modified Lightpanda that users interact with, which this is
 not. Mike should still check it before anything ships.

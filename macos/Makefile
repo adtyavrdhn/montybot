@@ -17,7 +17,7 @@ setup:  ## Check the tools (Xcode, uv) and install the server's Python packages
 	cd $(REPO) && uv sync
 	cd $(REPO) && uv run playwright install chromium
 
-dev:  ## For development only: a local sammy with a demo model (make app SERVER=$(LOCAL) to use it)
+dev:  ## For development only: a local Sammy server with a demo model (make app SERVER=$(LOCAL) to use it)
 	cd $(REPO) && uv run python macos/scripts/dev_server.py
 
 app:  ## Build build/Sammy.app for SERVER

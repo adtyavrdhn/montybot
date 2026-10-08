@@ -207,7 +207,7 @@ all; the unjailed run is the one that shows it was not attempted. Pro builds wit
 - **Our evaluation is internal use**, which the license allows.
 - **Production for users likely needs a separate OEM/SaaS license.** The license requires one "if third-party
   customers are given technical access to, or control over, the browser capability itself", where control includes
-  the ability "to operate ... or influence the CloakBrowser Binary, its browsing sessions". sammy's hand-off gives
+  the ability "to operate ... or influence the CloakBrowser Binary, its browsing sessions". Sammy's hand-off gives
   the user the live browser, and users' agents drive it with their own code. Mike decides; contact is
   info@cloakbrowser.dev.
 - **Acceptable use** forbids, among others, "automated account creation" and "circumventing authentication on systems
