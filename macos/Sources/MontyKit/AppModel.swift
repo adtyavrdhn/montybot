@@ -85,6 +85,20 @@ public final class AppModel {
     public private(set) var memories: [Memory]?
     public var libraryError: String?
 
+    /// Monty's browser goes out to the web from this Mac, for tasks the user starts, while the app is open and signed
+    /// in (`MacTunnel`): sites see the user's own address. On unless the user turns it off in Settings.
+    public var browseFromMac: Bool {
+        didSet {
+            defaults.set(browseFromMac, forKey: "browseFromMac")
+            updateTunnel()
+        }
+    }
+    /// The tunnel's state, for the "browsing from your Mac" indicator.
+    public private(set) var tunnelStatus = MacTunnel.Status()
+    @ObservationIgnored private var tunnel: MacTunnel?
+    /// Counts tunnels opened, so a late status from a stopped one is ignored.
+    @ObservationIgnored private var tunnels = 0
+
     /// What the user is typing in each chat ("new" for a new one), kept while they look elsewhere and after they quit.
     public var drafts: [String: String] = [:] {
         didSet { if let id = persistedUser { defaults.set(drafts.filter { !$0.value.isEmpty }, forKey: "drafts.\(id)") } }
@@ -189,6 +203,7 @@ public final class AppModel {
     public init(serverURL: URL? = nil, cookies: HTTPCookieStorage = .shared, defaults: UserDefaults = .standard) {
         self.cookies = cookies
         self.defaults = defaults
+        browseFromMac = defaults.object(forKey: "browseFromMac") as? Bool ?? true
         let url = serverURL ?? defaults.string(forKey: "serverURL").flatMap(URL.init(string:)) ?? Self.defaultServer
         client = APIClient(baseURL: url, cookies: cookies, siteLogin: Self.siteLogins(defaults)[url.absoluteString])
     }
@@ -343,6 +358,7 @@ public final class AppModel {
         persistedUser = user.id
         open(defaults.string(forKey: "route.\(user.id)").flatMap(Route.init(stored:)) ?? .chat(nil))
         startWatching()
+        updateTunnel()
         let client = client
         let launch = launchLogged ? nil : launched
         launchLogged = true
@@ -353,6 +369,32 @@ public final class AppModel {
         }
     }
 
+    // MARK: the Mac tunnel
+
+    /// Open while signed in with `browseFromMac` on; closed otherwise. Turning it back on takes the tunnel back from
+    /// another Mac that took it over.
+    private func updateTunnel() {
+        guard browseFromMac, user != nil else { return stopTunnel() }
+        guard tunnel == nil, let request = client.tunnelSocketRequest() else { return }
+        tunnels += 1
+        let opened = tunnels
+        let tunnel = MacTunnel(request: request, session: client.session) { [weak self] status in
+            Task { @MainActor in
+                guard let self, self.tunnels == opened, self.tunnel != nil else { return }
+                self.tunnelStatus = status
+            }
+        }
+        self.tunnel = tunnel
+        Task { await tunnel.start() }
+    }
+
+    private func stopTunnel() {
+        guard let tunnel else { return }
+        self.tunnel = nil
+        tunnelStatus = MacTunnel.Status()
+        Task { await tunnel.stop() }
+    }
+
     /// The open chat's summary, as the chat list has it.
     public var openThread: ThreadSummary? {
         guard case .chat(let id?) = route else { return nil }
@@ -361,6 +403,7 @@ public final class AppModel {
 
     private func reset() {
         persistedUser = nil  // before clearing: what is kept for next time stays
+        stopTunnel()
         signedOutOfNotifications?()
         retrying?.cancel()
         watching?.cancel()

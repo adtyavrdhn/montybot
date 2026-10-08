@@ -113,37 +113,38 @@ def chromium_headless() -> LazyChromium:
 
 
 def _egress_socket() -> Path | None:
+    """The shared egress proxy (the sidecar). For the Mac tunnel a jailed engine is given another socket."""
     socket = os.environ.get('BROWSER_EGRESS_SOCKET')
     return Path(socket) if socket else None
 
 
-def chromium_server() -> LazyChromium:
-    return LazyChromium(lambda: ChromiumOptions.server(egress_socket=_egress_socket()))
+def chromium_server(egress_socket: Path | None = None) -> LazyChromium:
+    return LazyChromium(lambda: ChromiumOptions.server(egress_socket=egress_socket or _egress_socket()))
 
 
-def chromium_cdp_server() -> ChromiumCDPBackend:
+def chromium_cdp_server(egress_socket: Path | None = None) -> ChromiumCDPBackend:
     """Always jailed, headed on its own Xvfb screen, like `chromium_server`."""
-    return ChromiumCDPBackend(CDPOptions.server(egress_socket=_egress_socket()))
+    return ChromiumCDPBackend(CDPOptions.server(egress_socket=egress_socket or _egress_socket()))
 
 
 def chromium_cdp_headless() -> ChromiumCDPBackend:
     return ChromiumCDPBackend(CDPOptions(headless=True))
 
 
-def cloak_server() -> ChromiumCDPBackend:
+def cloak_server(egress_socket: Path | None = None) -> ChromiumCDPBackend:
     """Always jailed, headed on its own Xvfb screen, like `chromium_cdp_server`."""
-    return ChromiumCDPBackend(with_cloak(CDPOptions.server(egress_socket=_egress_socket())))
+    return ChromiumCDPBackend(with_cloak(CDPOptions.server(egress_socket=egress_socket or _egress_socket())))
 
 
 def cloak_headless() -> ChromiumCDPBackend:
     return ChromiumCDPBackend(with_cloak(CDPOptions(headless=True)))
 
 
-def servo_server() -> ServoBackend:
+def servo_server(egress_socket: Path | None = None) -> ServoBackend:
     """Always jailed: Servo's WebDriver listens on every interface, so it never runs on the server's own network."""
-    return ServoBackend(ServoOptions(bwrap=True, egress_socket=_egress_socket()))
+    return ServoBackend(ServoOptions(bwrap=True, egress_socket=egress_socket or _egress_socket()))
 
 
-def lightpanda_server() -> LightpandaBackend:
+def lightpanda_server(egress_socket: Path | None = None) -> LightpandaBackend:
     """Always jailed: the server's network is reached only through the egress proxy."""
-    return LightpandaBackend(LightpandaOptions(bwrap=True, egress_socket=_egress_socket()))
+    return LightpandaBackend(LightpandaOptions(bwrap=True, egress_socket=egress_socket or _egress_socket()))

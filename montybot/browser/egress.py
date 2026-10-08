@@ -16,6 +16,9 @@ Only TCP leaves the jail, so QUIC and WebRTC's UDP have nowhere to go.
 The same socket also takes an HTTP `CONNECT` request, which is the only kind of proxy Servo speaks (it tunnels
 `http://` as well as `https://`). The first byte tells them apart: 5 for SOCKS5, a letter for HTTP. Both go through the
 same address check.
+
+Where a connection goes is the `dial` step: by default this proxy resolves and connects itself, as above. The Mac
+tunnel (`tunnel.py`) passes its own, which asks the user's Mac to connect instead, and the Mac makes the check.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ import contextlib
 import ipaddress
 import socket
 import struct
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 PROXY_PORT = 1080
@@ -34,8 +38,12 @@ _VERSION = 5
 _NO_AUTH = 0
 _CONNECT = 1
 _IPV4, _DOMAIN, _IPV6 = 1, 3, 4
-_SUCCEEDED, _NOT_ALLOWED, _HOST_UNREACHABLE, _REFUSED, _NOT_SUPPORTED = 0, 2, 4, 5, 7
-_CONNECT_TIMEOUT = 30
+SUCCEEDED, NOT_ALLOWED, HOST_UNREACHABLE, REFUSED, _NOT_SUPPORTED = 0, 2, 4, 5, 7
+CONNECT_TIMEOUT = 30
+
+Upstream = tuple[asyncio.StreamReader, asyncio.StreamWriter]
+Dial = Callable[[str, int], Awaitable[tuple[int, Upstream | None]]]
+"""Connects to `host:port` for one browser connection: a SOCKS5 status, and the connection when it is `SUCCEEDED`."""
 _HANDSHAKE_TIMEOUT = 10
 _MAX_CONNECTIONS = 128
 _CLOSE_GRACE = 5
@@ -63,9 +71,10 @@ async def proxy_answers(path: Path, *, attempts: int = 5) -> bool:
 class EgressProxy:
     """A SOCKS5 and HTTP `CONNECT` server (no authentication) on the Unix socket `path`."""
 
-    def __init__(self, path: Path, *, allow_private: bool = False) -> None:
+    def __init__(self, path: Path, *, allow_private: bool = False, dial: Dial | None = None) -> None:
         self.path = path
         self.allow_private = allow_private
+        self._dial = dial or self._connect
         self._server: asyncio.Server | None = None
         self._connections: set[asyncio.Task[None]] = set()
 
@@ -108,9 +117,9 @@ class EgressProxy:
         if request is None:
             return
         try:
-            status, upstream = await asyncio.wait_for(self._connect(*request), _CONNECT_TIMEOUT)
+            status, upstream = await asyncio.wait_for(self._dial(*request), CONNECT_TIMEOUT)
         except TimeoutError:
-            status, upstream = _HOST_UNREACHABLE, None
+            status, upstream = HOST_UNREACHABLE, None
         (_reply if socks else _http_reply)(writer, status)
         if upstream is not None:
             await self._relay(reader, writer, upstream)
@@ -143,7 +152,7 @@ class EgressProxy:
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
-        upstream: tuple[asyncio.StreamReader, asyncio.StreamWriter],
+        upstream: Upstream,
     ) -> None:
         up_reader, up_writer = upstream
         # When either side is done, the other gets a moment to finish, then both close: socat inside the jail never
@@ -159,26 +168,24 @@ class EgressProxy:
             up_writer.transport.abort()  # at once: data a server never reads must not keep the socket open
             await asyncio.gather(*directions, return_exceptions=True)
 
-    async def _connect(
-        self, host: str, port: int
-    ) -> tuple[int, tuple[asyncio.StreamReader, asyncio.StreamWriter] | None]:
+    async def _connect(self, host: str, port: int) -> tuple[int, Upstream | None]:
         try:
             infos = await asyncio.wait_for(
-                asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM), _CONNECT_TIMEOUT
+                asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM), CONNECT_TIMEOUT
             )
         except (OSError, TimeoutError):
-            return _HOST_UNREACHABLE, None
+            return HOST_UNREACHABLE, None
         addresses = [str(info[4][0]) for info in infos]
         # Any private answer refuses the name, as `browsing.refused_url` does, so DNS cannot pick one for us.
         if not self.allow_private and not all(ipaddress.ip_address(a).is_global for a in addresses):
-            return _NOT_ALLOWED, None
+            return NOT_ALLOWED, None
         for address in addresses:
             try:
-                upstream = await asyncio.wait_for(asyncio.open_connection(address, port), _CONNECT_TIMEOUT)
+                upstream = await asyncio.wait_for(asyncio.open_connection(address, port), CONNECT_TIMEOUT)
             except (OSError, TimeoutError):
                 continue
-            return _SUCCEEDED, upstream
-        return _REFUSED, None
+            return SUCCEEDED, upstream
+        return REFUSED, None
 
 
 def _reply(writer: asyncio.StreamWriter, status: int) -> None:
@@ -186,8 +193,8 @@ def _reply(writer: asyncio.StreamWriter, status: int) -> None:
 
 
 _HTTP_STATUS = {
-    _SUCCEEDED: b'200 Connection established',
-    _NOT_ALLOWED: b'403 Forbidden',
+    SUCCEEDED: b'200 Connection established',
+    NOT_ALLOWED: b'403 Forbidden',
     _NOT_SUPPORTED: b'405 Method Not Allowed',
 }
 

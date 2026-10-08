@@ -12,11 +12,11 @@ from starlette.middleware import Middleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
-from starlette.routing import Mount, Route
+from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from montybot import api, approvals, workflows
+from montybot import api, approvals, tunnel_api, workflows
 from montybot.live import live_app
 from montybot.observability import ClientTraceContext
 from montybot.resources import Resources, open_resources
@@ -59,6 +59,7 @@ def create_app(settings: Settings) -> ASGIApp:
             Route('/api/asks/{ask_id:uuid}', api.answer_ask, methods=['POST']),
             Route('/api/runs/{run_id:uuid}/live', api.live_link, methods=['POST']),
             Route('/api/runs/{run_id:uuid}/screen', api.watch_screen),
+            WebSocketRoute('/api/tunnel', tunnel_api.mac_tunnel),
             Route('/api/push/key', api.push_key),
             Route('/api/push/subscriptions', api.add_push_subscription, methods=['POST']),
             Route('/api/push/subscriptions', api.remove_push_subscription, methods=['DELETE']),

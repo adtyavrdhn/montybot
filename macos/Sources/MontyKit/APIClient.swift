@@ -321,9 +321,19 @@ public final class APIClient: Sendable {
     /// The WebSocket request of a live-view link, with the session cookie. No `Origin`: the server accepts clients
     /// that are not browsers without one. `trace` is the takeover's span, for the server's spans to join.
     public func liveSocketRequest(_ link: LiveLink, trace: SpanContext? = Telemetry.parent) -> URLRequest? {
+        socketRequest(path: link.url.hasSuffix("/") ? link.url + "ws" : link.url + "/ws", trace: trace)
+    }
+
+    /// The Mac tunnel's WebSocket request (`MacTunnel`), with the session cookie. No `Origin`, which the server
+    /// requires: a web page can't open the tunnel.
+    public func tunnelSocketRequest() -> URLRequest? {
+        socketRequest(path: "/api/tunnel", trace: nil)
+    }
+
+    private func socketRequest(path: String, trace: SpanContext?) -> URLRequest? {
         guard var parts = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
         parts.scheme = parts.scheme == "https" ? "wss" : "ws"
-        parts.path = link.url.hasSuffix("/") ? link.url + "ws" : link.url + "/ws"
+        parts.path = path
         guard let url = parts.url else { return nil }
         var request = URLRequest(url: url)
         for (name, value) in HTTPCookie.requestHeaderFields(with: cookies.cookies(for: baseURL) ?? []) {

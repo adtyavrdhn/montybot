@@ -87,6 +87,7 @@ struct SettingsView: View {
 }
 
 struct GeneralSettings: View {
+    @Environment(AppModel.self) private var app
     @AppStorage("appearance") private var appearance = Appearance.system
     @State private var status: UNAuthorizationStatus = .notDetermined
     @State private var opensAtLogin = SMAppService.mainApp.status == .enabled
@@ -126,11 +127,25 @@ struct GeneralSettings: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
+            browsing
         }
         .formStyle(.grouped)
         .task { await refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await refresh() }
+        }
+    }
+
+    private var browsing: some View {
+        @Bindable var app = app
+        return Section {
+            Toggle("Browse from this Mac", isOn: $app.browseFromMac)
+        } footer: {
+            Text(app.tunnelStatus.replaced
+                ? "Another of your Macs is browsing for Monty now. Turn this off and on again to take it back."
+                : "While Monty is open, the browser of each task you start visits sites from this Mac, so they see your own internet connection, not a server's. It reaches only public websites, never your network. Scheduled tasks always browse from the server.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
         }
     }
 
