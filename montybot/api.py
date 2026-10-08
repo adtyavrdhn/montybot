@@ -861,7 +861,10 @@ async def add_server(request: Request, user: User) -> Response:
 @auth.signed_in
 async def sign_in_server(request: Request, user: User) -> Response:
     """POST. Where the user signs in to their server (again)."""
-    url = await resources_of(request).integrations.sign_in_link(user.id, str(request.path_params['server_id']))
+    try:
+        url = await resources_of(request).integrations.sign_in_link(user.id, str(request.path_params['server_id']))
+    except IntegrationError as error:
+        return JSONResponse({'detail': str(error)}, status_code=400)
     return JSONResponse({'url': url}) if url else NOT_FOUND
 
 

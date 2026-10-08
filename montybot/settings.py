@@ -98,6 +98,12 @@ class Settings(BaseSettings):
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
     history_limit: int = 40
 
+    @field_validator('composio_api_key', mode='before')
+    @classmethod
+    def blank_is_unset(cls, value: object) -> object:
+        """`COMPOSIO_API_KEY=` (as in `.env.example`) means no Composio, not a key that is empty."""
+        return None if isinstance(value, str) and not value.strip() else value
+
     @field_validator('public_url')
     @classmethod
     def canonical_public_url(cls, value: str) -> str:

@@ -348,8 +348,9 @@ public final class APIClient: Sendable {
         text.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(["/"])) ?? text
     }
 
-    private static func url(_ text: String) throws -> URL {
-        guard let url = URL(string: text), ["https", "http"].contains(url.scheme ?? "") else {
+    /// A sign-in address, only if it is http or https: anything else (`file:`, an app's scheme) is refused.
+    static func url(_ text: String) throws -> URL {
+        guard let url = URL(string: text), ["https", "http"].contains(url.scheme?.lowercased() ?? "") else {
             throw APIError.unexpected("not a sign-in address")
         }
         return url

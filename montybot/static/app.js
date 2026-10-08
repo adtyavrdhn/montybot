@@ -696,7 +696,12 @@ async function openSignIn(action, attributes, request) {
     if (popup) popup.close();
     throw error;
   }
-  if (popup) popup.location.href = link.url; else location.assign(link.url);  // pop-ups blocked: go there instead
+  const target = new URL(link.url, location.href);
+  if (!['http:', 'https:'].includes(target.protocol)) {  // never a javascript: or other address, whoever sent it
+    if (popup) popup.close();
+    throw new Error('Monty sent a sign-in address this page cannot open.');
+  }
+  if (popup) popup.location.href = target.href; else location.assign(target.href);  // pop-ups blocked: go there instead
 }
 
 if ('BroadcastChannel' in window) {
@@ -715,7 +720,8 @@ async function answer(ask, body) {
   const before = page;
   const buttons = [...$('ask').querySelectorAll('button')];
   for (const each of buttons) each.disabled = true;  // Approve and Deny together: one answer only
-  const name = ask.kind !== 'approval' ? 'answer question' : body.approved ? 'approve' : 'deny';
+  const name = ask.kind === 'approval' ? (body.approved ? 'approve' : 'deny')
+    : ask.kind === 'connect' ? (body.connected ? 'connected' : 'not now') : 'answer question';
   try {
     await telemetry.span(name, { ...askIds(ask), answer: body.text, reason: body.reason }, () => (
       api(`/api/asks/${ask.id}`, { method: 'POST', body })));

@@ -15,7 +15,7 @@ from sites.integrations import API_KEY, NOTES_TOKEN, Account, FakeComposio, Note
 
 from montybot import crypto, store
 from montybot.db import Pool, create_pool, migrate
-from montybot.integrations import Connection, Integrations, Offer, egress, mcp
+from montybot.integrations import Connection, Integrations, Offer, egress, mcp, oauth
 from montybot.integrations.base import IntegrationError
 from montybot.integrations.composio import Composio
 from montybot.settings import Settings
@@ -188,3 +188,74 @@ async def test_the_service_the_model_names(pool: Pool, composio: FakeComposio, d
         assert isinstance(found, Connection) and (found.key, found.state) == ('mcp:acme-crm', 'connected')
     finally:
         await integrations.aclose()
+
+
+def test_a_blank_composio_key_means_no_composio(database_url: str) -> None:
+    settings = Settings(
+        database_url=database_url,
+        session_secret='s',  # pyright: ignore[reportArgumentType]
+        encryption_key=crypto.new_key(),  # pyright: ignore[reportArgumentType]
+        composio_api_key='  ',  # pyright: ignore[reportArgumentType]  # `COMPOSIO_API_KEY=` in a copied .env.example
+    )
+    assert settings.composio_api_key is None
+
+
+CLIENT = oauth.OAuthClient(
+    client_id='monty',
+    issuer='https://auth.example.com',
+    authorization_endpoint='https://auth.example.com/authorize',
+    token_endpoint='https://auth.example.com/token',
+    resource='https://mcp.example.com/mcp',
+)
+
+
+def token_server(status: int) -> httpx2.AsyncClient:
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        if status == 200:
+            return httpx2.Response(200, json={'access_token': 'new', 'token_type': 'bearer', 'expires_in': 60})
+        return httpx2.Response(status, json={'error': 'invalid_grant'})
+
+    return httpx2.AsyncClient(transport=httpx2.MockTransport(answer))
+
+
+async def test_only_a_refused_refresh_means_signing_in_again() -> None:
+    tokens = oauth.Tokens(access_token='old', refresh_token='r1', expires_at=0)
+    async with token_server(200) as http:
+        refreshed = await oauth.refresh(http, CLIENT, tokens)
+        assert refreshed is not None and refreshed.access_token == 'new' and refreshed.refresh_token == 'r1'
+    for refused in (400, 401):
+        async with token_server(refused) as http:
+            assert await oauth.refresh(http, CLIENT, tokens) is None
+    # The sign-in server down or failing: the sign-in stands, and the next use tries again.
+    async with token_server(503) as http:
+        with pytest.raises(IntegrationError, match='failed \\(503\\)'):
+            await oauth.refresh(http, CLIENT, tokens)
+
+    def unreachable(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError('down')
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(unreachable)) as http:
+        with pytest.raises(IntegrationError, match='could not be reached'):
+            await oauth.refresh(http, CLIENT, tokens)
+
+
+async def test_a_registration_that_cannot_be_sent_says_so() -> None:
+    metadata = {
+        'issuer': 'https://auth.example.com',
+        'authorization_endpoint': 'https://auth.example.com/authorize',
+        'token_endpoint': 'https://auth.example.com/token',
+        'registration_endpoint': 'https://auth.example.com/register',
+        'code_challenge_methods_supported': ['S256'],
+    }
+
+    def server(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == '/.well-known/oauth-authorization-server':
+            return httpx2.Response(200, json=metadata)
+        if request.url.path == '/register':
+            raise httpx2.ConnectError('auth.example.com is on a private network')
+        return httpx2.Response(404)
+
+    unauthorized = httpx2.Response(401, request=httpx2.Request('POST', 'https://mcp.example.com/mcp'))
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(server)) as http:
+        with pytest.raises(IntegrationError, match='could not register'):
+            await oauth.register(http, 'https://mcp.example.com/mcp', unauthorized, 'https://monty.test/cb')

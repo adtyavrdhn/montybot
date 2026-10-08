@@ -1006,7 +1006,7 @@ public final class AppModel {
         }
         guard let added else { return false }
         serverName = ""
-        if let link = added.signInUrl, let url = URL(string: link) {
+        if let link = added.signInUrl, let url = try? APIClient.url(link) {
             serverNote = .info("Sign in to \(added.connection.name) in your browser to finish.")
             openInBrowser?(url)
         } else {

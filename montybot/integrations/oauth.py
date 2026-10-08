@@ -46,6 +46,11 @@ EXPIRY_MARGIN = 60
 """Refresh an access token this many seconds before it expires."""
 
 
+class Refused(IntegrationError):
+    """The authorization server turned the grant down (400 or 401, such as `invalid_grant`), as opposed to being
+    unreachable or failing: only this means the user must sign in again."""
+
+
 class OAuthClient(BaseModel):
     """Our client at one MCP server's authorization server: registered once, kept sealed with the server."""
 
@@ -132,7 +137,7 @@ async def register(http: httpx2.AsyncClient, url: str, unauthorized: httpx2.Resp
     request = create_client_registration_request(metadata, client_metadata, str(metadata.issuer))
     try:
         info = await handle_registration_response(await http.send(request))
-    except OAuthFlowError as error:
+    except (OAuthFlowError, httpx2.HTTPError) as error:  # refused, unreachable, or a private address
         raise IntegrationError('Monty could not register with this server for a sign-in.') from error
     return OAuthClient(
         client_id=info.client_id,
@@ -224,14 +229,15 @@ async def exchange(
 
 
 async def refresh(http: httpx2.AsyncClient, client: OAuthClient, tokens: Tokens) -> Tokens | None:
-    """New tokens, or None if the user must sign in again (no refresh token, or it was refused)."""
+    """New tokens, or None if the user must sign in again (no refresh token, or the server refused it). A server
+    that is down or failing raises `IntegrationError`: the sign-in stands, and the next use tries again."""
     if tokens.refresh_token is None:
         return None
     try:
         token = await _token_request(
             http, client, {'grant_type': 'refresh_token', 'refresh_token': tokens.refresh_token}
         )
-    except IntegrationError:
+    except Refused:
         return None
     return tokens_from(token, tokens)
 
@@ -249,8 +255,10 @@ async def _token_request(http: httpx2.AsyncClient, client: OAuthClient, form: di
         response = await http.post(client.token_endpoint, data=form, auth=auth, headers={'Accept': 'application/json'})
     except httpx2.HTTPError as error:
         raise IntegrationError('The sign-in server could not be reached.') from error
+    if response.status_code in (400, 401):
+        raise Refused('The sign-in server refused the sign-in.')
     if response.status_code != 200:
-        raise IntegrationError('The sign-in server refused the sign-in.')
+        raise IntegrationError(f'The sign-in server failed ({response.status_code}). Please try again in a moment.')
     try:
         return OAuthToken.model_validate_json(response.content)
     except ValidationError as error:
