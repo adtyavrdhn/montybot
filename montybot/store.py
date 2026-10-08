@@ -26,7 +26,7 @@ class ThreadGone(Exception):
     """The thread was deleted (with its schedule) while a run for it was being created."""
 
 
-USER_COLUMNS = 'id, email, name, timezone'
+USER_COLUMNS = 'id, email, name, timezone, squirrel_name'
 RUN_COLUMNS = 'id, user_id, thread_id, trigger, prompt, status, output, error, created_at, completed_at'
 ASK_COLUMNS = 'id, run_id, user_id, occurrence, kind, prompt, details, answer'
 SCHEDULE_COLUMNS = 'id, user_id, thread_id, name, cron, timezone, when_text, prompt, watch'
@@ -87,6 +87,10 @@ async def get_user(connection: Connection, user_id: str) -> User | None:
 
 async def set_timezone(connection: Connection, user_id: str, timezone: str) -> None:
     await connection.execute('UPDATE montybot.users SET timezone = %s WHERE id = %s', (timezone, user_id))
+
+
+async def set_squirrel_name(connection: Connection, user_id: str, name: str) -> None:
+    await connection.execute('UPDATE montybot.users SET squirrel_name = %s WHERE id = %s', (name, user_id))
 
 
 # --- threads ---
@@ -555,7 +559,13 @@ async def list_thread_activity(connection: Connection, user_id: str, thread_id: 
 
 
 def user_from(row: dict[str, Any]) -> User:
-    return User(id=str(row['id']), email=row['email'], name=row['name'], timezone=row['timezone'])
+    return User(
+        id=str(row['id']),
+        email=row['email'],
+        name=row['name'],
+        timezone=row['timezone'],
+        squirrel_name=row['squirrel_name'],
+    )
 
 
 def thread_from(row: dict[str, Any]) -> Thread:

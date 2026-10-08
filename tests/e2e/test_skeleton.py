@@ -123,6 +123,21 @@ def test_the_agent_knows_the_time_for_the_user(client: Client) -> None:
     assert '(Asia/Tokyo)' in client.wait_for_reply(created.json()['thread_id'])  # not a real zone: the last one
 
 
+@pytest.mark.scripted
+def test_the_agent_answers_to_the_squirrels_name(client: Client) -> None:
+    client.sign_up()
+
+    def reply_to(**sent: str) -> str:
+        created = client.http.post('/api/threads', json={'text': 'What is your name?', **sent})
+        return client.wait_for_reply(created.json()['thread_id'])
+
+    assert reply_to() == 'Nobody has named me yet.'
+    assert "The user named you 'Nutmeg'" in reply_to(squirrel_name='  Nutmeg  ')
+    assert "The user named you 'Nutmeg'" in reply_to()  # the web app sends none: the name stays, for schedules too
+    assert reply_to(squirrel_name='') == 'Nobody has named me yet.'  # unnamed in the Mac app
+    assert client.http.post('/api/threads', json={'text': 'Hi', 'squirrel_name': 'x' * 25}).status_code == 422
+
+
 def test_chats_say_how_they_ended_and_can_be_renamed_and_deleted(app: App, client: Client) -> None:
     client.sign_up()
     hello = client.ask('Say hello.')

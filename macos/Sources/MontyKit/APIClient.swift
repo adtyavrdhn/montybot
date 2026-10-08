@@ -164,13 +164,20 @@ public final class APIClient: Sendable {
         return found.ids
     }
 
-    /// Messages carry the Mac's time zone, so the bot knows what "today" and "9am" mean for the user.
-    public func startThread(_ text: String) async throws -> Created {
-        try await send("POST", "/api/threads", body: ["text": text, "timezone": TimeZone.current.identifier])
+    /// Messages carry the Mac's time zone, so the bot knows what "today" and "9am" mean for the user, and the name the
+    /// user gave their squirrel, which the bot answers to (empty forgets it; nil leaves it as it is).
+    public func startThread(_ text: String, squirrelName: String? = nil) async throws -> Created {
+        try await send("POST", "/api/threads", body: message(text, squirrelName: squirrelName))
     }
 
-    public func send(_ text: String, to thread: String) async throws -> Created {
-        try await send("POST", "/api/threads/\(thread)/messages", body: ["text": text, "timezone": TimeZone.current.identifier])
+    public func send(_ text: String, to thread: String, squirrelName: String? = nil) async throws -> Created {
+        try await send("POST", "/api/threads/\(thread)/messages", body: message(text, squirrelName: squirrelName))
+    }
+
+    private func message(_ text: String, squirrelName: String?) -> [String: String] {
+        var body = ["text": text, "timezone": TimeZone.current.identifier]
+        body["squirrel_name"] = squirrelName
+        return body
     }
 
     public func rename(thread: String, to title: String) async throws {

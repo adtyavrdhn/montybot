@@ -42,6 +42,8 @@ class RunDeps:
     """The schedule whose occurrence this run is, if a schedule started it."""
     local_time: str = ''
     """The user's date and time when the run started, in words, with their time zone."""
+    squirrel_name: str = ''
+    """What the user named their squirrel (Monty's mascot in the Mac app), when the run started; empty if unnamed."""
     asked: Asked = field(default_factory=Asked)
     code: CodeState = field(default_factory=CodeState)
     notified: Notified = field(default_factory=Notified)

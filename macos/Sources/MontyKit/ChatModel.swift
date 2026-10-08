@@ -385,7 +385,10 @@ public final class ChatModel {
         pendingMessage = text
         defer { sending = false }
         do {
-            let created = threadId == nil ? try await client.startThread(text) : try await client.send(text, to: threadId!)
+            let name = app.squirrelName
+            let created = threadId == nil
+                ? try await client.startThread(text, squirrelName: name)
+                : try await client.send(text, to: threadId!, squirrelName: name)
             span.set("monty.thread_id", created.threadId)
             span.set("monty.run_id", created.runId)
             app.taskSent()

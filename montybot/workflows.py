@@ -113,11 +113,14 @@ async def run_thread(run_id: str) -> str:
         # Runs recorded before the user's local time was added replay a 3-tuple.
         run, history_json, schedule = started[:3]
         local_time = started[3] if len(started) > 3 else ''
+        squirrel_name = started[4] if len(started) > 4 else ''  # and before the squirrel's name, a 4-tuple
         if run.status in FINISHED:
             return run.status  # stopped before its workflow started
         lifecycle.set_attributes({'thread_id': run.thread_id, 'user_id': run.user_id, 'trigger': run.trigger})
         history = recent(ModelMessagesTypeAdapter.validate_json(history_json), resources.settings.history_limit)
-        deps = RunDeps(resources=resources, run=run, schedule=schedule, local_time=local_time)
+        deps = RunDeps(
+            resources=resources, run=run, schedule=schedule, local_time=local_time, squirrel_name=squirrel_name
+        )
         try:
             try:
                 with timing('run.agent'):
@@ -158,7 +161,7 @@ async def start(run_id: str) -> WorkflowHandleAsync[str]:
         return await DBOS.start_workflow_async(run_thread, run_id)
 
 
-async def start_run(resources: Resources, run_id: str) -> tuple[Run, bytes, Schedule | None, str]:
+async def start_run(resources: Resources, run_id: str) -> tuple[Run, bytes, Schedule | None, str, str]:
     with timing('run.start'):
         async with resources.pool.connection() as connection, connection.transaction():
             run = await store.load_run(connection, run_id)
@@ -167,7 +170,8 @@ async def start_run(resources: Resources, run_id: str) -> tuple[Run, bytes, Sche
             schedule = await store.schedule_of_thread(connection, run.thread_id) if run.trigger == 'schedule' else None
             user = await store.get_user(connection, run.user_id)
         timezone = user.timezone if user is not None else 'UTC'
-        return run, ModelMessagesTypeAdapter.dump_json(history), schedule, local_time_in(timezone)
+        squirrel_name = user.squirrel_name if user is not None else ''
+        return run, ModelMessagesTypeAdapter.dump_json(history), schedule, local_time_in(timezone), squirrel_name
 
 
 def local_time_in(timezone: str) -> str:
