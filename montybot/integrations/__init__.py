@@ -163,6 +163,10 @@ class Integrations:
             if wanted in (normalized(connection.key.removeprefix(MCP_PREFIX)), normalized(connection.name)):
                 return connection
         if (preset := catalog.mcp_preset(service)) is not None:
+            # Added already, under a name of the user's own: the same server, whatever it is called.
+            for connection in await self.connections(user_id):
+                if connection.provider == 'mcp' and connection.detail == preset.host:
+                    return connection
             return Offer(
                 provider='mcp', key=preset.key, name=preset.name, logo=f'{catalog.LOGOS}{preset.key}', url=preset.url
             )
