@@ -1,4 +1,5 @@
 import ImageIO
+import MontyKit
 import SwiftUI
 
 /// Monty's squirrel: the flying-squirrel mascot rendered in `macos/mascot`, playing a loop for each mood. Getting to work
@@ -107,5 +108,55 @@ enum SquirrelClip: String, CaseIterable {
               let source = CGImageSourceCreateWithURL(url as CFURL, nil)
         else { return [] }
         return (0 ..< CGImageSourceGetCount(source)).compactMap { CGImageSourceCreateImageAtIndex(source, $0, nil) }
+    }
+}
+
+/// The squirrel's name, beside it: "Name me" until the user picks one, then the name. Clicking it names (or
+/// renames) the squirrel in a popover. The squirrel itself ignores clicks and VoiceOver, so this carries both.
+struct SquirrelNameTag: View {
+    @Environment(AppModel.self) private var app
+    @State private var naming = false
+    @State private var draft = ""
+
+    var body: some View {
+        Button {
+            draft = app.squirrelName
+            naming = true
+        } label: {
+            HStack(spacing: 4) {
+                if app.squirrelName.isEmpty { Image(systemName: "pencil").font(.system(size: 10, weight: .semibold)) }
+                Text(app.squirrelName.isEmpty ? "Name me" : app.squirrelName)
+            }
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(app.squirrelName.isEmpty ? Palette.onSurfaceVariant : Palette.onSurface)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Palette.containerHigh))
+        }
+        .buttonStyle(.plain)
+        .help(app.squirrelName.isEmpty ? "Give your squirrel a name" : "Rename your squirrel")
+        .accessibilityLabel(app.squirrelName.isEmpty ? "Name your squirrel" : "Your squirrel, \(app.squirrelName). Rename")
+        .popover(isPresented: $naming, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Name your squirrel").font(.system(size: 13, weight: .semibold))
+                TextField("Name", text: $draft, prompt: Text("Pip"))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 200)
+                    .onSubmit(save)
+                    .onChange(of: draft) { _, new in
+                        if new.count > AppModel.squirrelNameLimit { draft = String(new.prefix(AppModel.squirrelNameLimit)) }
+                    }
+                HStack {
+                    Spacer()
+                    Button("Save", action: save).keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private func save() {
+        app.nameSquirrel(draft)
+        naming = false
     }
 }

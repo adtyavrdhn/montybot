@@ -798,7 +798,12 @@ struct NewTaskView: View {
         VStack(spacing: 0) {
             Spacer()
             VStack(alignment: .leading, spacing: 0) {
-                MontySquirrel(mood: .idle, size: 168, layoutHeight: 120).padding(.leading, -42).padding(.bottom, -6)
+                HStack(alignment: .bottom, spacing: -30) {  // the squirrel's frame is wider than the squirrel
+                    MontySquirrel(mood: .idle, size: 168, layoutHeight: 120)
+                    SquirrelNameTag().padding(.bottom, 14)
+                }
+                .padding(.leading, -42)
+                .padding(.bottom, -6)
                 Text("What should Monty do?")
                     .font(.system(size: 22, weight: .semibold))
                     .accessibilityAddTraits(.isHeader)

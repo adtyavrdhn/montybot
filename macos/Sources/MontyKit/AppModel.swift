@@ -135,6 +135,12 @@ public final class AppModel {
     public private(set) var pinned: [String] = [] {
         didSet { if let id = persistedUser { defaults.set(pinned, forKey: "pinned.\(id)") } }
     }
+    /// What the user named their squirrel (the mascot beside the composer); empty until they pick one. Kept on this
+    /// Mac, per user, like `pinned`.
+    public private(set) var squirrelName = "" {
+        didSet { if let id = persistedUser { defaults.set(squirrelName, forKey: "squirrelName.\(id)") } }
+    }
+    public static let squirrelNameLimit = 24
     /// Chats that finished while the user was not looking at them, until they open them.
     public private(set) var unseen: Set<String> = [] {
         didSet { if let id = persistedUser { defaults.set(Array(unseen), forKey: "unseen.\(id)") } }
@@ -355,6 +361,7 @@ public final class AppModel {
         drafts = defaults.dictionary(forKey: "drafts.\(user.id)") as? [String: String] ?? [:]
         unseen = Set(defaults.stringArray(forKey: "unseen.\(user.id)") ?? [])
         pinned = defaults.stringArray(forKey: "pinned.\(user.id)") ?? []
+        squirrelName = defaults.string(forKey: "squirrelName.\(user.id)") ?? ""
         persistedUser = user.id
         open(defaults.string(forKey: "route.\(user.id)").flatMap(Route.init(stored:)) ?? .chat(nil))
         startWatching()
@@ -427,6 +434,7 @@ public final class AppModel {
         forwardStack = []
         unseen = []
         pinned = []
+        squirrelName = ""
         schedules = nil
         files = nil
         savedSites = nil
@@ -550,6 +558,11 @@ public final class AppModel {
     public func setPinned(_ thread: ThreadSummary, _ pin: Bool) {
         pinned.removeAll { $0 == thread.id }
         if pin { pinned.append(thread.id) }
+    }
+
+    /// Names the squirrel: trimmed, and at most `squirrelNameLimit` characters. Empty forgets the name.
+    public func nameSquirrel(_ name: String) {
+        squirrelName = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.squirrelNameLimit))
     }
 
     public var canGoBack: Bool { !backStack.isEmpty }
