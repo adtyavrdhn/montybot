@@ -18,8 +18,20 @@ import Testing
         #expect(object(.type("héllo \"x\"")) == ["kind": "type", "text": "héllo \"x\""])
         #expect(object(.press(key: "a", modifiers: ["Control", "Shift"])) == ["kind": "press", "key": "a", "modifiers": ["Control", "Shift"]])
         #expect(object(.switchTab("t2")) == ["kind": "switch_tab", "tab_id": "t2"])
+        #expect(object(.navigate("https://x.test/a?b=1")) == ["kind": "navigate", "url": "https://x.test/a?b=1"])
         #expect(object(.giveBack) == ["kind": "give_back"])
         #expect(object(.outline) == ["kind": "outline"])
+    }
+
+    @Test func theAddressBarOpensAddressesHostsAndSearches() {
+        #expect(LiveSession.address(for: "  https://www.walmart.ca/en  ") == "https://www.walmart.ca/en")
+        #expect(LiveSession.address(for: "HTTP://shop.test") == "HTTP://shop.test")
+        #expect(LiveSession.address(for: "walmart.com") == "https://walmart.com")
+        #expect(LiveSession.address(for: "walmart.ca/en/cart?x=1") == "https://walmart.ca/en/cart?x=1")
+        #expect(LiveSession.address(for: "localhost:8000/x") == "https://localhost:8000/x")
+        #expect(LiveSession.address(for: "cheap eggs") == "https://www.google.com/search?q=cheap%20eggs")
+        #expect(LiveSession.address(for: "eggs") == "https://www.google.com/search?q=eggs")
+        #expect(LiveSession.address(for: "   ") == nil)
     }
 
     @Test func serverMessages() {

@@ -16,6 +16,8 @@ public enum LiveInput: Equatable, Sendable {
     /// A named key ("Enter", "ArrowLeft") or a character with modifiers ("a" with Control).
     case press(key: String, modifiers: [String])
     case switchTab(String)
+    /// An address the user typed into the address bar, for the active tab.
+    case navigate(String)
     case giveBack
     /// Asks what is on the page, for a screen reader (answered with an outline).
     case outline
@@ -31,6 +33,7 @@ public enum LiveInput: Equatable, Sendable {
         case .type(let text): object = ["kind": "type", "text": text]
         case .press(let key, let modifiers): object = ["kind": "press", "key": key, "modifiers": modifiers]
         case .switchTab(let tab): object = ["kind": "switch_tab", "tab_id": tab]
+        case .navigate(let url): object = ["kind": "navigate", "url": url]
         case .giveBack: object = ["kind": "give_back"]
         case .outline: object = ["kind": "outline"]
         }

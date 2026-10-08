@@ -35,6 +35,7 @@ from montybot.browser.contract import (
     MouseDown,
     MouseMove,
     MouseUp,
+    Navigate,
     NotSupported,
     Point,
     Press,
@@ -253,6 +254,8 @@ class WebDriverFrameSource:
                 raise NotSupported('ref', engine=f'{ENGINE} live view')
             case Type():
                 raise NotSupported('selector', engine=f'{ENGINE} live view')
+            case Navigate(url=url):
+                await self._session.call('POST', '/url', {'url': url})
 
     def _clamp(self, at: Point) -> Point:
         """WebDriver refuses to move the pointer outside the viewport."""

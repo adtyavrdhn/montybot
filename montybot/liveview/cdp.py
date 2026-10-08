@@ -27,6 +27,7 @@ from montybot.browser.contract import (
     MouseDown,
     MouseMove,
     MouseUp,
+    Navigate,
     NotSupported,
     Point,
     Press,
@@ -287,6 +288,13 @@ class CDPFrameSource:
                 raise NotSupported('ref', engine=f'{ENGINE} live view')
             case Type():
                 raise NotSupported('selector', engine=f'{ENGINE} live view')
+            case Navigate(url=url):
+                # Not waited for: the screencast shows it loading, as a browser window would.
+                if (session := self._session) is None:
+                    raise ActionFailed('the live view is closed')
+                navigated = await self._connection.send('Page.navigate', {'url': url}, session=session)
+                if error := navigated.get('errorText'):
+                    raise ActionFailed(f'{ENGINE}: {error}')
 
     # --- tasks ---
 

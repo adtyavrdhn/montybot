@@ -12,6 +12,7 @@ browser: /live/handoff/<id>            Mike's page and WebSocket, mounted in thi
 
 from __future__ import annotations
 
+from functools import partial
 from urllib.parse import urlsplit
 
 from starlette.applications import Starlette
@@ -19,6 +20,7 @@ from starlette.requests import HTTPConnection
 
 from montybot import approvals, store
 from montybot.browser.service import Handoff, HandoffId, UserId
+from montybot.browsing import refused_url
 from montybot.liveview.app import live_view_app
 from montybot.liveview.handoffs import GiveBack
 from montybot.resources import Resources
@@ -66,4 +68,6 @@ def live_app(resources: Resources) -> Starlette:
         handoffs=DbHandoffs(resources),
         auth=LiveAuth(),
         allowed_origins=frozenset({f'{public.scheme}://{public.netloc}'}),
+        # The agent's rule for addresses (only public web ones) holds for the user's address bar too.
+        refuse_url=partial(refused_url, allow_private=resources.settings.allow_private_networks),
     )
