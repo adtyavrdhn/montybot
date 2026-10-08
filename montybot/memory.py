@@ -9,7 +9,12 @@ from montybot.db import Connection
 from montybot.deps import RunDeps
 from montybot.resources import current
 
-RECALL_LIMIT = 5
+SEARCH_LIMIT = 5
+RECALL_LIMIT = 20
+
+# Searches match any word of the query, so a question ("where do I work") or several topics ("birthday work") still
+# find memories; `ts_rank` puts memories that match more words first. `plainto_tsquery` joins its words with ` & `
+# only, and a lexeme never holds a space, so turning that into ` | ` is safe.
 
 
 async def add_memory(connection: Connection, user_id: str, text: str, thread_id: str | None = None) -> str:
@@ -22,15 +27,33 @@ async def add_memory(connection: Connection, user_id: str, text: str, thread_id:
     return str(row['id'])
 
 
-async def search_memories(connection: Connection, user_id: str, query: str, limit: int = RECALL_LIMIT) -> list[str]:
+async def search_memories(connection: Connection, user_id: str, query: str, limit: int = SEARCH_LIMIT) -> list[str]:
+    """Memories that match any word of `query`, the best matches first."""
     cursor = await connection.execute(
         """
-        SELECT text FROM montybot.memories
-        WHERE user_id = %s AND search @@ websearch_to_tsquery('english', %s)
-        ORDER BY ts_rank(search, websearch_to_tsquery('english', %s)) DESC, created_at DESC
+        SELECT text FROM montybot.memories,
+            (SELECT replace(plainto_tsquery('english', %s)::text, ' & ', ' | ')::tsquery AS query) AS any_word
+        WHERE user_id = %s AND search @@ query
+        ORDER BY ts_rank(search, query) DESC, created_at DESC
         LIMIT %s
         """,
-        (user_id, query, query, limit),
+        (query, user_id, limit),
+    )
+    return [row['text'] for row in await cursor.fetchall()]
+
+
+async def recall_memories(connection: Connection, user_id: str, prompt: str, limit: int = RECALL_LIMIT) -> list[str]:
+    """Memories that match `prompt` first, then the newest others: a request that matches nothing still gets the
+    memories an earlier turn may have answered from, since instructions are not kept in the history."""
+    cursor = await connection.execute(
+        """
+        SELECT text FROM montybot.memories,
+            (SELECT replace(plainto_tsquery('english', %s)::text, ' & ', ' | ')::tsquery AS query) AS any_word
+        WHERE user_id = %s
+        ORDER BY search @@ query DESC, ts_rank(search, query) DESC, created_at DESC
+        LIMIT %s
+        """,
+        (prompt, user_id, limit),
     )
     return [row['text'] for row in await cursor.fetchall()]
 
@@ -67,7 +90,8 @@ async def remember(ctx: RunContext[RunDeps], fact: str) -> str:
 
 @memory_tools.tool
 async def memory_search(ctx: RunContext[RunDeps], query: str) -> list[str]:
-    """Search what you remember about the user."""
+    """Search what you remember about the user by keywords, such as 'birthday' or 'work job'. Any word may match.
+    Search before you say you do not remember something."""
     user_id = ctx.deps.user_id
 
     async def step() -> list[str]:
@@ -78,15 +102,18 @@ async def memory_search(ctx: RunContext[RunDeps], query: str) -> list[str]:
 
 
 async def recall(ctx: RunContext[RunDeps]) -> str:
-    """Memories that match the request, as instructions. Read in a step, so a replay sees what the first attempt
-    saw."""
+    """Memories that match the request, then the newest others, as instructions. Read in a step, so a replay sees
+    what the first attempt saw."""
     user_id, prompt = ctx.deps.user_id, ctx.deps.run.prompt
 
     async def step() -> list[str]:
         async with current().pool.connection() as connection:
-            return await search_memories(connection, user_id, prompt)
+            return await recall_memories(connection, user_id, prompt)
 
     memories = await DBOS.run_step_async({'name': 'memory.recall'}, step)
     if not memories:
         return ''
-    return 'What you remember about the user:\n' + '\n'.join(f'- {memory}' for memory in memories)
+    return (
+        f'What you remember about the user (at most {RECALL_LIMIT}; use `memory_search` for anything not here):\n'
+        + '\n'.join(f'- {memory}' for memory in memories)
+    )
