@@ -450,3 +450,23 @@ async def test_a_schedule_says_when_it_runs_next_and_how_it_last_went(pool: Pool
     )
     monday = schedules.next_run(weekly, datetime(2026, 10, 7, 23, 30, tzinfo=UTC))
     assert monday.isoformat() == '2026-10-12T09:00:00-04:00'
+
+
+async def test_chats_are_found_by_what_was_said_in_them(pool: Pool) -> None:
+    """Search covers titles, tasks and replies, any case, for the user's own chats only; `%` is a character."""
+    async with pool.connection() as connection:
+        user = await store.create_user(connection, 'search@example.test', 'x')
+        other = await store.create_user(connection, 'other-search@example.test', 'x')
+        assert user is not None and other is not None
+        flights = await store.create_thread(connection, user.id, 'Trip')
+        run_id = str(uuid.uuid4())
+        await store.create_run(
+            connection, run_id=run_id, user_id=user.id, thread_id=flights.id, prompt='Find flights', trigger='message'
+        )
+        await store.finish_run(connection, run_id, 'done', output='The cheapest is Air Transat at CA$375, 100% sure.')
+        theirs = await store.create_thread(connection, other.id, 'Air Transat for them')
+        assert await store.search_threads(connection, user.id, 'air transat') == [flights.id]
+        assert await store.search_threads(connection, user.id, 'TRIP') == [flights.id]
+        assert await store.search_threads(connection, user.id, '100%') == [flights.id]
+        assert await store.search_threads(connection, user.id, '9%') == []  # not "9, then anything"
+        assert theirs.id in await store.search_threads(connection, other.id, 'transat')

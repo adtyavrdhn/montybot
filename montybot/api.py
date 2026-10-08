@@ -227,6 +227,16 @@ async def add_message(request: Request, user: User) -> Response:
 
 
 @auth.signed_in
+async def search_threads(request: Request, user: User) -> Response:
+    """GET `?q=`. The ids of the user's threads whose title, tasks or replies mention `q`, latest first."""
+    query = request.query_params.get('q', '').strip()[:200]
+    if len(query) < 2:
+        return JSONResponse({'ids': []})
+    async with resources_of(request).pool.connection() as connection:
+        return JSONResponse({'ids': await store.search_threads(connection, user.id, query)})
+
+
+@auth.signed_in
 async def list_threads(request: Request, user: User) -> Response:
     """Each thread with the status of its unfinished run, if it has one: `running`, `waiting` (for the user) or
     `queued`; and otherwise how its latest run ended (`outcome`: `done`, `failed` or `stopped`); and when it last had

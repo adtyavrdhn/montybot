@@ -211,6 +211,10 @@ public struct PastSteps: Codable, Equatable, Sendable {
     }
 }
 
+struct SearchResult: Codable, Sendable {
+    let ids: [String]
+}
+
 public struct Created: Codable, Equatable, Sendable {
     public let threadId: String
     public let runId: String

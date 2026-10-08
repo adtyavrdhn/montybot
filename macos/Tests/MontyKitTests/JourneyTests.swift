@@ -756,6 +756,16 @@ struct JourneyTests {
         #expect(past.summary.hasPrefix("Worked for "))
     }
 
+    @Test func chatsAreFoundByWhatMontySaid() async throws {
+        let app = try await person()
+        let chat = try await say("Say hello", in: app)
+        try await eventually("the reply") { chat.run?.status == .done }
+        let reply = try #require(chat.messages.last { $0.role == .assistant }?.text)
+        let word = try #require(reply.split(separator: " ").first { $0.count >= 4 }.map(String.init), "a word in: \(reply)")
+        #expect(await app.search(word).contains(try #require(chat.threadId)))
+        #expect(await app.search("zz-nothing-says-this-zz").isEmpty)
+    }
+
     @Test func theChatListSaysWhatAChatWaitsFor() async throws {
         let app = try await person()
         let chat = try await say("Tell me when a delivery slot opens at \(try site("slots"))", in: app)

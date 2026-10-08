@@ -156,6 +156,14 @@ public final class APIClient: Sendable {
 
     public func thread(_ id: String) async throws -> ThreadDetail { try await send("GET", "/api/threads/\(id)") }
 
+    /// The ids of the chats whose title, tasks or replies mention `query`, latest first.
+    public func search(_ query: String) async throws -> [String] {
+        var search = request("GET", "/api/search")
+        search.url = search.url?.appending(queryItems: [URLQueryItem(name: "q", value: query)])  // not in the path: escaped
+        let found: SearchResult = try await decode(search)
+        return found.ids
+    }
+
     /// Messages carry the Mac's time zone, so the bot knows what "today" and "9am" mean for the user.
     public func startThread(_ text: String) async throws -> Created {
         try await send("POST", "/api/threads", body: ["text": text, "timezone": TimeZone.current.identifier])
