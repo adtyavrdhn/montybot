@@ -1,6 +1,6 @@
 """The Lightpanda backend (#18): the conformance suite and Lightpanda's own behaviour, against a real Lightpanda.
 
-Needs the Lightpanda binary at `montybot.browser.lightpanda.default_binary()` (set `MONTYBOT_LIGHTPANDA_BINARY` to move
+Needs the Lightpanda binary at `sammy.browser.lightpanda.default_binary()` (set `SAMMY_LIGHTPANDA_BINARY` to move
 it); the tests that start Lightpanda are skipped without it. Each test starts its own Lightpanda and kills it at the
 end.
 """
@@ -17,10 +17,10 @@ from pathlib import Path
 
 import pytest
 
-from montybot.browser.conformance import BrowserBackendConformance, Site, serve_site, wait_for_text
-from montybot.browser.contract import ActionFailed, BrowserBackend, Click, Feature, Navigate, NotSupported, Point
-from montybot.browser.lightpanda import LightpandaBackend, LightpandaOptions, default_binary
-from montybot.browser.state import BrowserState, Cookie
+from sammy.browser.conformance import BrowserBackendConformance, Site, serve_site, wait_for_text
+from sammy.browser.contract import ActionFailed, BrowserBackend, Click, Feature, Navigate, NotSupported, Point
+from sammy.browser.lightpanda import LightpandaBackend, LightpandaOptions, default_binary
+from sammy.browser.state import BrowserState, Cookie
 
 pytestmark = pytest.mark.anyio
 

@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from montybot.workspaces import WorkspaceFiles, Workspaces, download_name, save_download
+from sammy.workspaces import WorkspaceFiles, Workspaces, download_name, save_download
 
 pytestmark = pytest.mark.anyio
 
@@ -104,7 +104,7 @@ async def test_files_given_to_the_user_are_bounded_and_take_the_lock(
 ) -> None:
     import asyncio
 
-    from montybot import workspaces as module
+    from sammy import workspaces as module
 
     files = workspaces.files(str(uuid.uuid4()))
     for number in range(4):

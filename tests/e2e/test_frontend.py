@@ -13,7 +13,7 @@ from urllib.parse import unquote, urlsplit
 import pytest
 from playwright.sync_api import Page, Route, expect, sync_playwright
 
-STATIC = Path(__file__).resolve().parents[2] / 'montybot' / 'static'
+STATIC = Path(__file__).resolve().parents[2] / 'sammy' / 'static'
 THREAD = '11111111-1111-1111-1111-111111111111'
 RUN = '22222222-2222-2222-2222-222222222222'
 ASK = '33333333-3333-3333-3333-333333333333'
@@ -167,7 +167,7 @@ class MockAPI:
         media_type = request.headers['content-type']
         self.calls.append(('POST', '/api/attachments', {'name': name, 'media_type': media_type, 'size': len(data)}))
         if self.upload_status != 201:
-            route.fulfill(status=self.upload_status, body='{"detail": "That is not a file Monty can take."}',
+            route.fulfill(status=self.upload_status, body='{"detail": "That is not a file Sammy can take."}',
                           content_type='application/json')  # fmt: skip
             return
         kind = 'image' if media_type.startswith('image/') else 'pdf' if media_type == 'application/pdf' else 'file'
@@ -231,7 +231,7 @@ def test_auth_and_signup(frontend: tuple[Page, MockAPI]) -> None:
     page.goto('http://monty.test/')
     expect(page.get_by_role('heading', name='Welcome back')).to_be_visible()
     page.click('#signup-button')
-    expect(page.locator('#auth-title')).to_have_text('Make room for Monty')
+    expect(page.locator('#auth-title')).to_have_text('Make room for Sammy')
     expect(page.locator('#password')).to_have_attribute('autocomplete', 'new-password')
     page.get_by_label('Email address').fill('pat@example.test')
     page.get_by_label('Password', exact=True).fill('correct horse')
@@ -305,7 +305,7 @@ def test_saved_signins_and_schedules(frontend: tuple[Page, MockAPI]) -> None:
     expect(page.locator('#schedule-list')).to_contain_text('(paused)')
     page.get_by_role('button', name='Resume', exact=True).click()
     expect(page.get_by_role('button', name='Pause', exact=True)).to_be_visible()
-    page.once('dialog', lambda dialog: dialog.accept())  # "Delete ...? Monty will stop running it."
+    page.once('dialog', lambda dialog: dialog.accept())  # "Delete ...? Sammy will stop running it."
     page.get_by_role('button', name='Delete', exact=True).click()
     expect(page.locator('#schedule-list')).to_contain_text('No scheduled tasks yet')
     assert ('DELETE', '/api/sign-ins/shop.example.test', None) in mock.calls
@@ -328,7 +328,7 @@ def test_asks(frontend: tuple[Page, MockAPI], kind: str) -> None:
     page.goto(f'http://monty.test/#/t/{THREAD}')
     expect(page.locator('#ask')).to_contain_text('Please review this step.')
     if kind == 'question':
-        page.get_by_label('Your answer to Monty').fill('Two boxes')
+        page.get_by_label('Your answer to Sammy').fill('Two boxes')
         page.get_by_role('button', name='Answer', exact=True).click()
         assert ('POST', '/api/asks/ask', {'text': 'Two boxes'}) in mock.calls
     elif kind == 'approval':
@@ -500,10 +500,10 @@ def test_files_are_attached_by_picking_dropping_and_pasting(frontend: tuple[Page
     chips = page.locator('#attachments li')
     expect(chips).to_have_count(4)
     expect(chips.nth(0)).to_contain_text('receipt.png')
-    expect(chips.nth(0)).to_contain_text('Monty sees it')
+    expect(chips.nth(0)).to_contain_text('Sammy sees it')
     expect(chips.nth(0).locator('img')).to_have_count(1)  # a preview of the picture
     expect(chips.nth(1).locator('.file-badge')).to_have_text('PDF')
-    expect(chips.nth(2)).to_contain_text('Monty opens it with code')
+    expect(chips.nth(2)).to_contain_text('Sammy opens it with code')
     expect(chips.nth(3)).to_contain_text(re.compile(r'Pasted image [\d.]+\.png'))
     uploads = [body for method, path, body in mock.calls if path == '/api/attachments']
     assert [u['name'] for u in uploads if isinstance(u, dict)][:3] == [  # names stay as they were
@@ -550,7 +550,7 @@ def test_a_file_that_cannot_be_attached_says_why_and_is_not_sent(frontend: tuple
     workspace(page, mock)
     mock.upload_status = 400
     page.set_input_files('#file-input', files=[{'name': 'odd.bin', 'mimeType': '', 'buffer': b'x'}])
-    expect(page.locator('#attachments li.failed')).to_contain_text('That is not a file Monty can take.')
+    expect(page.locator('#attachments li.failed')).to_contain_text('That is not a file Sammy can take.')
     page.set_input_files('#file-input', files=[{'name': 'empty.txt', 'mimeType': 'text/plain', 'buffer': b''}])
     expect(page.locator('#attachments li.failed').nth(1)).to_contain_text('This file is empty')
     page.click('#send')  # only files that failed, and no text: nothing to send
@@ -563,7 +563,7 @@ def test_a_file_that_cannot_be_attached_says_why_and_is_not_sent(frontend: tuple
     expect(page.locator('#attachments li')).to_have_count(2)  # still there, to remove
 
 
-def test_files_monty_shared_show_with_its_reply(frontend: tuple[Page, MockAPI]) -> None:
+def test_files_sammy_shared_show_with_its_reply(frontend: tuple[Page, MockAPI]) -> None:
     page, mock = frontend
     mock.signed_in = True
     mock.messages = [
@@ -707,7 +707,7 @@ def test_sse_waiting_preserves_answer_and_rejects_wrong_run(frontend: tuple[Page
         'ask': {'id': 'ask', 'kind': 'question', 'prompt': 'Which airport?'},
     }
     emit(page, 'status', waiting)
-    answer = page.get_by_label('Your answer to Monty')
+    answer = page.get_by_label('Your answer to Sammy')
     answer.fill('Lisbon')
     emit(page, 'status', waiting)
     expect(answer).to_have_value('Lisbon')
@@ -804,14 +804,14 @@ def test_a_scheduled_tasks_chat_before_its_first_run_says_so(frontend: tuple[Pag
 def test_skip_link_and_a_working_chat_say_where_you_are(frontend: tuple[Page, MockAPI]) -> None:
     page, mock = frontend
     streaming_chat(page, mock)
-    expect(page.locator('#message')).to_have_attribute('placeholder', re.compile('Monty is on it'))
+    expect(page.locator('#message')).to_have_attribute('placeholder', re.compile('Sammy is on it'))
     page.keyboard.press('Tab')  # the skip link is the first thing on the page
     page.keyboard.press('Enter')
     expect(page.locator('#message')).to_be_focused()
     expect(page).to_have_url(f'http://monty.test/#/t/{THREAD}')  # still in the chat
 
 
-def test_enter_while_monty_waits_goes_to_the_question(frontend: tuple[Page, MockAPI]) -> None:
+def test_enter_while_sammy_waits_goes_to_the_question(frontend: tuple[Page, MockAPI]) -> None:
     page, mock = frontend
     mock.signed_in = True
     mock.messages = [{'role': 'user', 'text': 'Order eggs'}]
@@ -825,7 +825,7 @@ def test_enter_while_monty_waits_goes_to_the_question(frontend: tuple[Page, Mock
     expect(page.locator('#message')).to_have_attribute('placeholder', re.compile('waiting for you'))
     page.fill('#message', 'brown')
     page.press('#message', 'Enter')
-    expect(page.get_by_label('Your answer to Monty')).to_be_focused()
+    expect(page.get_by_label('Your answer to Sammy')).to_be_focused()
     assert not any(method == 'POST' for method, _, _ in mock.calls)
 
 
@@ -905,7 +905,7 @@ def test_no_connection_says_so_in_plain_words(frontend: tuple[Page, MockAPI]) ->
     page.route('**/api/threads', lambda route: route.abort())
     page.fill('#message', 'Compare flights')
     page.click('#send')
-    expect(page.locator('#notice-text')).to_have_text('Could not reach Monty. Check your connection, and try again.')
+    expect(page.locator('#notice-text')).to_have_text('Could not reach Sammy. Check your connection, and try again.')
 
 
 def test_a_chat_whose_stream_closed_for_good_catches_up_from_the_list(frontend: tuple[Page, MockAPI]) -> None:
@@ -924,7 +924,7 @@ def test_offline_at_start_says_so_instead_of_looking_signed_out(frontend: tuple[
     mock.signed_in = True
     page.route('**/api/me', lambda route: route.abort())
     page.goto('http://monty.test/')
-    expect(page.locator('#signin-error')).to_have_text('Could not reach Monty. Check your connection, and try again.')
+    expect(page.locator('#signin-error')).to_have_text('Could not reach Sammy. Check your connection, and try again.')
 
 
 def test_background_refreshes_report_bugs_even_though_offline_is_quiet(frontend: tuple[Page, MockAPI]) -> None:
@@ -953,7 +953,7 @@ def test_a_failed_sign_out_does_not_look_like_one(frontend: tuple[Page, MockAPI]
     workspace(page, mock)
     page.route('**/api/signout', lambda route: route.abort())
     page.click('#signout')
-    expect(page.locator('#notice-text')).to_have_text('Could not reach Monty. Check your connection, and try again.')
+    expect(page.locator('#notice-text')).to_have_text('Could not reach Sammy. Check your connection, and try again.')
     expect(page.locator('#composer')).to_be_visible()  # still signed in, and it shows
 
 
@@ -962,7 +962,7 @@ def test_being_offline_is_said_once_until_the_server_answers_again(frontend: tup
     workspace(page, mock)
     page.route('**/api/threads', lambda route: route.abort())
     page.evaluate('reportUnlessOffline(loadThreads())')
-    expect(page.locator('#notice-text')).to_have_text('Could not reach Monty. Check your connection, and try again.')
+    expect(page.locator('#notice-text')).to_have_text('Could not reach Sammy. Check your connection, and try again.')
     page.get_by_role('button', name='Dismiss').click()
     page.evaluate('reportUnlessOffline(loadThreads())')  # the next retry, still offline
     page.wait_for_timeout(300)
@@ -1066,7 +1066,7 @@ def test_telemetry_traces_actions_as_route_templates_and_never_secrets(frontend:
         'signed in',
     )
     assert json.loads(exported.splitlines()[0])['resourceSpans']  # OTLP JSON
-    assert 'montybot-web' in exported
+    assert 'sammy-web' in exported
     assert USER in exported  # the user is their opaque id
     assert RUN in exported  # as an attribute, not in an address
     assert mock.traceparents[('POST', '/api/threads')]  # the server joins the trace
@@ -1166,7 +1166,7 @@ def test_a_chat_asks_to_connect_an_app(frontend: tuple[Page, MockAPI], connected
 def test_a_service_without_an_app_offers_an_mcp_server(frontend: tuple[Page, MockAPI]) -> None:
     page, mock = frontend
     connect_chat(page, mock, {'provider': 'mcp', 'key': '', 'name': 'Acme Wiki', 'logo': ''})
-    expect(page.locator('#ask')).to_contain_text("Acme Wiki isn't one of the apps Monty connects in one click")
+    expect(page.locator('#ask')).to_contain_text("Acme Wiki isn't one of the apps Sammy connects in one click")
     page.get_by_role('button', name='Add an MCP server').click()
     expect(page.locator('#integrations')).to_be_visible()
     expect(page.locator('#server-name')).to_have_value('Acme Wiki')
@@ -1287,7 +1287,7 @@ def test_integrations_page(frontend: tuple[Page, MockAPI], width: int) -> None:
 
     # A sign-in that finishes in its own window updates the page.
     mock.connections[0]['state'] = 'connected'
-    page.evaluate("new BroadcastChannel('montybot-integrations').postMessage({ok: true})")
+    page.evaluate("new BroadcastChannel('sammy-integrations').postMessage({ok: true})")
     expect(wiki).not_to_contain_text('Needs you to sign in')
 
 

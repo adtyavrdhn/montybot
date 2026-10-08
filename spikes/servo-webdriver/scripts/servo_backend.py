@@ -1,6 +1,6 @@
 """Fill and apply the PoC's engine-neutral BrowserState through Servo's W3C WebDriver server.
 
-poc/montybot_poc/state.py is imported by path and not modified. Everything here is plain WebDriver:
+poc/sammy_poc/state.py is imported by path and not modified. Everything here is plain WebDriver:
 Get All Cookies / Add Cookie / Execute Script / Navigate To / New Window.
 
 What WebDriver forces on us (measured on servoshell 0.7.0 nightly 2026-10-05):
@@ -26,11 +26,11 @@ from urllib.parse import urlsplit
 
 from wd import Session
 
-_POC_STATE = pathlib.Path(__file__).resolve().parents[3] / 'poc' / 'montybot_poc' / 'state.py'
-_spec = importlib.util.spec_from_file_location('montybot_poc_state', _POC_STATE)
+_POC_STATE = pathlib.Path(__file__).resolve().parents[3] / 'poc' / 'sammy_poc' / 'state.py'
+_spec = importlib.util.spec_from_file_location('sammy_poc_state', _POC_STATE)
 assert _spec and _spec.loader
 state_mod = importlib.util.module_from_spec(_spec)
-sys.modules['montybot_poc_state'] = state_mod
+sys.modules['sammy_poc_state'] = state_mod
 _spec.loader.exec_module(state_mod)
 BrowserState = state_mod.BrowserState
 Cookie = state_mod.Cookie

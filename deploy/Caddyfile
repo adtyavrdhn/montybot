@@ -1,10 +1,10 @@
 # HTTPS for the app, with a certificate from Let's Encrypt for $DOMAIN.
-# Everything but /healthz needs the basic-auth login in /opt/montybot/.env: the app has open sign-up, and its runs
+# Everything but /healthz needs the basic-auth login in /opt/sammy/.env: the app has open sign-up, and its runs
 # spend a Claude Code subscription.
 #
 # The pages an integration's sign-in comes back to are open too: on a Mac the user signs in to Linear (say) in their
 # own browser, which may not have this login, and the page wakes the chat waiting for it. Each acts only on a state
-# Monty made (signed with SESSION_SECRET, or stored and used once), so they let nobody sign up or start a run. Their
+# Sammy made (signed with SESSION_SECRET, or stored and used once), so they let nobody sign up or start a run. Their
 # stylesheet comes with them.
 {$DOMAIN} {
 	handle /healthz {

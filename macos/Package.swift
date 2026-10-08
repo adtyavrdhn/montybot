@@ -1,12 +1,12 @@
 // swift-tools-version: 6.0
-// Monty for Mac: a native client of the montybot server. `scripts/build-app.sh` makes Monty.app.
+// Sammy for Mac: a native client of the sammy server. `scripts/build-app.sh` makes Sammy.app.
 import PackageDescription
 
 let package = Package(
-    name: "Monty",
+    name: "Sammy",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "Monty", targets: ["Monty"]),
+        .executable(name: "Sammy", targets: ["Sammy"]),
     ],
     dependencies: [
         // Telemetry (Telemetry.swift): the API and SDK, and OTLP over HTTP to the server, which forwards to Logfire.
@@ -15,14 +15,14 @@ let package = Package(
     ],
     targets: [
         // Everything but the views: the API, the run's live updates, the live view's wire, and the app's state.
-        .target(name: "MontyKit", dependencies: [
+        .target(name: "SammyKit", dependencies: [
             .product(name: "OpenTelemetryApi", package: "opentelemetry-swift-core"),
             .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core"),
             .product(name: "OpenTelemetryProtocolExporterHTTP", package: "opentelemetry-swift"),
         ]),
-        .executableTarget(name: "Monty", dependencies: ["MontyKit"]),
-        .testTarget(name: "MontyKitTests", dependencies: [
-            "MontyKit", .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core"),
+        .executableTarget(name: "Sammy", dependencies: ["SammyKit"]),
+        .testTarget(name: "SammyKitTests", dependencies: [
+            "SammyKit", .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core"),
         ]),
     ]
 )

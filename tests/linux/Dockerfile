@@ -14,8 +14,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.12 /uv /usr/local/bin/uv
 RUN useradd --create-home tester
 USER tester
 # The uv cache is a volume; made here so the volume belongs to `tester`.
-RUN mkdir -p /home/tester/.cache/uv /home/tester/montybot
+RUN mkdir -p /home/tester/.cache/uv /home/tester/sammy
 ENV UV_PROJECT_ENVIRONMENT=/home/tester/venv \
     UV_CACHE_DIR=/home/tester/.cache/uv \
     UV_LINK_MODE=copy
-WORKDIR /home/tester/montybot
+WORKDIR /home/tester/sammy

@@ -13,11 +13,11 @@ import pytest
 from cryptography.exceptions import InvalidTag
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-from montybot import crypto, memory, schedules, signins, store
-from montybot.browser.state import BrowserState, Cookie
-from montybot.db import Pool, create_pool, migrate
-from montybot.models import AskKind, Schedule, Trigger
-from montybot.workspaces import WorkspaceFiles, Workspaces, save_download
+from sammy import crypto, memory, schedules, signins, store
+from sammy.browser.state import BrowserState, Cookie
+from sammy.db import Pool, create_pool, migrate
+from sammy.models import AskKind, Schedule, Trigger
+from sammy.workspaces import WorkspaceFiles, Workspaces, save_download
 
 pytestmark = pytest.mark.anyio
 KEY = crypto.deployment_key(crypto.new_key())
@@ -115,7 +115,7 @@ async def test_sign_ins_are_encrypted_per_user(pool: Pool) -> None:
     assert await jar.load(user_id=a.id) == state
     assert await jar.load(user_id=b.id) is None
     async with pool.connection() as c:
-        row = await (await c.execute('SELECT state, version FROM montybot.sign_ins')).fetchone()
+        row = await (await c.execute('SELECT state, version FROM sammy.sign_ins')).fetchone()
         assert row is not None and row['version'] == 2
         sealed = bytes(row['state'])
         assert b's3cret-session' not in sealed and b'shop.test' not in sealed
@@ -129,7 +129,7 @@ async def test_sign_ins_are_encrypted_per_user(pool: Pool) -> None:
     # An older version put back in place does not load as the current one.
     async with pool.connection() as c:
         await jar.save(user_id=a.id, state=BrowserState(url='https://shop.test/'))  # version 3, after forgetting
-        await c.execute('UPDATE montybot.sign_ins SET state = %s WHERE user_id = %s', (sealed, a.id))
+        await c.execute('UPDATE sammy.sign_ins SET state = %s WHERE user_id = %s', (sealed, a.id))
     with pytest.raises(signins.UnreadableSignIns):
         await jar.load(user_id=a.id)
 
@@ -210,7 +210,7 @@ async def test_thread_history_and_status_share_a_snapshot(pool: Pool, monkeypatc
     from pydantic_ai.messages import ModelResponse, TextPart
     from starlette.requests import Request
 
-    from montybot import api
+    from sammy import api
 
     async with pool.connection() as connection:
         user = await store.create_user(connection, 'snapshot@example.test', 'x')
@@ -264,8 +264,8 @@ async def test_saved_browser_data_includes_storage_and_forgets_subdomains(pool: 
 
     from starlette.requests import Request
 
-    from montybot import api
-    from montybot.browser.state import BLANK_URL, BrowserState, Cookie
+    from sammy import api
+    from sammy.browser.state import BLANK_URL, BrowserState, Cookie
 
     async with pool.connection() as connection:
         user = await store.create_user(connection, 'data@example.test', 'x')
@@ -329,7 +329,7 @@ async def test_saved_browser_data_includes_storage_and_forgets_subdomains(pool: 
 async def test_an_answered_run_shows_as_working_until_it_carries_on(pool: Pool) -> None:
     """Between the user's answer and the run waking up, the run is still `waiting` in the database, but it waits for
     nobody: the user sees it working, not an empty "waiting"."""
-    from montybot import api
+    from sammy import api
 
     async with pool.connection() as connection:
         user = await store.create_user(connection, 'answered@example.test', 'x')
@@ -388,7 +388,7 @@ async def test_chats_are_listed_by_when_they_were_last_active(pool: Pool) -> Non
             connection, run_id=str(uuid.uuid4()), user_id=user.id, thread_id=older.id, prompt='hi', trigger='message'
         )
         await connection.execute(
-            "UPDATE montybot.runs SET created_at = now() - interval '2 days' WHERE thread_id = %s", (older.id,)
+            "UPDATE sammy.runs SET created_at = now() - interval '2 days' WHERE thread_id = %s", (older.id,)
         )
         scheduled = await store.create_thread(connection, user.id, 'a schedule, not run yet')
         listed = [thread.id for thread in await store.list_threads(connection, user.id)]
@@ -440,7 +440,7 @@ async def test_a_schedule_says_when_it_runs_next_and_how_it_last_went(pool: Pool
             )
             await store.finish_run(connection, run_id, 'done', output='ok')
             await connection.execute(  # hours apart, as scheduled runs are
-                'UPDATE montybot.runs SET created_at = now() - make_interval(hours => %s) WHERE id = %s',
+                'UPDATE sammy.runs SET created_at = now() - make_interval(hours => %s) WHERE id = %s',
                 (hours_ago, run_id),
             )
         last = await store.last_scheduled_runs(connection, user.id)

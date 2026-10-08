@@ -26,7 +26,7 @@ there. Deleting cookies needs no change: `DeleteCookie` and `DeleteCookies` igno
 
 ```bash
 cd servo            # a checkout of v0.7.0
-git apply /path/to/montybot/patches/servo-webdriver-httponly.patch
+git apply /path/to/sammy/patches/servo-webdriver-httponly.patch
 ./mach build --release
 ```
 

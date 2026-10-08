@@ -83,7 +83,7 @@ def check_github() -> dict:
         refs = {ln.split('"')[1]: ln.split('[ref=')[1].split(']')[0] for ln in snap['lines'] if '[ref=' in ln and '"' in ln}
         u = d.find(f'[data-mb-ref="{refs["Username or email address"]}"]')
         d.click(u)
-        d.send_keys(u, 'montybot-spike')
+        d.send_keys(u, 'sammy-spike')
         p = d.find(f'[data-mb-ref="{refs["Password"]}"]')
         d.click(p)
         d.send_keys(p, 'not-a-real-password')

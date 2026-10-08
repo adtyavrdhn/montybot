@@ -1,4 +1,4 @@
-# The montybot app with Chrome, Xvfb and bubblewrap, for deploy/compose.yaml.
+# The sammy app with Chrome, Xvfb and bubblewrap, for deploy/compose.yaml.
 # Playwright's image has Chromium and its system libraries; its tag matches the playwright version in uv.lock.
 FROM mcr.microsoft.com/playwright/python:v1.63.0-noble
 
@@ -18,7 +18,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
-COPY montybot ./montybot
+COPY sammy ./sammy
 RUN uv sync --frozen --no-dev
 
 # The Claude Code sign-in and the users' files live on volumes mounted here; a new named volume copies this owner.
@@ -30,4 +30,4 @@ USER pwuser
 ARG COMMIT
 ENV COMMIT=${COMMIT}
 
-CMD ["sh", "-c", "montybot migrate && exec montybot serve"]
+CMD ["sh", "-c", "sammy migrate && exec sammy serve"]

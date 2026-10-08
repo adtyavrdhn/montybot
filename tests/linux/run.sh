@@ -4,30 +4,30 @@
 #   tests/linux/run.sh tests/test_cpython.py tests/e2e/test_files.py
 #
 # The checkout is copied into the container (without .venv), so nothing is written back. Postgres and Full Monty are
-# reached on the Docker host's network: MONTYBOT_TEST_POSTGRES and MONTYBOT_TEST_MONTY_URL pass through as they are,
+# reached on the Docker host's network: SAMMY_TEST_POSTGRES and SAMMY_TEST_MONTY_URL pass through as they are,
 # so they must name ports published on the Docker host (on colima, the VM). bwrap needs new namespaces and a fresh
 # /proc, which Docker's default profiles forbid, hence the three `security-opt`s, as in deploy/compose.yaml.
 #
-# For the Servo tests, set MONTYBOT_SERVO_BINARY to servoshell from the Linux release for the Docker host's
+# For the Servo tests, set SAMMY_SERVO_BINARY to servoshell from the Linux release for the Docker host's
 # architecture (unpacked on this machine); its folder is mounted read-only at the same path. The same goes for
-# MONTYBOT_LIGHTPANDA_BINARY and the Lightpanda Linux release binary.
+# SAMMY_LIGHTPANDA_BINARY and the Lightpanda Linux release binary.
 set -eu
 cd "$(dirname "$0")/../.."
-docker build --load --quiet --tag montybot-linux-tests tests/linux >/dev/null  # --load: a buildx container driver
+docker build --load --quiet --tag sammy-linux-tests tests/linux >/dev/null  # --load: a buildx container driver
 mounts=''
-if [ -n "${MONTYBOT_SERVO_BINARY:-}" ]; then
-    servo_dir=$(dirname "$MONTYBOT_SERVO_BINARY")
-    mounts="--volume $servo_dir:$servo_dir:ro --env MONTYBOT_SERVO_BINARY"
+if [ -n "${SAMMY_SERVO_BINARY:-}" ]; then
+    servo_dir=$(dirname "$SAMMY_SERVO_BINARY")
+    mounts="--volume $servo_dir:$servo_dir:ro --env SAMMY_SERVO_BINARY"
 fi
-if [ -n "${MONTYBOT_LIGHTPANDA_BINARY:-}" ]; then
-    lightpanda_dir=$(dirname "$MONTYBOT_LIGHTPANDA_BINARY")
-    mounts="$mounts --volume $lightpanda_dir:$lightpanda_dir:ro --env MONTYBOT_LIGHTPANDA_BINARY"
+if [ -n "${SAMMY_LIGHTPANDA_BINARY:-}" ]; then
+    lightpanda_dir=$(dirname "$SAMMY_LIGHTPANDA_BINARY")
+    mounts="$mounts --volume $lightpanda_dir:$lightpanda_dir:ro --env SAMMY_LIGHTPANDA_BINARY"
 fi
 # shellcheck disable=SC2086  # $mounts is several words on purpose
 exec docker run --rm --network host $mounts \
     --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined \
-    --volume "$PWD:/checkout:ro" --volume montybot-linux-tests-uv:/home/tester/.cache/uv \
-    --env MONTYBOT_TEST_POSTGRES --env MONTYBOT_TEST_MONTY_URL \
-    montybot-linux-tests sh -c '
+    --volume "$PWD:/checkout:ro" --volume sammy-linux-tests-uv:/home/tester/.cache/uv \
+    --env SAMMY_TEST_POSTGRES --env SAMMY_TEST_MONTY_URL \
+    sammy-linux-tests sh -c '
         tar -C /checkout --warning=no-file-changed --exclude=./.venv --exclude=./data --exclude=__pycache__ -cf - . | tar -xf -
         uv sync --frozen --quiet && exec uv run pytest -p no:cacheprovider "$@"' sh "$@"

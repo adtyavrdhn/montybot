@@ -11,7 +11,7 @@ import pytest
 from conftest import App, Client
 from sites.invoices import INVOICES, Invoices, csv_of, last_three_total
 
-from montybot.cpython import can_jail
+from sammy.cpython import can_jail
 
 NEEDS_LINUX = 'the CPython tier runs in bwrap, which needs Linux: run tests/linux/run.sh'
 

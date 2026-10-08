@@ -231,7 +231,7 @@ wheels = [
 ]
 
 [[package]]
-name = "montybot-poc"
+name = "sammy-poc"
 version = "0.0.0"
 source = { virtual = "." }
 dependencies = [

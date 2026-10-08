@@ -3,7 +3,7 @@
 - `StubBrowserService` stands in for the browser service (#10), with the in-memory jar standing in for #4.
 - `ChromiumStandIn` and `ServoStandIn` drive the engines directly, with only what these tests need, standing in for
   the Chromium (#11) and Servo (#12) backends. Each returns its engine's real `FrameSource` from `live_view()`.
-- `serve_demo_shop` serves `poc/montybot_poc/demo_site.py`; `serve_fixtures` serves the hold check (U6) and the pages
+- `serve_demo_shop` serves `poc/sammy_poc/demo_site.py`; `serve_fixtures` serves the hold check (U6) and the pages
   the measurements use.
 - `serve_app` runs the live view app under uvicorn.
 
@@ -36,9 +36,9 @@ import uvicorn
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from starlette.types import ASGIApp
 
-from montybot.browser.cdp import CDPOptions, ChromiumCDPBackend, default_executable
-from montybot.browser.cloak import cloak_executable, with_cloak
-from montybot.browser.contract import (
+from sammy.browser.cdp import CDPOptions, ChromiumCDPBackend, default_executable
+from sammy.browser.cloak import cloak_executable, with_cloak
+from sammy.browser.contract import (
     Action,
     BrowserBackend,
     Download,
@@ -48,8 +48,8 @@ from montybot.browser.contract import (
     Screenshot,
     Snapshot,
 )
-from montybot.browser.live import FrameSource, LiveViewBackend
-from montybot.browser.service import (
+from sammy.browser.live import FrameSource, LiveViewBackend
+from sammy.browser.service import (
     ActionResult,
     Handoff,
     HandoffActive,
@@ -63,13 +63,13 @@ from montybot.browser.service import (
     UnknownRun,
     UserId,
 )
-from montybot.browser.state import BLANK_URL, BrowserState, Cookie
-from montybot.liveview.chromium import CdpFrameSource
-from montybot.liveview.polling import PollingFrameSource
-from montybot.liveview.webdriver import WebDriverFrameSource, WebDriverSession
+from sammy.browser.state import BLANK_URL, BrowserState, Cookie
+from sammy.liveview.chromium import CdpFrameSource
+from sammy.liveview.polling import PollingFrameSource
+from sammy.liveview.webdriver import WebDriverFrameSource, WebDriverSession
 
 REPO = Path(__file__).resolve().parents[2]
-SERVO = Path(os.environ.get('MONTYBOT_SERVO', '~/.cache/montybot/servo/Servo.app/Contents/MacOS/servoshell'))
+SERVO = Path(os.environ.get('SAMMY_SERVO', '~/.cache/sammy/servo/Servo.app/Contents/MacOS/servoshell'))
 SERVO = SERVO.expanduser()
 VIEWPORT = {'width': 1280, 'height': 720}
 
@@ -308,7 +308,7 @@ class ServoStandIn:
         if state is not None and (state.cookies or state.local_storage or state.session_storage):
             raise NotSupported('export', engine='servo stand-in', detail='opens plain URLs only')
         port = free_port()
-        self._config_dir = tempfile.mkdtemp(prefix='montybot-liveview-servo-')
+        self._config_dir = tempfile.mkdtemp(prefix='sammy-liveview-servo-')
         self._process = await asyncio.create_subprocess_exec(
             str(SERVO),
             '--headless',
@@ -386,7 +386,7 @@ async def backends(engine: str) -> AsyncIterator[Callable[[], BrowserBackend]]:
     if engine == 'cloak':
         binary = cloak_executable()
         if binary is None or not binary.exists():
-            pytest.skip('CloakBrowser not found; set MONTYBOT_CLOAK_BINARY')
+            pytest.skip('CloakBrowser not found; set SAMMY_CLOAK_BINARY')
         yield lambda: ChromiumCDPBackend(with_cloak(CDPOptions(headless=True)))
     elif engine == 'cdp':
         if not default_executable().exists():
@@ -401,7 +401,7 @@ async def backends(engine: str) -> AsyncIterator[Callable[[], BrowserBackend]]:
                 await browser.close()
     else:
         if not SERVO.exists():
-            pytest.skip(f'servoshell not found at {SERVO}; set MONTYBOT_SERVO')
+            pytest.skip(f'servoshell not found at {SERVO}; set SAMMY_SERVO')
         yield ServoStandIn
 
 
@@ -429,8 +429,8 @@ def serve_http(handler: type[BaseHTTPRequestHandler]) -> Iterator[str]:
 
 @contextmanager
 def serve_demo_shop() -> Iterator[str]:
-    """`poc/montybot_poc/demo_site.py`, loaded from the repo, served on a free port."""
-    spec = importlib.util.spec_from_file_location('montybot_poc_demo_site', REPO / 'poc/montybot_poc/demo_site.py')
+    """`poc/sammy_poc/demo_site.py`, loaded from the repo, served on a free port."""
+    spec = importlib.util.spec_from_file_location('sammy_poc_demo_site', REPO / 'poc/sammy_poc/demo_site.py')
     assert spec is not None and spec.loader is not None
     demo_site = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(demo_site)

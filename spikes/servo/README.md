@@ -1,7 +1,7 @@
 # Servo embedding spike
 
 A throwaway check of whether the `servo` crate (0.7.0 from crates.io, MPL-2.0) could stand in for headless Chromium in
-monty-bot. It's one Rust binary that runs Servo offscreen with `SoftwareRenderingContext` and does the following:
+Sammy. It's one Rust binary that runs Servo offscreen with `SoftwareRenderingContext` and does the following:
 
 - loads a URL and waits for `LoadStatus::Complete`
 - saves a PNG screenshot

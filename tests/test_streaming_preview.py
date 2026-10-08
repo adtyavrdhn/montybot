@@ -33,8 +33,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import FunctionModel
 
-from montybot import agent as agent_module
-from montybot import streaming
+from sammy import agent as agent_module
+from sammy import streaming
 
 pytestmark = pytest.mark.anyio
 
@@ -276,7 +276,7 @@ async def test_final_write_skips_already_finished_run(monkeypatch: pytest.Monkey
 
     from pydantic_ai.messages import ModelMessagesTypeAdapter
 
-    from montybot import store, workflows
+    from sammy import store, workflows
 
     @asynccontextmanager
     async def transaction() -> AsyncIterator[None]:

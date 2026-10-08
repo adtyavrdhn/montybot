@@ -16,7 +16,7 @@ from liveview_harness import StubBrowserService, backends, serve_app, serve_fixt
 from playwright.async_api import async_playwright, expect
 from websockets.exceptions import InvalidStatus
 
-from montybot.browser.contract import (
+from sammy.browser.contract import (
     Action,
     Click,
     MouseDown,
@@ -28,14 +28,14 @@ from montybot.browser.contract import (
     Scroll,
     Type,
 )
-from montybot.browser.fake import FakeBrowser, FakePage
-from montybot.browser.live import LiveInput
-from montybot.browser.service import Handoff, HandoffActive
-from montybot.liveview.app import CLOSE_ENDED, CLOSE_NOT_FOUND, CLOSE_REPLACED, CLOSE_SIGNED_OUT, live_view_app
-from montybot.liveview.auth import SESSION_COOKIE, StubAuthenticator
-from montybot.liveview.client import LiveViewClient, LiveViewClosed
-from montybot.liveview.handoffs import InMemoryHandoffs
-from montybot.liveview.wire import CloseTab, Command, NewTab, ViewportSize
+from sammy.browser.fake import FakeBrowser, FakePage
+from sammy.browser.live import LiveInput
+from sammy.browser.service import Handoff, HandoffActive
+from sammy.liveview.app import CLOSE_ENDED, CLOSE_NOT_FOUND, CLOSE_REPLACED, CLOSE_SIGNED_OUT, live_view_app
+from sammy.liveview.auth import SESSION_COOKIE, StubAuthenticator
+from sammy.liveview.client import LiveViewClient, LiveViewClosed
+from sammy.liveview.handoffs import InMemoryHandoffs
+from sammy.liveview.wire import CloseTab, Command, NewTab, ViewportSize
 
 pytestmark = pytest.mark.anyio
 
@@ -126,7 +126,7 @@ async def test_the_page_is_only_for_the_requester() -> None:
         assert 'id="back"' in (await get(f'{setup.base}/handoff/nope', setup.alice)).text
         page = await get(path, setup.alice)
         assert page.status_code == 200
-        assert 'Give back to Monty' in page.text
+        assert 'Give back to Sammy' in page.text
         assert "script-src 'self'" in page.headers['content-security-policy']
         assert page.headers['cache-control'] == 'no-store'
         script = await get(f'{setup.base}/live.js')
@@ -347,7 +347,7 @@ async def test_the_whole_picture_fits_the_screen(width: int, height: int, phone:
                     await context.add_cookies([{'name': SESSION_COOKIE, 'value': auth.sign_in('alice'), 'url': base}])
                     page = await context.new_page()
                     await page.goto(f'{base}/handoff/{handoff.handoff_id}')
-                    await page.locator('#reason', has_text='Monty needs you: Please sign in').wait_for()
+                    await page.locator('#reason', has_text='Sammy needs you: Please sign in').wait_for()
                     view = page.locator('#view')
                     # Frames are in CSS pixels: on the phone, as wide as the room the page has once it is phone-sized.
                     await expect(view).to_have_attribute('width', '1280' if not phone else re.compile(r'^3\d\d$'))

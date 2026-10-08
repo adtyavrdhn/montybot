@@ -1,6 +1,6 @@
 """Stand-ins for the services integrations reach, each on 127.0.0.1 with a port of its own:
 
-- `FakeComposio`: the parts of Composio's REST API Monty uses (`montybot.integrations.composio`), with the
+- `FakeComposio`: the parts of Composio's REST API Sammy uses (`sammy.integrations.composio`), with the
   multi-tenant behaviour that matters: accounts belong to a `user_id`, a tool runs only on an active account of the
   user it runs for, and the project holds another app's user and auth config too. Its pages are two items long, so
   every list is paged. "Signing in" is opening the link: the account turns active and the browser goes to the
@@ -365,7 +365,7 @@ class NotesServer:
                 issuer_url=AnyHttpUrl(base),
                 resource_server_url=AnyHttpUrl(f'{base}/mcp'),
                 client_registration_options=ClientRegistrationOptions(enabled=True),
-                validate_token_resource=True,  # a token must be for this server: Monty must ask for it (RFC 8707)
+                validate_token_resource=True,  # a token must be for this server: Sammy must ask for it (RFC 8707)
             )
             if oauth
             else None,

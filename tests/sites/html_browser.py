@@ -6,7 +6,7 @@ Forms submit, links follow, redirects carry their `Set-Cookie`. It runs no JavaS
 everything on the server, as most real shops do; the press-and-hold check is the one scripted widget, and it is
 emulated here the way the page's script does it.
 
-Select it with `MONTYBOT_BROWSER=fake` in the end-to-end tests (the default). `chromium` drives the same sites in a
+Select it with `SAMMY_BROWSER=fake` in the end-to-end tests (the default). `chromium` drives the same sites in a
 real browser instead.
 
 It is a test double, not a browser: no CSS, no layout (a mouse point hits the page's press-and-hold button if it has
@@ -25,9 +25,9 @@ from html.parser import HTMLParser
 from http.cookies import SimpleCookie
 from urllib.parse import urlencode, urljoin, urlsplit
 
-from montybot.browser.contract import Action, Click, Download, MouseDown, MouseUp, Press, Ref, Selector
-from montybot.browser.fake import VIEWPORT_HEIGHT, VIEWPORT_WIDTH, FakeBrowser, FakeElement, FakePage
-from montybot.browser.state import BLANK_URL, Cookie
+from sammy.browser.contract import Action, Click, Download, MouseDown, MouseUp, Press, Ref, Selector
+from sammy.browser.fake import VIEWPORT_HEIGHT, VIEWPORT_WIDTH, FakeBrowser, FakeElement, FakePage
+from sammy.browser.state import BLANK_URL, Cookie
 
 ENGINE = 'fake (html)'
 BLOCKS = {'p', 'div', 'h1', 'h2', 'h3', 'li', 'tr', 'table', 'ul', 'ol', 'form', 'section', 'br'}

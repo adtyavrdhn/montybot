@@ -1,8 +1,8 @@
-"""The scripted model for end-to-end tests, as in `poc/montybot_poc/remote.py`'s `scripted_shopper`.
+"""The scripted model for end-to-end tests, as in `poc/sammy_poc/remote.py`'s `scripted_shopper`.
 
 The model reads the user's message and picks a script for it, as a real model picks a plan. A script looks only at
 what its tools returned in this run, so it behaves the same whether a step ran or was replayed after a restart. The
-same messages run against a real model with MONTYBOT_TEST_MODEL.
+same messages run against a real model with SAMMY_TEST_MODEL.
 """
 
 from __future__ import annotations
@@ -91,7 +91,7 @@ def line_with(page: str, needle: str) -> str:
 
 
 def hello(turn: Turn) -> ModelResponse:
-    return say('Hello! I am monty-bot.')
+    return say('Hello! I am Sammy.')
 
 
 def users_time(turn: Turn) -> ModelResponse:

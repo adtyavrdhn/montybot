@@ -1,6 +1,6 @@
 """`ChromiumCDPBackend`: the conformance suite and its own behaviour, against a real Chrome over our CDP pipe.
 
-Needs Chrome at `montybot.browser.cdp.default_executable()` (Playwright's Chromium, or `MONTYBOT_CHROME_BINARY`); the
+Needs Chrome at `sammy.browser.cdp.default_executable()` (Playwright's Chromium, or `SAMMY_CHROME_BINARY`); the
 tests that start Chrome are skipped without it. The jailed tests also need Linux with bwrap, socat and Xvfb.
 """
 
@@ -21,8 +21,8 @@ from typing import ClassVar
 
 import pytest
 
-from montybot.browser.cdp import CDPOptions, ChromiumCDPBackend, default_executable
-from montybot.browser.conformance import (
+from sammy.browser.cdp import CDPOptions, ChromiumCDPBackend, default_executable
+from sammy.browser.conformance import (
     BUTTON_CENTRE,
     HOLD_START,
     BrowserBackendConformance,
@@ -30,7 +30,7 @@ from montybot.browser.conformance import (
     serve_site,
     wait_for_text,
 )
-from montybot.browser.contract import (
+from sammy.browser.contract import (
     ActionFailed,
     BrowserBackend,
     Click,
@@ -41,10 +41,10 @@ from montybot.browser.contract import (
     TargetNotFound,
     Type,
 )
-from montybot.browser.host import BrowserHost
-from montybot.browser.jar import InMemoryJar, InMemoryJarLease
-from montybot.browser.live import Frame, FrameSource, OutlineSource, Tabs, Viewport
-from montybot.browser.state import BrowserState, Cookie
+from sammy.browser.host import BrowserHost
+from sammy.browser.jar import InMemoryJar, InMemoryJarLease
+from sammy.browser.live import Frame, FrameSource, OutlineSource, Tabs, Viewport
+from sammy.browser.state import BrowserState, Cookie
 
 pytestmark = pytest.mark.anyio
 
@@ -142,9 +142,9 @@ const probe = new Error();
 Object.defineProperty(probe, 'stack', {get() { runtime = true; return ''; }});
 console.debug(probe);
 setTimeout(() => {
-  const globals = Object.keys(window).filter((k) => /^(cdc_|__playwright|__pw|__montybot)/.test(k));
+  const globals = Object.keys(window).filter((k) => /^(cdc_|__playwright|__pw|__sammy)/.test(k));
   out.textContent = ['webdriver=' + navigator.webdriver, 'runtime=' + runtime, 'globals=' + globals.length,
-    'refs=' + (typeof window.__montybotRefs)].join(' ');
+    'refs=' + (typeof window.__sammyRefs)].join(' ');
 }, 200);
 </script>"""
 

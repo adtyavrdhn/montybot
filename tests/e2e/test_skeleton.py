@@ -12,7 +12,7 @@ import pytest
 from conftest import App, Client, Human
 from sites.shop import Shop
 
-from montybot.liveview.client import LiveViewClient, LiveViewClosed
+from sammy.liveview.client import LiveViewClient, LiveViewClosed
 
 
 @pytest.fixture
@@ -209,7 +209,7 @@ def test_writes_must_be_json(app: App) -> None:
         body = '{"email": "victim@example.test", "password": "correct horse"}'
         refused = browser.post('/api/signup', content=body, headers={'content-type': 'text/plain'})
         assert refused.status_code == 415
-        assert 'montybot_session' not in refused.cookies
+        assert 'sammy_session' not in refused.cookies
         assert browser.post('/api/threads', json={'text': '   '}).status_code == 401
         browser.post('/api/signup', content=body, headers={'content-type': 'application/json'})
         assert browser.post('/api/threads', json={'text': '   '}).status_code == 422
@@ -240,7 +240,7 @@ def test_only_the_runs_user_can_take_over(app: App, client: Client, shop: Shop) 
         assert other.get(link).status_code == 401  # signed out
         other.post('/api/signup', json={'email': 'mallory@example.test', 'password': 'correct horse'})
         assert other.get(link).status_code == 404
-        session = other.cookies.get('montybot_session')
+        session = other.cookies.get('sammy_session')
 
     async def connect() -> int | None:
         url = app.url.replace('http', 'ws', 1) + link + '/ws'
