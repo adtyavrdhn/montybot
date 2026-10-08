@@ -14,7 +14,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-KEYS = ('TYPESAFE_API_KEY', 'LOGFIRE_TOKEN')
+KEYS = ('TYPESAFE_API_KEY', 'LOGFIRE_TOKEN', 'MONTY_EXECUTION_KEY')
 TOKEN = re.compile(r'[A-Za-z0-9_.:/+=-]+')
 
 

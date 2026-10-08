@@ -316,4 +316,5 @@ jobs:
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           LOGFIRE_TOKEN: ${{ secrets.LOGFIRE_TOKEN }}
+          MONTY_EXECUTION_KEY: ${{ secrets.MONTY_EXECUTION_KEY }}
         run: SSH_KEY="$HOME/.ssh/vm" sh deploy/deploy.sh "${{ vars.VM_USER }}@${{ vars.VM_HOST }}"

@@ -95,7 +95,13 @@ class MontyRunner:
 @asynccontextmanager
 async def open_monty(settings: Settings) -> AsyncGenerator[MontyRunner]:
     if settings.monty_url:
-        async with AsyncMontyWebsocket(settings.monty_url, request_timeout=settings.code_timeout_seconds) as pool:
+        key = settings.monty_execution_key
+        headers = {'Authorization': f'Bearer {key.get_secret_value()}'} if key else None
+        async with AsyncMontyWebsocket(
+            settings.monty_url,
+            request_timeout=settings.code_timeout_seconds,
+            connect_headers=(lambda: headers) if headers else None,
+        ) as pool:
             yield MontyRunner(pool, remote=True, limits=limits_of(settings))
     else:
         async with AsyncMonty(request_timeout=settings.code_timeout_seconds) as pool:

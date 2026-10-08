@@ -60,8 +60,10 @@ class Settings(BaseSettings):
     tunnel_dir: Path = Path(tempfile.gettempdir()) / 'montybot-tunnels'
     """Each user's Mac tunnel proxy socket, one directory per user. Short: Unix socket paths are limited to ~100."""
     monty_url: str | None = None
-    """Full Monty: monty-server's WebSocket URL, such as `ws://monty-server:8000`. Unset: Monty in local
-    subprocesses."""
+    """Full Monty: monty-server's WebSocket URL, such as `ws://monty-server:8000`, or a hosted Monty sandbox service
+    (`wss://.../monty-ws/`). Unset: Monty in local subprocesses."""
+    monty_execution_key: SecretStr | None = None
+    """Sent as `Authorization: Bearer <key>` when connecting to `monty_url`; needed by the hosted Monty service."""
     code_timeout_seconds: float = 600
     """The longest one `run_code` call may take, browser calls included."""
     code_compute_seconds: float = 60
