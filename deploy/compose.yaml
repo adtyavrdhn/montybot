@@ -103,6 +103,7 @@ services:
       LOGFIRE_INCLUDE_CONTENT: ${LOGFIRE_INCLUDE_CONTENT:-true}
       ENVIRONMENT: ${ENVIRONMENT:-production}
       MONTY_URL: ${MONTY_URL:-}
+      MONTY_EXECUTION_KEY: ${MONTY_EXECUTION_KEY:-}
     volumes:
       - claude-code:/data/claude-code
       - workspaces:/data/workspaces

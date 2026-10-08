@@ -65,6 +65,20 @@ compose exec backup pg_restore --no-owner -d montybot_restored /backups/montybot
 Copy `/opt/montybot/backups` off the server (rsync, a bucket) for backups that survive losing the disk; that is not
 automated yet.
 
+## Hosted Monty sandboxes
+
+The app takes its Monty sessions from the hosted service instead of running monty-server and monty-worker on the
+VM. Set the key as the `MONTY_EXECUTION_KEY` Actions secret (copied into `/opt/montybot/.env` on deploy, like the
+other secrets). Whenever `.env` has a key, `deploy.sh` points the app at
+`wss://monty-sdk-test-hqjw53u6ua-uk.a.run.app/monty-ws/` (or `MONTY_URL` from `.env`) and does not start our own
+Full Monty, even with `MONTY_PRIVATE_COMMIT` set; its images and session volume are left in place.
+
+The key goes in each connection's `Authorization: Bearer` header. Sessions are parked in the service's store
+between `run_code` calls, as with Full Monty. Each `run_code` call costs about a second there (opening the sandbox,
+loading and saving the session), against milliseconds locally. Remove `MONTY_EXECUTION_KEY` from `.env` to go back to
+our own Full Monty (with `MONTY_PRIVATE_COMMIT`) or local Monty. Runs that are waiting when the backend changes
+lose their code variables once (the agent is told to set them again).
+
 ## Full Monty: manual private release
 
 This is an operator plan; installing images and enabling them are separate steps. The Dockerfiles and options

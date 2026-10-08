@@ -24,9 +24,14 @@ cd /opt/montybot/src/deploy
 compose() { sudo --preserve-env=COMPOSE_PROFILES,MONTY_URL,COMMIT docker compose --env-file /opt/montybot/.env "$@"; }
 
 . /opt/montybot/.env
-# Only the manual private release installs these images. Normal CD reuses them, failing closed if missing.
+# With MONTY_EXECUTION_KEY, the agent's code runs on the hosted Monty sandboxes (MONTY_URL in .env overrides the URL),
+# and our own Full Monty below is not started even if MONTY_PRIVATE_COMMIT is set. Without either, local Monty.
+hosted_monty_url=${MONTY_URL:-wss://monty-sdk-test-hqjw53u6ua-uk.a.run.app/monty-ws/}
 export COMPOSE_PROFILES= MONTY_URL= COMMIT
-if [ -n "${MONTY_PRIVATE_COMMIT:-}" ]; then
+if [ -n "${MONTY_EXECUTION_KEY:-}" ]; then
+    export MONTY_URL="$hosted_monty_url"
+elif [ -n "${MONTY_PRIVATE_COMMIT:-}" ]; then
+    # Only the manual private release installs these images. Normal CD reuses them, failing closed if missing.
     case "$MONTY_PRIVATE_COMMIT" in *[!0-9a-f]*) echo "Invalid MONTY_PRIVATE_COMMIT" >&2; exit 1 ;; esac
     [ "${#MONTY_PRIVATE_COMMIT}" -eq 40 ] || { echo "Expected full source commit" >&2; exit 1; }
     for service in server worker; do

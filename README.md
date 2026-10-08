@@ -11,15 +11,17 @@ Chromium, DBOS for schedules, and hand-off to the user when the agent gets stuck
 ## Run it
 
 ```bash
-docker compose up -d          # Postgres, monty-server and monty-worker
-cp .env.example .env          # then set SESSION_SECRET and your model's API key
+docker compose up -d          # Postgres
+cp .env.example .env          # then set SESSION_SECRET, MONTY_EXECUTION_KEY and your model's API key
 uv run montybot serve         # http://127.0.0.1:8000
 ```
 
 The app is Starlette plus DBOS in one process (`montybot/app.py`, `montybot/workflows.py`). A run is a DBOS workflow:
 model requests and browser calls are steps, and questions, approvals and hand-offs wait in `DBOS.recv`
 (`montybot/approvals.py`). The agent's code runs in Monty through `run_code` (`montybot/code.py`), with the browser
-as host functions; with `MONTY_URL` set it runs on Full Monty. Its file calls (`pathlib`, `open`) reach the user's
+as host functions; with `MONTY_URL` and `MONTY_EXECUTION_KEY` set it runs on the hosted Monty sandboxes (see
+[`deploy/README.md`](deploy/README.md#hosted-monty-sandboxes)). Our own monty-server is still there, behind
+`docker compose --profile full-monty`, but no longer used by default. Its file calls (`pathlib`, `open`) reach the user's
 own directory under `WORKSPACES_DIR` at `/work`, where browser downloads land too (`montybot/workspaces.py`). Heavy
 Python (pandas, PDFs) runs through `run_python` in real CPython, in a bubblewrap jail per call on the same files
 (`montybot/cpython.py`, Linux only). The browser contract and service are in [`montybot/browser/`](montybot/browser/README.md).
