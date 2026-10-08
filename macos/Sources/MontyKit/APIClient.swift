@@ -332,9 +332,15 @@ public final class APIClient: Sendable {
     }
 
     /// The Mac tunnel's WebSocket request (`MacTunnel`), with the session cookie. No `Origin`, which the server
-    /// requires: a web page can't open the tunnel.
+    /// requires: a web page can't open the tunnel. It says where this Mac is (time zone and language), so the browser
+    /// going out through it has a clock and language that agree with the address sites see.
     public func tunnelSocketRequest() -> URLRequest? {
-        socketRequest(path: "/api/tunnel", trace: nil)
+        guard var request = socketRequest(path: "/api/tunnel", trace: nil) else { return nil }
+        request.setValue(TimeZone.current.identifier, forHTTPHeaderField: "X-Monty-Timezone")
+        if let language = Locale.preferredLanguages.first {
+            request.setValue(language, forHTTPHeaderField: "X-Monty-Locale")
+        }
+        return request
     }
 
     private func socketRequest(path: String, trace: SpanContext?) -> URLRequest? {

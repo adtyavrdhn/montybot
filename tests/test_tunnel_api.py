@@ -18,8 +18,10 @@ from starlette.testclient import TestClient
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocketDisconnect
 
+from montybot.browser.cdp import ChromiumCDPBackend
 from montybot.browser.egress import SUCCEEDED
-from montybot.browser.tunnel import DATA, OPEN, OPENED, Tunnels, message
+from montybot.browser.tunnel import DATA, OPEN, OPENED, Place, Tunnels, message
+from montybot.resources import routed_backend_factory
 from montybot.tunnel_api import REPLACED, mac_tunnel
 
 
@@ -85,6 +87,23 @@ def test_a_second_mac_replaces_the_first(tunnels: Tunnels) -> None:
         assert error.value.code == REPLACED
         assert tunnels.connected('alice')
     assert not tunnels.connected('alice')  # the Mac's WebSocket closed, and the tunnel with it
+
+
+def test_a_browser_through_the_mac_takes_its_clock_and_language(tunnels: Tunnels) -> None:
+    """The Mac says where it is; a browser started on its proxy gets that zone and language, junk left out."""
+    routed = routed_backend_factory('montybot.engines:chromium_cdp_server', tunnels.place_of)
+    assert routed is not None
+    place = {'X-Monty-Timezone': 'America/Toronto', 'X-Monty-Locale': 'en-CA'}
+    with client(tunnels) as test, test.websocket_connect('/api/tunnel?user=alice', headers=place):
+        proxy = test.portal.call(tunnels.egress, 'alice')  # type: ignore[union-attr]  # set inside `with`
+        backend = routed(proxy)
+        assert isinstance(backend, ChromiumCDPBackend)
+        assert (backend.options.timezone, backend.options.locale) == ('America/Toronto', 'en-CA')
+        assert tunnels.place_of(Path('/elsewhere.sock')) == Place()
+    junk = {'X-Monty-Timezone': 'Mars/Base', 'X-Monty-Locale': 'en CA; rm -rf'}
+    with client(tunnels) as test, test.websocket_connect('/api/tunnel?user=bob', headers=junk):
+        proxy = test.portal.call(tunnels.egress, 'bob')  # type: ignore[union-attr]
+        assert tunnels.place_of(proxy) == Place()
 
 
 def test_a_browser_connection_crosses_the_websocket(tunnels: Tunnels) -> None:

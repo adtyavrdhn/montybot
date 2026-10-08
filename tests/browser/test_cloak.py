@@ -185,6 +185,19 @@ def test_headless_and_jailed_command_lines() -> None:
     assert '--proxy-server=socks5://127.0.0.1:1080' in argv and '--fingerprint=12345' in argv
 
 
+def test_the_browsers_place_wins_over_the_servers() -> None:
+    """Going out through the user's Mac, the fingerprint takes the Mac's zone and language, each flag once."""
+    fingerprint = Fingerprint(seed=12_345, platform='windows')
+    base = CDPOptions(executable=Path('/c'), timezone='America/Toronto', locale='en-CA')
+    options = with_cloak(base, executable=Path('/c/chrome'), fingerprint=fingerprint)
+    argv = options.command(profile=Path('/p'))
+    assert '--fingerprint-timezone=America/Toronto' in argv
+    assert '--lang=en-CA' in argv and '--accept-lang=en-CA,en' in argv
+    flags = [arg.split('=', 1)[0] for arg in argv[1:]]
+    assert len(flags) == len(set(flags)), 'a flag given twice'
+    assert options.clock() == {'TZ': 'America/Toronto'}
+
+
 def test_the_binary_comes_from_the_environment() -> None:
     with binary_env(None), pytest.raises(RuntimeError, match='MONTYBOT_CLOAK_BINARY'):
         with_cloak(CDPOptions(executable=Path('/c')))

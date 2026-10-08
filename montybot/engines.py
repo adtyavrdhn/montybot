@@ -30,6 +30,7 @@ redistribution, and giving users the browser (the hand-off) likely needs a separ
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -122,18 +123,28 @@ def chromium_server(egress_socket: Path | None = None) -> LazyChromium:
     return LazyChromium(lambda: ChromiumOptions.server(egress_socket=egress_socket or _egress_socket()))
 
 
-def chromium_cdp_server(egress_socket: Path | None = None) -> ChromiumCDPBackend:
-    """Always jailed, headed on its own Xvfb screen, like `chromium_server`."""
-    return ChromiumCDPBackend(CDPOptions.server(egress_socket=egress_socket or _egress_socket()))
+def _cdp_server_options(egress_socket: Path | None, timezone: str | None, locale: str | None) -> CDPOptions:
+    server = CDPOptions.server(egress_socket=egress_socket or _egress_socket())
+    return dataclasses.replace(server, timezone=timezone, locale=locale)
+
+
+def chromium_cdp_server(
+    egress_socket: Path | None = None, timezone: str | None = None, locale: str | None = None
+) -> ChromiumCDPBackend:
+    """Always jailed, headed on its own Xvfb screen, like `chromium_server`. `timezone` and `locale` are those of where
+    its traffic leaves from, such as the user's Mac through the tunnel; None: the server's."""
+    return ChromiumCDPBackend(_cdp_server_options(egress_socket, timezone, locale))
 
 
 def chromium_cdp_headless() -> ChromiumCDPBackend:
     return ChromiumCDPBackend(CDPOptions(headless=True))
 
 
-def cloak_server(egress_socket: Path | None = None) -> ChromiumCDPBackend:
+def cloak_server(
+    egress_socket: Path | None = None, timezone: str | None = None, locale: str | None = None
+) -> ChromiumCDPBackend:
     """Always jailed, headed on its own Xvfb screen, like `chromium_cdp_server`."""
-    return ChromiumCDPBackend(with_cloak(CDPOptions.server(egress_socket=egress_socket or _egress_socket())))
+    return ChromiumCDPBackend(with_cloak(_cdp_server_options(egress_socket, timezone, locale)))
 
 
 def cloak_headless() -> ChromiumCDPBackend:
