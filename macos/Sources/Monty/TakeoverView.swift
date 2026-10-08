@@ -4,6 +4,7 @@ import SwiftUI
 
 /// The user drives Monty's browser: the page fills the window, and everything they do goes to it.
 struct TakeoverView: View {
+    @Environment(AppModel.self) private var app
     let chat: ChatModel
     let live: LiveSession
     /// Bumped to give the page the keyboard back, after the address bar.
@@ -22,7 +23,7 @@ struct TakeoverView: View {
                 if let frame = live.frame {
                     LiveCanvas(
                         frame: frame, live: live, host: live.activeTab.flatMap { URLComponents(string: $0.url)?.host } ?? "",
-                        focus: pageFocus
+                        monty: app.montyName, focus: pageFocus
                     )
                         .aspectRatio(frame.width / frame.height, contentMode: .fit)
                         .clipShape(RoundedRectangle(cornerRadius: Metrics.radiusMedium))
@@ -45,7 +46,7 @@ struct TakeoverView: View {
         .onChange(of: live.state) { _, state in
             if live.signedOut { chat.liveSignedOut(); return }
             guard case .ended(let givenBack) = state else { return }
-            if givenBack { chat.notice = .info("Thanks. Monty has the browser again and is carrying on.") }
+            if givenBack { chat.notice = .info("Thanks. \(app.montyName) has the browser again and is carrying on.") }
             Task { await chat.liveViewEnded() }
         }
     }
@@ -53,7 +54,7 @@ struct TakeoverView: View {
     private var bar: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("You're in control of Monty's browser").font(.system(size: 13, weight: .semibold))
+                Text("You're in control of \(app.montyName)'s browser").font(.system(size: 13, weight: .semibold))
                 Text(live.reason).font(.system(size: 12)).foregroundStyle(Palette.onSurfaceVariant).lineLimit(1)
             }
             .frame(minWidth: 140, maxWidth: 360, alignment: .leading)
@@ -65,7 +66,7 @@ struct TakeoverView: View {
             Button("Not now") { chat.leaveLiveView() }
                 .buttonStyle(.monty(.outline, small: true))
                 .keyboardShortcut("t", modifiers: [.command, .shift])
-                .help("Close this view (⇧⌘T). Monty keeps waiting until you take over again and hand it back.")
+                .help("Close this view (⇧⌘T). \(app.montyName) keeps waiting until you take over again and hand it back.")
                 .layoutPriority(1)
             Button {
                 live.giveBack()
@@ -79,7 +80,7 @@ struct TakeoverView: View {
             .disabled(live.state != .driving || live.givingBack)
             .keyboardShortcut(.return, modifiers: [.command])
             .layoutPriority(1)
-            .help("Hand the browser back; Monty carries on from here (⌘↩). ⌘V pastes from your Mac.")
+            .help("Hand the browser back; \(app.montyName) carries on from here (⌘↩). ⌘V pastes from your Mac.")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -89,7 +90,7 @@ struct TakeoverView: View {
     @ViewBuilder private var stateOverlay: some View {
         switch live.state {
         case .connecting:
-            message(spinner: true, "Opening Monty's browser…")
+            message(spinner: true, "Opening \(app.montyName)'s browser…")
         case .reconnecting:
             message(spinner: true, "Connection lost. Reconnecting…")
         case .elsewhere:
@@ -127,6 +128,8 @@ struct LiveCanvas: NSViewRepresentable {
     let frame: LiveFrame
     let live: LiveSession
     let host: String
+    /// What the user calls their Monty, for VoiceOver.
+    let monty: String
     /// A new value gives the page the keyboard.
     var focus = 0
 
@@ -141,6 +144,7 @@ struct LiveCanvas: NSViewRepresentable {
     func updateNSView(_ view: CanvasView, context: Context) {
         view.live = live
         view.host = host
+        view.monty = monty
         if view.focus != focus {
             view.focus = focus
             DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
@@ -154,6 +158,7 @@ struct LiveCanvas: NSViewRepresentable {
     final class CanvasView: NSView, @preconcurrency NSTextInputClient {
         var live: LiveSession?
         var host = ""
+        var monty = "Monty"
         var focus = 0
         private var marked = ""
         private var elements: [PageElement] = []
@@ -186,9 +191,9 @@ struct LiveCanvas: NSViewRepresentable {
         override func accessibilityLabel() -> String? {
             let page = host.isEmpty ? "a page" : host
             if let outline = live?.outline, !outline.available {
-                return "Monty's browser, showing \(page). VoiceOver can't read pages in this browser. Shift-Command-T closes it."
+                return "\(monty)'s browser, showing \(page). VoiceOver can't read pages in this browser. Shift-Command-T closes it."
             }
-            return "Monty's browser, showing \(live?.outline?.title.isEmpty == false ? live!.outline!.title : page)"
+            return "\(monty)'s browser, showing \(live?.outline?.title.isEmpty == false ? live!.outline!.title : page)"
         }
 
         override func accessibilityChildren() -> [Any]? {

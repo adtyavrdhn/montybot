@@ -476,7 +476,7 @@ public final class ChatModel {
             span.fail(error)
             if error == .signedOut { app.sessionEnded(); return false }
             if closed { return false }
-            show(error, error.status == 409 ? "Monty is still on the last task in this chat. Wait for it, or stop it first." : nil)
+            show(error, error.status == 409 ? "\(app.montyName) is still on the last task in this chat. Wait for it, or stop it first." : nil)
             return false
         } catch {
             pendingMessage = nil
@@ -525,7 +525,7 @@ public final class ChatModel {
                 keepQueued(text, files)
             }
         } else {
-            let why = run?.status == .stopped ? "the task was stopped" : "Monty couldn't finish the task"
+            let why = run?.status == .stopped ? "the task was stopped" : "\(app?.montyName ?? "Monty") couldn't finish the task"
             keepQueued(text, files)
             notice = .info("Your next message wasn't sent, because \(why). It's back in the message box.")
         }

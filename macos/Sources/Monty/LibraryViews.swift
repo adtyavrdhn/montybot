@@ -67,11 +67,11 @@ struct SchedulesView: View {
     var body: some View {
         Page(
             title: "Schedules",
-            subtitle: "Tasks Monty runs on its own. Ask for one in a chat: \"Every Monday at 9, …\"",
+            subtitle: "Tasks \(app.montyName) runs on its own. Ask for one in a chat: \"Every Monday at 9, …\"",
             items: app.schedules,
             emptyIcon: "calendar.badge.clock",
             emptyTitle: "No schedules yet",
-            emptyText: "Tell Monty what to do and when, and it will run the task for you and say how it went."
+            emptyText: "Tell \(app.montyName) what to do and when, and it will run the task for you and say how it went."
         ) { schedule in
             HStack(spacing: 12) {
                 Image(systemName: schedule.watch ? "eye" : "clock")
@@ -120,7 +120,7 @@ struct SchedulesView: View {
         .confirmationDialog("Delete “\(deleting?.name ?? "")”?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("Delete schedule", role: .destructive) { if let deleting { Task { await app.delete(deleting) } } }
         } message: {
-            Text("Monty stops running it. Its chat stays.")
+            Text("\(app.montyName) stops running it. Its chat stays.")
         }
     }
 }
@@ -132,11 +132,11 @@ struct SavedSitesView: View {
     var body: some View {
         Page(
             title: "Saved sign-ins",
-            subtitle: "Monty's browser stays signed in to these sites because you signed in for it, so Monty can use them as you. It never sees your passwords. Forget a site to sign Monty out.",
+            subtitle: "\(app.montyName)'s browser stays signed in to these sites because you signed in for it, so \(app.montyName) can use them as you. It never sees your passwords. Forget a site to sign \(app.montyName) out.",
             items: app.savedSites,
             emptyIcon: "key",
             emptyTitle: "No saved sign-ins",
-            emptyText: "When Monty asks you to sign in to a site, it stays signed in there for next time."
+            emptyText: "When \(app.montyName) asks you to sign in to a site, it stays signed in there for next time."
         ) { site in
             HStack(spacing: 12) {
                 Image(systemName: "globe").foregroundStyle(Palette.onSurfaceVariant).frame(width: 18).accessibilityHidden(true)
@@ -150,7 +150,7 @@ struct SavedSitesView: View {
         .confirmationDialog("Forget \(forgetting?.site ?? "")?", isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } })) {
             Button("Forget", role: .destructive) { if let forgetting { Task { await app.forget(forgetting) } } }
         } message: {
-            Text("Monty's browser signs out of this site. You can sign in again when Monty next asks.")
+            Text("\(app.montyName)'s browser signs out of this site. You can sign in again when \(app.montyName) next asks.")
         }
     }
 }
@@ -162,11 +162,11 @@ struct MemoryView: View {
     var body: some View {
         Page(
             title: "Memory",
-            subtitle: "What Monty remembers about you, to do better next time.",
+            subtitle: "What \(app.montyName) remembers about you, to do better next time.",
             items: app.memories,
             emptyIcon: "brain",
             emptyTitle: "Nothing remembered yet",
-            emptyText: "Tell Monty something worth remembering, like your usual shop or your size."
+            emptyText: "Tell \(app.montyName) something worth remembering, like your usual shop or your size."
         ) { memory in
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(memory.text).font(.system(size: 13)).textSelection(.enabled)
@@ -179,7 +179,7 @@ struct MemoryView: View {
         .confirmationDialog("Forget this?", isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } })) {
             Button("Forget", role: .destructive) { if let forgetting { Task { await app.forget(forgetting) } } }
         } message: {
-            Text("“\(forgetting?.text ?? "")”. Monty won't remember it in future tasks.")
+            Text("“\(forgetting?.text ?? "")”. \(app.montyName) won't remember it in future tasks.")
         }
     }
 }

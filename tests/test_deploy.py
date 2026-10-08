@@ -129,6 +129,14 @@ def reply(http: httpx.Client, thread_id: str) -> str:
 
 def test_the_web_app_is_served_over_https_behind_a_login(stack: Stack) -> None:
     assert httpx.get(stack.url, verify=False).status_code == 401
+    # An integration's sign-in comes back to Monty in the user's own browser, without this login: those pages (which
+    # act only on a state Monty made) and their stylesheet are open, and nothing else is.
+    returned = httpx.get(f'{stack.url}/integrations/composio/callback?state=made-up', verify=False)
+    assert returned.status_code == 400 and 'Not connected' in returned.text
+    assert httpx.get(f'{stack.url}/integrations/mcp/callback?state=made-up&code=x', verify=False).status_code == 400
+    assert httpx.get(f'{stack.url}/static/app.css', verify=False).status_code == 200
+    for closed in ('/static/app.js', '/api/integrations', '/integrations/composio/callbackx', '/integrations/'):
+        assert httpx.get(f'{stack.url}{closed}', verify=False).status_code == 401, closed
     with stack.client() as http:
         page = http.get('/')
         assert page.status_code == 200 and '<html' in page.text.lower()

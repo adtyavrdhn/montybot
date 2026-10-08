@@ -250,7 +250,8 @@ It ran on colima's Ubuntu 24.04 arm64 VM with the AppArmor profile installed.
 
 ## Jev and Logfire keys
 
-Add `TYPESAFE_API_KEY` and `LOGFIRE_TOKEN` in the repository's Actions secrets. Only the trusted main deploy
+Add `TYPESAFE_API_KEY`, `LOGFIRE_TOKEN` and `COMPOSIO_API_KEY` (one-click apps for Integrations) in the repository's
+Actions secrets. Only the trusted main deploy
 receives them. `deploy/update-secrets.py` sends nonempty values over SSH stdin and atomically updates the VM's
 owner-only `.env`; unset repo secrets do not erase existing VM values. Tokens must use letters, digits or
 `_.:/+=-`; malformed updates fail rather than interpolating shell syntax. No secrets enter image layers.
