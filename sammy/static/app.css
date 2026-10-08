@@ -278,7 +278,14 @@ summary.group-title { display: list-item; cursor: pointer; }
 .page .integration-row button { min-height: 36px; padding: .4em .9em; font-size: .82rem; }
 .badge.connected { background: #e3f3eb; color: var(--good); }
 .badge.needs_sign_in, .badge.broken { background: #fff0f4; color: var(--bad); }
-#add-server-row { flex-wrap: wrap; }
+#add-server-row, .page .integration-row.with-form { flex-wrap: wrap; }
+.token-form { flex-basis: 100%; }
+.token-form > * { max-width: 600px; }
+.integration-row .token-form { padding: 0 0 4px 40px; }
+.token-form label { margin-top: 0; font-weight: 500; color: var(--muted); }
+.token-fields { display: flex; gap: 8px; }
+.token-fields input { flex: 1; }
+.token-form .error:empty { display: none; }
 .server-panel { flex-basis: 100%; padding: 4px 0 6px 40px; }
 .server-panel > .muted { margin: 0; font-size: .85rem; }
 .server-form { max-width: 560px; margin-top: 8px; }
@@ -295,5 +302,5 @@ body.returned { overflow: auto; display: flex; align-items: center; justify-cont
 .returned-card .sammy-mark { margin-bottom: 16px; }
 @media (max-width: 600px) {
   .header-fields { grid-template-columns: 1fr; gap: 0; }
-  .server-panel { padding-left: 0; }
+  .server-panel, .integration-row .token-form { padding-left: 0; }
 }

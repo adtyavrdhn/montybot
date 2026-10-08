@@ -659,32 +659,59 @@ struct ConnectControls: View {
     @Environment(AppModel.self) private var app
     @Bindable var chat: ChatModel
     let ask: Ask
+    /// The token a known MCP server takes (GitHub's), pasted here; cleared once it is added.
+    @State private var token = ""
+    @State private var connecting = false
+    @FocusState private var tokenFocused: Bool
 
     var body: some View {
         let offer = ask.integration ?? Offer(provider: "mcp", key: "", name: "the app")
         let canSignIn = offer.isApp || offer.serverId != nil || offer.isPreset
+        let wantsToken = offer.isPreset && offer.needsToken
+        let connected = chat.connectingAsk == ask.id
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 AppLogo(url: offer.logo, name: offer.name, size: 28)
                 Text(canSignIn ? "Connect \(offer.name)" : "Add \(offer.name)").font(.system(size: 13, weight: .medium))
             }
-            if chat.connectingAsk == ask.id {
+            if connected && wantsToken {
+                Text("\(offer.name) is added. If \(app.sammyName) doesn't carry on by itself, say you've connected it.")
+                    .font(.system(size: 12)).foregroundStyle(Palette.onSurfaceVariant)
+            } else if connected {
                 Text("Finish signing in to \(offer.name) in your browser. \(app.sammyName) carries on when you have.")
                     .font(.system(size: 12)).foregroundStyle(Palette.onSurfaceVariant)
             } else if !canSignIn {
                 Text("\(offer.name) isn't one of the apps Sammy connects in one click. If it has an MCP server, add it in Integrations.")
                     .font(.system(size: 12)).foregroundStyle(Palette.onSurfaceVariant)
+            } else if wantsToken {
+                SecureField("Token", text: $token, prompt: Text(offer.tokenHint ?? "Token"))
+                    .labelsHidden().accessibilityLabel("Token for \(offer.name)")
+                    .focused($tokenFocused).field(focused: tokenFocused)
+                    .onSubmit { connect(wantsToken) }
             }
             HStack(spacing: 8) {
-                Button(canSignIn ? (offer.serverId == nil ? "Connect \(offer.name)" : "Sign in to \(offer.name)") : "Add an MCP server") {
-                    Task { await chat.connect() }
+                if !(connected && wantsToken) {
+                    Button(canSignIn ? (offer.serverId == nil ? "Connect \(offer.name)" : "Sign in to \(offer.name)") : "Add an MCP server") {
+                        connect(wantsToken)
+                    }
+                    .buttonStyle(.primary)
+                    .disabled(wantsToken && (connecting || token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                 }
-                .buttonStyle(.primary)
-                if chat.connectingAsk == ask.id {
+                if connected {
                     Button("I've connected it") { Task { await chat.answer(.connected(true)) } }.buttonStyle(.outline)
                 }
                 Button("Not now") { Task { await chat.answer(.connected(false)) } }.buttonStyle(.ghost)
             }
+        }
+    }
+
+    private func connect(_ wantsToken: Bool) {
+        guard !wantsToken || (!connecting && !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) else { return }
+        Task {
+            connecting = true
+            defer { connecting = false }
+            await chat.connect(token: wantsToken ? token : nil)
+            if chat.connectingAsk == ask.id { token = "" }  // the token is not left on screen
         }
     }
 }

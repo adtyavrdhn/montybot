@@ -206,10 +206,11 @@ async def connect_integration(ctx: RunContext[RunDeps], service: str, reason: st
 
 
 def offer_of(found: dict[str, str]) -> dict[str, str]:
-    """What the chat's card offers: the app to connect, or the user's own server to sign in to again, or (for a
-    service Composio does not have) an MCP server to add."""
+    """What the chat's card offers: the app to connect, a listed MCP server to add (with its `url`, and how the user
+    signs in to it), the user's own server to sign in to again, or (for a service none is listed for) an MCP server to
+    add by hand."""
     if found['type'] == 'offer':
-        return {key: found[key] for key in ('provider', 'key', 'name', 'logo')}
+        return {key: value for key, value in found.items() if key != 'type'}
     # Connected once, but broken now: connect it again.
     offer = Offer(
         provider='composio' if found['provider'] == 'composio' else 'mcp',

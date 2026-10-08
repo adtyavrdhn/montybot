@@ -3,6 +3,7 @@ user and per server, and a service the model names is matched to the user's conn
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import AsyncIterator, Iterator
 
 import httpx
@@ -11,6 +12,14 @@ import logfire
 import pytest
 from cryptography.exceptions import InvalidTag
 from logfire.testing import CaptureLogfire
+from pydantic_ai_harness.day_ai import _capability as harness_day_ai
+from pydantic_ai_harness.github import _capability as harness_github
+from pydantic_ai_harness.grain import _capability as harness_grain
+from pydantic_ai_harness.linear import _capability as harness_linear
+from pydantic_ai_harness.logfire_mcp import _capability as harness_logfire_mcp
+from pydantic_ai_harness.notion import _capability as harness_notion
+from pydantic_ai_harness.posthog import _capability as harness_posthog
+from pydantic_ai_harness.pylon import _capability as harness_pylon
 from sites.integrations import API_KEY, NOTES_TOKEN, Account, FakeComposio, NotesServer
 
 from sammy import crypto, store
@@ -166,20 +175,44 @@ async def test_the_service_the_model_names(pool: Pool, composio: FakeComposio, d
         async def offered(service: str) -> Connection | Offer:
             return await integrations.offer(user.id, service)
 
-        linear = Offer(provider='composio', key='linear', name='Linear', logo='https://logos.composio.dev/api/linear')
+        # A service with a listed MCP server: that server, in one click, before Composio's app for it.
+        linear = Offer(
+            provider='mcp',
+            key='linear',
+            name='Linear',
+            logo='https://logos.composio.dev/api/linear',
+            url='https://mcp.linear.app/mcp',
+            auth='oauth',
+        )
         assert await offered('Linear') == linear
         assert await offered('linear issues') == linear
-        assert await offered('GitHub') == Offer(
-            provider='composio', key='github', name='GitHub', logo='https://logos.composio.dev/api/github'
-        )
-        # A listed MCP server: added and signed in to in one click.
         assert await offered('PostHog') == Offer(
             provider='mcp',
             key='posthog',
             name='PostHog',
             logo='https://logos.composio.dev/api/posthog',
             url='https://mcp.posthog.com/mcp',
+            auth='oauth',
         )
+        # One the user signs in to with a token they paste.
+        github = await offered('GitHub')
+        assert isinstance(github, Offer)
+        assert (github.provider, github.key, github.url, github.auth, github.token_header) == (
+            'mcp',
+            'github',
+            'https://api.githubcopilot.com/mcp/',
+            'token',
+            'Authorization',
+        )
+        assert github.token_hint.startswith('A GitHub personal access token')
+        assert github.json()['token_hint'] == github.token_hint and 'token_hint' not in linear.json()
+        found = await offered('Logfire EU')
+        assert isinstance(found, Offer) and (found.key, found.url) == (
+            'logfire_eu',
+            'https://logfire-eu.pydantic.dev/mcp',
+        )
+        # A service with no listed server: Composio's app.
+        assert await offered('Gmail') == Offer(provider='composio', key='gmail', name='Gmail')
         # Not an app Composio signs users in to, or nothing like one: their own MCP server.
         assert await offered('Acme CRM') == Offer(provider='mcp', key='', name='Acme CRM')
         assert await offered('Li') == Offer(provider='mcp', key='', name='Li')
@@ -192,6 +225,12 @@ async def test_the_service_the_model_names(pool: Pool, composio: FakeComposio, d
             )  # fmt: skip
         found = await offered('acme crm')
         assert isinstance(found, Connection) and (found.key, found.state) == ('mcp:acme-crm', 'connected')
+        # Linear connected through Composio before its own server was listed: that connection, not a second one.
+        composio.accounts['ca_linear'] = Account(
+            id='ca_linear', user_id=f'sammy:{user.id}', toolkit='linear', auth_config_id='ac', status='ACTIVE'
+        )
+        found = await offered('Linear issues')
+        assert isinstance(found, Connection) and (found.provider, found.key) == ('composio', 'linear')
     finally:
         await integrations.aclose()
 
@@ -214,14 +253,23 @@ def test_the_page_lists_the_featured_by_kind_then_every_other_app() -> None:
         ]
     }
     listed = catalog.entries(apps)
-    # Featured by kind (chat, issues, email, analytics), apps only where Composio has them; then the rest by name.
-    assert [(e['key'], e['kind'], e['featured']) for e in listed] == [
-        ('slack', 'chat', True),
-        ('linear', 'issues', True),
-        ('gmail', 'email', True),
-        ('posthog', 'analytics', True),
-        ('airtable', None, False),
-        ('zoom', None, False),
+    # Featured by kind: apps only where Composio has them, every listed MCP server, and in each kind the MCP servers
+    # pydantic-ai-harness integrates first. Then the rest by name, Composio's Linear among them, as "via Composio".
+    assert [(e['key'], e['provider'], e['kind'], e['featured']) for e in listed] == [
+        ('slack', 'composio', 'chat', True),
+        ('github', 'mcp', 'code', True),
+        ('linear', 'mcp', 'issues', True),
+        ('notion', 'mcp', 'docs', True),
+        ('gmail', 'composio', 'email', True),
+        ('grain', 'mcp', 'meetings', True),
+        ('day_ai', 'mcp', 'meetings', True),
+        ('posthog', 'mcp', 'analytics', True),
+        ('logfire', 'mcp', 'analytics', True),
+        ('logfire_eu', 'mcp', 'analytics', True),
+        ('pylon', 'mcp', 'sales', True),
+        ('airtable', 'composio', None, False),
+        ('linear', 'composio', None, False),
+        ('zoom', 'composio', None, False),
     ]
     assert listed[0] == {
         'key': 'slack',
@@ -236,24 +284,91 @@ def test_the_page_lists_the_featured_by_kind_then_every_other_app() -> None:
         'provider': 'composio',
         'url': None,
         'host': None,
+        'auth': None,
+        'token_hint': None,
+        'token_header': None,
     }
-    # Without Composio: only the MCP servers.
-    [posthog] = catalog.entries({})
-    assert (posthog['key'], posthog['provider'], posthog['url'], posthog['host'], posthog['kind_label']) == (
-        'posthog',
-        'mcp',
-        'https://mcp.posthog.com/mcp',
-        'mcp.posthog.com',
-        'Analytics and monitoring',
+    by_name = {e['name']: e for e in listed}
+    assert by_name['Linear'] == {
+        'key': 'linear',
+        'slug': 'linear',
+        'name': 'Linear',
+        'logo': 'https://logos.composio.dev/api/linear',
+        'description': 'Issues, projects and cycles.',
+        'categories': [],
+        'kind': 'issues',
+        'kind_label': 'Issue tracking',
+        'featured': True,
+        'provider': 'mcp',
+        'url': 'https://mcp.linear.app/mcp',
+        'host': 'mcp.linear.app',
+        'auth': 'oauth',
+        'token_hint': None,
+        'token_header': None,
+    }
+    via_composio = by_name['Linear via Composio']
+    assert (via_composio['provider'], via_composio['logo'], via_composio['auth']) == (
+        'composio',
+        'https://logos.example/linear',
+        None,
     )
-    assert posthog['logo'] == 'https://logos.composio.dev/api/posthog' and posthog['description']
+    github = by_name['GitHub']
+    assert (github['auth'], github['token_header'], github['host']) == (
+        'token',
+        'Authorization',
+        'api.githubcopilot.com',
+    )
+    assert isinstance(github['token_hint'], str) and github['token_hint'].startswith('A GitHub personal access token')
+    assert by_name['Logfire EU']['logo'] == 'https://logos.composio.dev/api/logfire'
+    assert by_name['Day AI']['kind_label'] == 'Meetings and CRM'
+
+    # Without Composio: only the MCP servers.
+    alone = catalog.entries({})
+    assert [e['key'] for e in alone] == [
+        'github',
+        'linear',
+        'notion',
+        'grain',
+        'day_ai',
+        'posthog',
+        'logfire',
+        'logfire_eu',
+        'pylon',
+    ]
+    assert all(e['provider'] == 'mcp' and e['url'] and e['host'] and e['description'] for e in alone)
+
+
+def test_the_listed_servers_are_the_harness_integrations() -> None:
+    """The addresses are the ones pydantic-ai-harness connects to: a module that moves its server shows up here."""
+    assert catalog.GITHUB_MCP_URL == harness_github.GITHUB_MCP_URL
+    assert catalog.POSTHOG_MCP_URL == harness_posthog._POSTHOG_MCP_URL  # pyright: ignore[reportPrivateUsage]
+    assert catalog.LOGFIRE_US_MCP_URL == harness_logfire_mcp.LOGFIRE_US_MCP_URL
+    assert catalog.LOGFIRE_EU_MCP_URL == harness_logfire_mcp.LOGFIRE_EU_MCP_URL
+    assert catalog.GRAIN_MCP_URL == harness_grain._GRAIN_MCP_URL  # pyright: ignore[reportPrivateUsage]
+    assert catalog.DAY_AI_MCP_URL == harness_day_ai._DAY_AI_MCP_URL  # pyright: ignore[reportPrivateUsage]
+    assert catalog.PYLON_MCP_URL == harness_pylon._PYLON_MCP_URL  # pyright: ignore[reportPrivateUsage]
+    # Linear's and Notion's are written where they connect, with no name of their own.
+    assert repr(catalog.LINEAR_MCP_URL) in inspect.getsource(harness_linear)
+    assert repr(catalog.NOTION_MCP_URL) in inspect.getsource(harness_notion)
+    modules = {'day_ai', 'github', 'grain', 'linear', 'logfire_mcp', 'notion', 'posthog', 'pylon'}
+    assert {listed.harness for listed in catalog.SERVERS.values()} == modules
 
 
 def test_a_named_service_with_a_listed_mcp_server() -> None:
-    for name in ('PostHog', 'posthog events'):
+    for name, key in [
+        ('PostHog', 'posthog'),
+        ('posthog events', 'posthog'),
+        ('Linear issues', 'linear'),
+        ('GitHub', 'github'),
+        ('Day AI', 'day_ai'),
+        ('day_ai', 'day_ai'),
+        ('Logfire', 'logfire'),
+        ('logfire traces', 'logfire'),
+        ('Logfire EU', 'logfire_eu'),
+    ]:
         preset = catalog.mcp_preset(name)
-        assert preset is not None and (preset.key, preset.url) == ('posthog', 'https://mcp.posthog.com/mcp')
-    assert catalog.mcp_preset('Linear') is None  # through Composio
+        assert preset is not None and preset.key == key, name
+    assert catalog.mcp_preset('Gmail') is None  # through Composio
     assert catalog.mcp_preset('Acme CRM') is None
 
 

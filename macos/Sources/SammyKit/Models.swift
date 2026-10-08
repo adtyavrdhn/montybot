@@ -208,24 +208,40 @@ public struct Offer: Codable, Equatable, Sendable {
     public let serverId: String?
     /// The address of a known MCP server to add; older servers don't send it.
     public let url: String?
+    /// How a known MCP server signs the user in: `oauth` (in the browser) or `token` (one they paste); older servers
+    /// don't send it.
+    public let auth: String?
+    /// What token to paste ("A GitHub personal access token"), and the header it goes in as `Bearer <token>`.
+    public let tokenHint: String?
+    public let tokenHeader: String?
 
     enum CodingKeys: String, CodingKey {
-        case provider, key, name, logo, url
+        case provider, key, name, logo, url, auth
         case serverId = "server_id"
+        case tokenHint = "token_hint"
+        case tokenHeader = "token_header"
     }
 
-    public init(provider: String, key: String, name: String, logo: String = "", serverId: String? = nil, url: String? = nil) {
+    public init(
+        provider: String, key: String, name: String, logo: String = "", serverId: String? = nil, url: String? = nil,
+        auth: String? = nil, tokenHint: String? = nil, tokenHeader: String? = nil
+    ) {
         self.provider = provider
         self.key = key
         self.name = name
         self.logo = logo
         self.serverId = serverId
         self.url = url
+        self.auth = auth
+        self.tokenHint = tokenHint
+        self.tokenHeader = tokenHeader
     }
 
     public var isApp: Bool { provider == "composio" }
     /// A known MCP server Sammy adds in one click, rather than one the user adds by hand.
     public var isPreset: Bool { provider == "mcp" && serverId == nil && url != nil }
+    /// Whether adding this known server takes a token the user pastes, rather than a sign-in in the browser.
+    public var needsToken: Bool { auth == "token" }
 }
 
 /// One of the user's connections.
@@ -282,11 +298,19 @@ public struct CatalogApp: Codable, Equatable, Identifiable, Sendable {
     /// A known MCP server's address and host (its connection's `detail`); nil for an app.
     public let url: String?
     public let host: String?
-    public var id: String { key }
+    /// `oauth` or `token` for a known MCP server (nil for an app), and for `token`, what to paste and the header it
+    /// goes in as `Bearer <token>`.
+    public let auth: String?
+    public let tokenHint: String?
+    public let tokenHeader: String?
+    /// Keys repeat across providers (Linear's own server, and Linear through Composio), so the provider is in it.
+    public var id: String { "\(provider):\(key)" }
 
     enum CodingKeys: String, CodingKey {
-        case key, slug, name, logo, description, categories, kind, featured, provider, url, host
+        case key, slug, name, logo, description, categories, kind, featured, provider, url, host, auth
         case kindLabel = "kind_label"
+        case tokenHint = "token_hint"
+        case tokenHeader = "token_header"
     }
 
     public init(from decoder: Decoder) throws {
@@ -304,9 +328,14 @@ public struct CatalogApp: Codable, Equatable, Identifiable, Sendable {
         provider = try container.decodeIfPresent(String.self, forKey: .provider) ?? "composio"
         url = try container.decodeIfPresent(String.self, forKey: .url)
         host = try container.decodeIfPresent(String.self, forKey: .host)
+        auth = try container.decodeIfPresent(String.self, forKey: .auth)
+        tokenHint = try container.decodeIfPresent(String.self, forKey: .tokenHint)
+        tokenHeader = try container.decodeIfPresent(String.self, forKey: .tokenHeader)
     }
 
     public var isApp: Bool { provider == "composio" }
+    /// Whether connecting takes a token the user pastes, rather than a sign-in in the browser.
+    public var needsToken: Bool { auth == "token" }
 
     /// Whether `connection` is this one: the same app, or a server at this preset's host.
     public func matches(_ connection: Connection) -> Bool {

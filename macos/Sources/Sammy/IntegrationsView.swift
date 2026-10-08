@@ -9,6 +9,8 @@ struct IntegrationsView: View {
     @State private var removing: Connection?
     @State private var search = ""
     @State private var addingServer = false
+    /// The entry whose token form is open: a known MCP server that takes a token the user pastes (GitHub's).
+    @State private var tokenFor: CatalogApp.ID?
     /// Whether "More apps" is open, once the user says; until then it opens when one of them is connected.
     @State private var moreOpen: Bool?
 
@@ -121,12 +123,25 @@ struct IntegrationsView: View {
         LazyVStack(spacing: 0) {
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 if index > 0 { Divider().overlay(Palette.outlineVariant) }
+                let connection = connections.first { entry.matches($0) }
                 IntegrationRow(
                     name: entry.name, logo: entry.logo, subtitle: entry.description,
-                    connection: connections.first { entry.matches($0) },
-                    connect: { if entry.isApp { await app.connect(app: entry.key) } else { await app.connect(preset: entry) } },
+                    connection: connection,
+                    connect: {
+                        if entry.isApp {
+                            await app.connect(app: entry.key)
+                        } else if entry.needsToken {
+                            tokenFor = tokenFor == entry.id ? nil : entry.id
+                        } else {
+                            await app.connect(preset: entry)
+                        }
+                    },
                     remove: { removing = $0 }
                 )
+                if tokenFor == entry.id, connection == nil {
+                    Divider().overlay(Palette.outlineVariant)
+                    TokenForm(entry: entry) { tokenFor = nil }
+                }
             }
         }
     }
@@ -259,6 +274,52 @@ private struct StatusBadge: View {
                 .padding(.horizontal, 8).padding(.vertical, 3)
                 .background(Capsule().fill(Palette.errorContainer))
                 .fixedSize()
+        }
+    }
+}
+
+/// A known MCP server that takes a token the user pastes (GitHub's personal access token), rather than a sign-in.
+private struct TokenForm: View {
+    @Environment(AppModel.self) private var app
+    let entry: CatalogApp
+    let close: () -> Void
+    @State private var token = ""
+    @State private var adding = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            SecureField("Token", text: $token, prompt: Text(entry.tokenHint ?? "Token"))
+                .labelsHidden().accessibilityLabel("Token for \(entry.name)")
+                .focused($focused).field(focused: focused)
+                .onSubmit(connect)
+            Button(action: connect) {
+                HStack(spacing: 6) {
+                    if adding { ProgressView().controlSize(.mini).tint(Palette.onLink) }
+                    Text("Connect")
+                }
+            }
+            .buttonStyle(.sammy(.primary, small: true))
+            .disabled(adding || token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityLabel("Connect \(entry.name) with this token")
+            Button("Cancel", action: close)
+                .buttonStyle(.sammy(.ghost, small: true))
+                .accessibilityLabel("Cancel connecting \(entry.name)")
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .onAppear { focused = true }
+    }
+
+    private func connect() {
+        guard !adding, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        Task {
+            adding = true
+            defer { adding = false }
+            app.serverNote = nil
+            if await app.connect(preset: entry, token: token) {
+                token = ""  // the token is not left on screen
+                close()
+            }
         }
     }
 }

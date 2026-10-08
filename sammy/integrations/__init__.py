@@ -1,9 +1,10 @@
 """Integrations: the services a user connects so Sammy can work in them. Two kinds, one list:
 
-- **Apps through Composio** (`composio.py`): Linear, GitHub, Gmail, Notion... one click, Composio signs the user in.
-  Their key is the app's slug: `linear`.
+- **Apps through Composio** (`composio.py`): Gmail, Slack, Jira... one click, Composio signs the user in.
+  Their key is the app's slug: `gmail`.
 - **The user's own MCP servers** (`mcp.py`): a URL, with a header or an OAuth sign-in (`oauth.py`). Their key is
-  `mcp:<slug of its name>`.
+  `mcp:<slug of its name>`. The hosted servers of the services pydantic-ai-harness integrates (Linear, Notion,
+  GitHub...) are listed (`catalog.py`), and added in a click or with a pasted token.
 
 ```
 web app / Mac app                     sammy.api /api/integrations...      Integrations (one per process)
@@ -27,6 +28,7 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 from sammy.db import Pool
 from sammy.integrations import catalog, egress, mcp, oauth
 from sammy.integrations.base import IntegrationError, Tool
+from sammy.integrations.catalog import normalized
 from sammy.integrations.composio import Composio, Toolkit
 from sammy.settings import Settings
 
@@ -79,14 +81,35 @@ class Offer:
     logo: str = ''
     url: str = ''
     """A listed MCP server's address (`catalog.FEATURED`): the chat adds it, and the user signs in, in one click."""
+    auth: str = ''
+    """For a listed MCP server: `oauth`, or `token` for one the user pastes a token for, as `token_hint` says,
+    sent in `token_header` as `Bearer <token>`."""
+    token_hint: str = ''
+    token_header: str = ''
+
+    @classmethod
+    def of(cls, listed: catalog.Listed) -> Offer:
+        token = listed.needs_token
+        return cls(
+            provider='mcp',
+            key=listed.key,
+            name=listed.name,
+            logo=listed.logo,
+            url=listed.url,
+            auth=listed.auth,
+            token_hint=listed.token_hint if token else '',
+            token_header=listed.token_header if token else '',
+        )
 
     def json(self) -> dict[str, str]:
         shown = {'provider': self.provider, 'key': self.key, 'name': self.name, 'logo': self.logo}
-        return {**shown, 'url': self.url} if self.url else shown
-
-
-def normalized(text: str) -> str:
-    return ''.join(ch for ch in text.lower() if ch.isalnum())
+        optional = {
+            'url': self.url,
+            'auth': self.auth,
+            'token_hint': self.token_hint,
+            'token_header': self.token_header,
+        }
+        return shown | {key: value for key, value in optional.items() if value}
 
 
 class Integrations:
@@ -159,17 +182,19 @@ class Integrations:
         """For a service the model named ("linear", "Linear issues"): the user's connection to it if they have one,
         else what they can connect for it."""
         wanted = normalized(service.removeprefix(MCP_PREFIX))
-        for connection in await self.connections(user_id):
+        connections = await self.connections(user_id)
+        for connection in connections:
             if wanted in (normalized(connection.key.removeprefix(MCP_PREFIX)), normalized(connection.name)):
                 return connection
         if (preset := catalog.mcp_preset(service)) is not None:
-            # Added already, under a name of the user's own: the same server, whatever it is called.
-            for connection in await self.connections(user_id):
-                if connection.provider == 'mcp' and connection.detail == preset.host:
+            # Added already, under a name of the user's own (the same server, whatever it is called), or connected
+            # through Composio's app for the service before its own server was listed.
+            for connection in connections:
+                if (connection.provider == 'mcp' and connection.detail == preset.host) or (
+                    connection.provider == 'composio' and connection.key == preset.key
+                ):
                     return connection
-            return Offer(
-                provider='mcp', key=preset.key, name=preset.name, logo=f'{catalog.LOGOS}{preset.key}', url=preset.url
-            )
+            return Offer.of(preset)
         if self.composio is not None:
             apps = await self.composio.catalog()
             exact = next((a for a in apps.values() if wanted in (normalized(a.slug), normalized(a.name))), None)

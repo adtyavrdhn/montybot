@@ -665,14 +665,17 @@ public final class ChatModel {
 
     /// For a connect ask: opens where the user signs in, in their browser (the server hears when they are done, and
     /// the run carries on). A known MCP server (PostHog's, say) is added first, as on the Integrations page. A service
-    /// no app is offered for has nothing to sign in to: the Integrations page opens, to add its MCP server.
-    public func connect() async {
+    /// no app is offered for has nothing to sign in to: the Integrations page opens, to add its MCP server. A known
+    /// server that takes a token (GitHub's) is added with the `token` the user pasted in the card, never in telemetry.
+    public func connect(token: String? = nil) async {
         guard let ask, ask.kind == .connect, let offer = ask.integration, let app else { return }
         if offer.isPreset, let url = offer.url {
+            let headers = offer.needsToken ? AppModel.tokenHeaders(offer.tokenHeader, token) : [:]
+            if offer.needsToken && headers.isEmpty { return }
             answerError = nil
             app.serverNote = nil
             let attributes = ids.merging(["sammy.integration.provider": .string(offer.provider), "sammy.preset": .string(offer.key)]) { $1 }
-            if await app.addServer(name: offer.name, url: url, headers: [:], attributes) != nil {
+            if await app.addServer(name: offer.name, url: url, headers: headers, attributes) != nil {
                 connectingAsk = ask.id
             } else if let note = app.serverNote, note.isError {
                 answerError = note.text

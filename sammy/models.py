@@ -93,7 +93,8 @@ class Ask:
 
     @property
     def integration(self) -> dict[str, str]:
-        """For a connect ask, what it offers to connect: `provider`, `key`, `name`, `logo`, and `server_id` for an MCP
-        server to sign in to again (`sammy.integration_tools.offer_of`)."""
+        """For a connect ask, what it offers to connect: `provider`, `key`, `name`, `logo`; for a listed MCP server,
+        `url` and `auth` (and `token_hint` and `token_header` for a token); `server_id` for an MCP server to sign in to
+        again (`sammy.integration_tools.offer_of`)."""
         offered: dict[str, str] = self.details.get('integration') or {}
         return offered

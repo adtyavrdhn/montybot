@@ -139,6 +139,9 @@ class MockAPI:
             result = {'url': 'http://sammy.test/mock-sign-in'}
         elif path == '/api/integrations/servers' and method == 'POST':
             assert isinstance(body, dict)
+            if body['headers'] == {'Authorization': 'Bearer bad'}:
+                route.fulfill(status=400, json={'detail': 'The server refused those credentials.'})
+                return
             added = {'id': 'server', 'key': f'mcp:{body["name"].lower()}', 'provider': 'mcp', 'name': body['name'],
                      'detail': urlsplit(body['url']).hostname, 'logo': '',
                      'state': 'needs_sign_in' if self.server_sign_in else 'connected'}  # fmt: skip
@@ -1172,23 +1175,39 @@ def test_a_service_without_an_app_offers_an_mcp_server(frontend: tuple[Page, Moc
     expect(page.locator('#server-name')).to_have_value('Acme Wiki')
 
 
-POSTHOG = {'provider': 'mcp', 'key': 'posthog', 'name': 'PostHog', 'logo': '', 'url': 'https://mcp.posthog.com/mcp'}
+POSTHOG = {'provider': 'mcp', 'key': 'posthog', 'name': 'PostHog', 'logo': '', 'url': 'https://mcp.posthog.com/mcp',
+           'auth': 'oauth'}  # fmt: skip
+GITHUB_HINT = 'A GitHub personal access token (github.com/settings/tokens)'
+GITHUB = {'provider': 'mcp', 'key': 'github', 'name': 'GitHub', 'logo': '', 'url': 'https://api.githubcopilot.com/mcp/',
+          'auth': 'token', 'token_hint': GITHUB_HINT, 'token_header': 'Authorization'}  # fmt: skip
 
 
-def listed(key: str, name: str, about: str, kind: str | None = None, label: str | None = None) -> dict[str, object]:
-    """An entry of `/api/integrations/apps`, as `catalog.entries` makes it."""
-    mcp = key == 'posthog'
+def listed(
+    key: str,
+    name: str,
+    about: str,
+    kind: str | None = None,
+    label: str | None = None,
+    *,
+    server: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """An entry of `/api/integrations/apps`, as `catalog.entries` makes it: an app, or a listed MCP `server`."""
+    token = server is not None and server['auth'] == 'token'
     return {'key': key, 'slug': key, 'name': name, 'logo': '', 'description': about, 'categories': [], 'kind': kind,
-            'kind_label': label, 'featured': kind is not None, 'provider': 'mcp' if mcp else 'composio',
-            'url': POSTHOG['url'] if mcp else None, 'host': 'mcp.posthog.com' if mcp else None}  # fmt: skip
+            'kind_label': label, 'featured': kind is not None, 'provider': 'mcp' if server else 'composio',
+            'url': server['url'] if server else None, 'host': urlsplit(server['url']).hostname if server else None,
+            'auth': server['auth'] if server else None, 'token_hint': GITHUB_HINT if token else None,
+            'token_header': 'Authorization' if token else None}  # fmt: skip
 
 
+LINEAR_SERVER = {'url': 'https://mcp.linear.app/mcp', 'auth': 'oauth'}
 LISTING = [
-    listed('github', 'GitHub', 'Code hosting', 'code', 'Code'),
-    listed('linear', 'Linear', 'Issue tracking', 'issues', 'Issue tracking'),
+    listed('github', 'GitHub', 'Repositories and pull requests', 'code', 'Code', server=GITHUB),
+    listed('linear', 'Linear', 'Issues and projects', 'issues', 'Issue tracking', server=LINEAR_SERVER),
     listed('gmail', 'Gmail', 'Email', 'email', 'Email and calendar'),
-    listed('posthog', 'PostHog', 'Product analytics', 'analytics', 'Analytics and monitoring'),
+    listed('posthog', 'PostHog', 'Product analytics', 'analytics', 'Analytics and monitoring', server=POSTHOG),
     listed('airtable', 'Airtable', 'Spreadsheets and databases'),
+    listed('linear', 'Linear via Composio', 'Issue tracking'),
     listed('zoom', 'Zoom', 'Video meetings'),
 ]
 
@@ -1200,6 +1219,26 @@ def test_a_chat_connects_a_listed_mcp_server_in_one_click(frontend: tuple[Page, 
     expect(page.locator('#ask')).to_contain_text('PostHog is connected.')  # nothing to sign in to here
     assert ('POST', '/api/integrations/servers', {'name': 'PostHog', 'url': 'https://mcp.posthog.com/mcp',
             'headers': {}}) in mock.calls  # fmt: skip
+    page.get_by_role('button', name="I've connected it").click()
+    expect(page.locator('#ask')).to_be_hidden()  # the answer went: wait for it before reading the calls
+    assert ('POST', '/api/asks/ask', {'connected': True}) in mock.calls
+
+
+def test_a_chat_connects_a_listed_mcp_server_with_a_token(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    connect_chat(page, mock, GITHUB)
+    token = page.get_by_label(GITHUB_HINT)
+    expect(token).to_have_attribute('type', 'password')
+    token.fill('bad')
+    page.get_by_role('button', name='Connect GitHub with this token').click()
+    expect(page.locator('#ask [role=alert]')).to_have_text('The server refused those credentials.')
+    expect(page.get_by_role('button', name="I've connected it")).to_be_hidden()
+    token.fill(' ghp_token ')
+    page.get_by_role('button', name='Connect GitHub with this token').click()
+    expect(page.locator('#ask')).to_contain_text('GitHub is connected.')
+    assert ('POST', '/api/integrations/servers', {'name': 'GitHub', 'url': 'https://api.githubcopilot.com/mcp/',
+            'headers': {'Authorization': 'Bearer ghp_token'}}) in mock.calls  # fmt: skip
+    expect(page.locator('#ask .token-form')).to_be_hidden()
     page.get_by_role('button', name="I've connected it").click()
     expect(page.locator('#ask')).to_be_hidden()  # the answer went: wait for it before reading the calls
     assert ('POST', '/api/asks/ask', {'connected': True}) in mock.calls
@@ -1224,7 +1263,11 @@ def test_integrations_page(frontend: tuple[Page, MockAPI], width: int) -> None:
     expect(page.locator('#integration-groups h3')).to_have_text(
         ['Code 1', 'Issue tracking 1', 'Email and calendar 1', 'Analytics and monitoring 1']
     )
-    linear = page.locator('.integration-row', has_text='Linear')
+    # Linear's own server is listed; the user's Linear through Composio is under More apps, connected.
+    expect(page.locator('#integration-groups .integration-row', has_text='Linear').get_by_role('button')).to_have_text(
+        ['Connect']
+    )
+    linear = page.locator('#more-list .integration-row', has_text='Linear via Composio')
     expect(linear.locator('.badge')).to_have_text('Connected')
     expect(linear.get_by_role('button')).to_have_text(['Disconnect'])  # no second Connect
     expect(page.locator('.integration-row', has_text='GitHub').get_by_role('button')).to_have_text(['Connect'])
@@ -1236,7 +1279,7 @@ def test_integrations_page(frontend: tuple[Page, MockAPI], width: int) -> None:
     expect(page.locator('#server-panel')).to_be_hidden()
     # More apps is open, as one of them is connected (and broken).
     expect(page.locator('#more-apps')).to_have_attribute('open', '')
-    expect(page.locator('#more-apps summary')).to_have_text('More apps 2')
+    expect(page.locator('#more-apps summary')).to_have_text('More apps 3')
     airtable = page.locator('#more-list .integration-row', has_text='Airtable')
     expect(airtable).to_contain_text('Not working')
     expect(airtable.get_by_role('button')).to_have_text(['Reconnect', 'Remove'])
@@ -1310,6 +1353,48 @@ def test_a_listed_mcp_server_connects_in_one_click(frontend: tuple[Page, MockAPI
     assert ('POST', '/api/integrations/servers', {'name': 'PostHog', 'url': 'https://mcp.posthog.com/mcp',
             'headers': {}}) in mock.calls  # fmt: skip
     expect(page.locator('#custom-list > li')).to_have_count(1)  # it is the listed one, not a server of the user's own
+
+
+@pytest.mark.parametrize('width', [1440, 390])
+def test_a_listed_mcp_server_connects_with_a_token(frontend: tuple[Page, MockAPI], width: int) -> None:
+    page, mock = frontend
+    page.set_viewport_size({'width': width, 'height': 900})
+    mock.apps = LISTING
+    workspace(page, mock)
+    page.goto('http://sammy.test/#/integrations')
+    github = page.locator('.integration-row', has_text='GitHub')
+    opener = github.get_by_role('button', name='Connect GitHub', exact=True)
+    opener.click()  # nothing opens: the field for the token does
+    token = github.get_by_label(GITHUB_HINT)
+    expect(token).to_be_focused()
+    expect(token).to_have_attribute('type', 'password')
+    expect(opener).to_have_attribute('aria-expanded', 'true')
+    no_overflow(page)
+    token.fill('   ')  # no token: nothing is sent
+    github.get_by_role('button', name='Connect GitHub with this token').click()
+    expect(token).to_be_focused()
+    assert not [call for call in mock.calls if call[1] == '/api/integrations/servers']
+    token.fill('bad')
+    github.get_by_role('button', name='Connect GitHub with this token').click()
+    expect(github.get_by_role('alert')).to_have_text('The server refused those credentials.')
+    token.fill('ghp_token')
+    token.press('Enter')
+    expect(page.locator('#integrations-status')).to_have_text('GitHub is connected.')
+    expect(github.locator('.badge')).to_have_text('Connected')
+    expect(github.locator('.token-form')).to_have_count(0)  # the token is not left on screen
+    assert ('POST', '/api/integrations/servers', {'name': 'GitHub', 'url': 'https://api.githubcopilot.com/mcp/',
+            'headers': {'Authorization': 'Bearer ghp_token'}}) in mock.calls  # fmt: skip
+    expect(page.locator('#custom-list > li')).to_have_count(1)  # it is the listed one, not a server of the user's own
+    no_overflow(page)
+
+    # Its Connect closes the field again.
+    mock.connections.clear()
+    page.evaluate("new BroadcastChannel('sammy-integrations').postMessage({ok: true})")
+    opener.click()
+    expect(github.locator('.token-form')).to_be_visible()
+    opener.click()
+    expect(github.locator('.token-form')).to_have_count(0)
+    expect(opener).to_have_attribute('aria-expanded', 'false')
 
 
 def test_integration_addresses_are_route_templates_in_telemetry(frontend: tuple[Page, MockAPI]) -> None:
