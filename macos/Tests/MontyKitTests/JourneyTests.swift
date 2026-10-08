@@ -761,7 +761,12 @@ struct JourneyTests {
         let chat = try await say("Say hello", in: app)
         try await eventually("the reply") { chat.run?.status == .done }
         let reply = try #require(chat.messages.last { $0.role == .assistant }?.text)
-        let word = try #require(reply.split(separator: " ").first { $0.count >= 4 }.map(String.init), "a word in: \(reply)")
+        // A word only the reply has: found by the task or the title, it would prove nothing about replies.
+        let asked = "say hello"
+        let word = try #require(
+            reply.split(whereSeparator: { !$0.isLetter }).map(String.init).first { $0.count >= 4 && !asked.contains($0.lowercased()) },
+            "a word only in: \(reply)"
+        )
         #expect(await app.search(word).contains(try #require(chat.threadId)))
         #expect(await app.search("zz-nothing-says-this-zz").isEmpty)
     }

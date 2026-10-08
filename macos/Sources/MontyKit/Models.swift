@@ -357,7 +357,8 @@ extension Schedule {
             case .failed: parts.append("Last run couldn't finish (\(ago))"); failed = true
             case .stopped: parts.append("Last run stopped (\(ago))")
             case .waiting: parts.append("Waiting for you since \(ago)")
-            case .queued, .running: parts.append("Running now")
+            case .queued: parts.append("About to run")
+            case .running: parts.append("Running now")
             default: parts.append("Last ran \(ago)")
             }
         }

@@ -47,7 +47,9 @@ struct MontySquirrel: View {
         let frames = playback.clip.frames
         guard !frames.isEmpty else { return nil }
         if reduceMotion { return frames[frames.count / 3] }  // past the wind-up, where the pose says the mood
-        let index = Int(date.timeIntervalSince(playback.started) * SquirrelClip.fps)
+        // Never before the start: the timeline's date can be a moment earlier than a reaction that just began, and a
+        // negative index (Swift's % keeps the sign) would be out of range.
+        let index = max(0, Int(date.timeIntervalSince(playback.started) * SquirrelClip.fps))
         return frames[playback.clip.isOneShot ? min(index, frames.count - 1) : index % frames.count]
     }
 }
