@@ -79,6 +79,11 @@ def run(code: str) -> ModelResponse:
     return call('run_code', code=code)
 
 
+def calls(*parts: tuple[str, dict[str, object]]) -> ModelResponse:
+    """Several tool calls in one response, which run in parallel."""
+    return ModelResponse(parts=[ToolCallPart(tool_name=tool, args=args) for tool, args in parts])
+
+
 def say(text: str) -> ModelResponse:
     return ModelResponse(parts=[TextPart(text)])
 
@@ -96,6 +101,20 @@ def hello(turn: Turn) -> ModelResponse:
 
 def users_time(turn: Turn) -> ModelResponse:
     return say(next(line for line in turn.instructions.splitlines() if 'For the user it is now' in line))
+
+
+def two_facts_then_ask(turn: Turn) -> ModelResponse:
+    """Three tool calls at once, then a question: the run waits, and must replay the parallel calls after a restart."""
+    if not turn.returns:
+        return calls(
+            ('remember', {'fact': 'Buys free-range eggs'}),
+            ('remember', {'fact': 'Shops on Mondays'}),
+            ('list_schedules', {}),
+        )
+    if not turn.called('ask_user'):
+        return call('ask_user', question='Anything else I should remember?')
+    results = [str(r.content) for r in turn.returns if r.tool_name in ('remember', 'list_schedules')]
+    return say(f'{" | ".join(results)} | You said: {turn.result_of("ask_user")}')
 
 
 def own_name(turn: Turn) -> ModelResponse:
@@ -422,6 +441,7 @@ SCRIPTS: dict[str, Script] = {
     'Fail please': fail,
     'Say hello': hello,
     'Ask me my favourite colour': favourite_colour,
+    'Remember two things about me, then ask': two_facts_then_ask,
     'What time is it for me': users_time,
     'What is your name': own_name,
     'Order eggs from': order_eggs,

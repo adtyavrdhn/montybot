@@ -56,7 +56,7 @@ def check_schedule(
         raise ModelRetry(str(error)) from error
 
 
-@schedule_tools.tool(requires_approval=True, args_validator=check_schedule)
+@schedule_tools.tool(requires_approval=True, args_validator=check_schedule, sequential=True)
 async def schedule_task(
     ctx: RunContext[RunDeps], name: str, cron: str, timezone: str, when: str, prompt: str, watch: bool = False
 ) -> str:

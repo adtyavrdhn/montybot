@@ -120,7 +120,7 @@ def tool_json(tool: Tool) -> dict[str, Any]:
     }
 
 
-@integration_tools.tool
+@integration_tools.tool(sequential=True)  # two DBOS steps with an approval between them
 async def call_integration_tool(
     ctx: RunContext[RunDeps], integration: str, tool: str, arguments: dict[str, Any] | None = None
 ) -> str:
@@ -161,7 +161,7 @@ async def call_integration_tool(
     return result
 
 
-@integration_tools.tool
+@integration_tools.tool(sequential=True)  # a DBOS step, then a wait for the user
 async def connect_integration(ctx: RunContext[RunDeps], service: str, reason: str) -> str:
     """Ask the user to connect a service this task needs, with a button in the chat, and wait until they have. Use it
     as soon as a request needs a service that is not connected; if it is connected already, this says so.
