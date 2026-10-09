@@ -88,6 +88,7 @@ services:
       SECURE_COOKIES: 'true'
       EXECUTOR_ID: vm-1
       MODEL: ${MODEL:-claude-code:claude-opus-5-5}
+      MODEL_CHAINS: ${MODEL_CHAINS:-{}}
       # Chrome over our own CDP pipe (sammy/browser/cdp.md). Roll back to Playwright with
       # BROWSER_BACKEND=sammy.engines:chromium_server in /opt/sammy/.env.
       BROWSER_BACKEND: ${BROWSER_BACKEND:-sammy.engines:chromium_cdp_server}

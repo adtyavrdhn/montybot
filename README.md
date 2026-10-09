@@ -134,6 +134,11 @@ cp .env.example .env          # then set SESSION_SECRET, MONTY_EXECUTION_KEY and
 uv run sammy serve            # http://127.0.0.1:8000
 ```
 
+`MODEL` is the model every run uses. Set it to `chain:NAME` and name the models in `MODEL_CHAINS` (see
+`.env.example`) for a fallback chain (`sammy/chains.py`, clai2's chains on Pydantic AI's `FallbackModel`): when a
+provider is down or rate limited, or the Claude Code sign-in has expired, the next model takes the request. The model
+span says which model answered (`gen_ai.response.model`), and each fallback is a warning in Logfire.
+
 The app is Starlette plus DBOS in one process (`sammy/app.py`, `sammy/workflows.py`). A run is a DBOS workflow:
 model requests and browser calls are steps, and questions, approvals and hand-offs wait in `DBOS.recv`
 (`sammy/approvals.py`). The agent's code runs in Monty through `run_code` (`sammy/code.py`), with the browser

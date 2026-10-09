@@ -43,6 +43,10 @@ with sudo you can reach over SSH.
    on the first request.
 3. **The model:** with the default `MODEL=claude-code:...`, sign the server in once, as `deploy.sh` prints. For an API
    model, put `MODEL=anthropic:claude-sonnet-4-5` and `ANTHROPIC_API_KEY=...` in `/opt/sammy/.env` and deploy again.
+   For a fallback when that model fails, put `MODEL=chain:main` and
+   `MODEL_CHAINS='{"main": ["claude-code:claude-opus-5-5", "anthropic:claude-opus-5-5"]}'` there instead (quoted:
+   `deploy.sh` sources the file). A chain with a `claude-code:` model needs the sign-in too, and `deploy.sh` asks for
+   it the same way (`sammy uses-claude-code`).
 4. **The login** is `BASIC_AUTH_USER` and `BASIC_AUTH_PASSWORD` in `/opt/sammy/.env`.
 
 By hand on the server, from `/opt/sammy/src/deploy`, `compose` meaning
