@@ -34,7 +34,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import FunctionModel
 
 from sammy import agent as agent_module
-from sammy import streaming
+from sammy import streaming, usage
 
 pytestmark = pytest.mark.anyio
 
@@ -64,14 +64,23 @@ async def events(*items: AgentStreamEvent) -> AsyncIterator[AgentStreamEvent]:
 @pytest.fixture
 def deps(run_id: str, monkeypatch: pytest.MonkeyPatch) -> Any:
     # Recall and the connected integrations are instruction providers with a database dependency, not part of
-    # streaming.
+    # streaming; so is recording each model request's usage.
     async def nothing(ctx: Any) -> str:
         return ''
 
+    async def unrecorded(*args: object) -> None:
+        pass
+
     monkeypatch.setattr(agent_module, 'recall', nothing)
     monkeypatch.setattr(agent_module, 'connected_integrations', nothing)
+    monkeypatch.setattr(usage, 'record', unrecorded)
     return SimpleNamespace(
-        run_id=run_id, run=SimpleNamespace(id=run_id, prompt='hello'), schedule=None, local_time='', squirrel_name=''
+        run_id=run_id,
+        run=SimpleNamespace(id=run_id, prompt='hello'),
+        schedule=None,
+        local_time='',
+        squirrel_name='',
+        resources=SimpleNamespace(pool=None),
     )
 
 
@@ -288,8 +297,8 @@ async def test_final_write_skips_already_finished_run(monkeypatch: pytest.Monkey
     async def connect() -> AsyncIterator[Any]:
         yield connection
 
-    resources: Any = SimpleNamespace(pool=SimpleNamespace(connection=connect))
-    run: Any = SimpleNamespace(id='finished-run', thread_id='thread')
+    resources: Any = SimpleNamespace(pool=SimpleNamespace(connection=connect), settings=None)
+    run: Any = SimpleNamespace(id='finished-run', thread_id='thread', user_id='user')
     messages: list[ModelMessage] = [ModelResponse(parts=[TextPart('final answer')])]
     encoded = ModelMessagesTypeAdapter.dump_json(messages)
     lock = AsyncMock(side_effect=[False, True])
@@ -300,6 +309,8 @@ async def test_final_write_skips_already_finished_run(monkeypatch: pytest.Monkey
     monkeypatch.setattr(store, 'finish_run', finish)
     # Main's browser-before-terminal fix is independent of the final-history guard.
     monkeypatch.setattr(workflows, 'close_browser', AsyncMock())
+    monkeypatch.setattr(usage, 'spent', AsyncMock(return_value=usage.Spent(today=usage.ZERO, month=usage.ZERO)))
+    monkeypatch.setattr(usage, 'warning', lambda settings, spent: '')
 
     await workflows.finish_run(resources, run, encoded, 'final answer')
     # The database committed but DBOS did not record the step: execute it again.

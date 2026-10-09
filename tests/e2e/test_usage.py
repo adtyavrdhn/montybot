@@ -92,6 +92,13 @@ class Served:
         ]
 
 
+def logfire_cost(span: ReadableSpan) -> float:
+    """What Logfire shows a model request cost."""
+    cost = (span.attributes or {})['operation.cost']
+    assert isinstance(cost, float)
+    return cost
+
+
 @contextmanager
 def served(database_url: str, workspaces_dir: Path, **caps: Decimal) -> Iterator[Served]:
     with serve_traced(database_url, workspaces_dir, model='script:test_usage:priced', **caps) as (app, exporter):
@@ -121,8 +128,8 @@ def test_recorded_cost_matches_logfire(database_url: str, workspaces_dir: Path) 
             assert (cache_read, cache_write) == (1500, 200)
             assert attributes['gen_ai.usage.input_tokens'] == input_tokens
             assert attributes['gen_ai.usage.cache_read.input_tokens'] == cache_read
-            assert float(cost) == pytest.approx(attributes['operation.cost'], rel=1e-9)
-        logfire_total = sum(float((span.attributes or {})['operation.cost']) for span in spans)
+            assert float(cost) == pytest.approx(logfire_cost(span), rel=1e-9)
+        logfire_total = sum(logfire_cost(span) for span in spans)
         recorded_total = sum(row[6] for row in rows)
         assert recorded_total > 0
         assert float(recorded_total) == pytest.approx(logfire_total, rel=1e-9)
@@ -201,13 +208,14 @@ def test_a_schedule_at_the_cap_pauses(database_url: str, workspaces_dir: Path) -
 # --- the caps, without a database ---
 
 
-def settings(**caps: Decimal) -> Settings:
-    return Settings(
-        database_url='postgresql://unused',
-        session_secret=SecretStr('s'),
-        encryption_key=SecretStr('k'),
-        **caps,
+def settings(*, daily: Decimal | None = None, monthly: Decimal | None = None) -> Settings:
+    """With these caps; with neither, the caps the environment sets."""
+    required = Settings(
+        database_url='postgresql://unused', session_secret=SecretStr('s'), encryption_key=SecretStr('k')
     )
+    if daily is None and monthly is None:
+        return required
+    return required.model_copy(update={'daily_spend_cap': daily, 'monthly_spend_cap': monthly})
 
 
 def test_caps_are_off_unless_set(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -222,7 +230,7 @@ def test_caps_are_off_unless_set(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_the_first_cap_reached_says_why() -> None:
-    capped = settings(daily_spend_cap=Decimal(2), monthly_spend_cap=Decimal(30))
+    capped = settings(daily=Decimal(2), monthly=Decimal(30))
     assert usage.refusal(capped, usage.Spent(today=Decimal('1.99'), month=Decimal(29)), scheduled=False) == ''
     daily = usage.refusal(capped, usage.Spent(today=Decimal(2), month=Decimal(2)), scheduled=False)
     assert 'daily spending limit of $2.00' in daily and 'paused' not in daily
@@ -232,7 +240,7 @@ def test_the_first_cap_reached_says_why() -> None:
 
 
 def test_a_reply_warns_only_when_its_run_crossed_a_line() -> None:
-    capped = settings(monthly_spend_cap=Decimal(10))
+    capped = settings(monthly=Decimal(10))
     crossed = usage.Spent(today=Decimal(1), month=Decimal('8.5'), by_run=Decimal(1))
     assert 'Heads up: you have used $8.50 of your monthly spending limit of $10.00.' in usage.warning(capped, crossed)
     already = usage.Spent(today=Decimal(1), month=Decimal('8.5'), by_run=Decimal('0.1'))
