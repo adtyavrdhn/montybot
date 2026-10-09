@@ -35,6 +35,7 @@ from pydantic_ai.models.function import FunctionModel
 
 from sammy import agent as agent_module
 from sammy import streaming
+from sammy.deps import Steered
 
 pytestmark = pytest.mark.anyio
 
@@ -71,7 +72,12 @@ def deps(run_id: str, monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setattr(agent_module, 'recall', nothing)
     monkeypatch.setattr(agent_module, 'connected_integrations', nothing)
     return SimpleNamespace(
-        run_id=run_id, run=SimpleNamespace(id=run_id, prompt='hello'), schedule=None, local_time='', squirrel_name=''
+        run_id=run_id,
+        run=SimpleNamespace(id=run_id, prompt='hello'),
+        schedule=None,
+        local_time='',
+        squirrel_name='',
+        steered=Steered(),  # off: messages sent mid-run need the database (sammy.steering)
     )
 
 
@@ -276,7 +282,7 @@ async def test_final_write_skips_already_finished_run(monkeypatch: pytest.Monkey
 
     from pydantic_ai.messages import ModelMessagesTypeAdapter
 
-    from sammy import store, workflows
+    from sammy import steering, store, workflows
 
     @asynccontextmanager
     async def transaction() -> AsyncIterator[None]:
@@ -298,14 +304,19 @@ async def test_final_write_skips_already_finished_run(monkeypatch: pytest.Monkey
     monkeypatch.setattr(store, 'lock_finished', lock)
     monkeypatch.setattr(store, 'append_history', append)
     monkeypatch.setattr(store, 'finish_run', finish)
+    # A message the run never read started the next run; the repeat finds that run rather than making another.
+    hand_on = AsyncMock(return_value='next-run')
+    monkeypatch.setattr(steering, 'hand_on', hand_on)
+    monkeypatch.setattr(steering, 'started_after', AsyncMock(return_value='next-run'))
     # Main's browser-before-terminal fix is independent of the final-history guard.
     monkeypatch.setattr(workflows, 'close_browser', AsyncMock())
 
-    await workflows.finish_run(resources, run, encoded, 'final answer')
+    assert await workflows.finish_run(resources, run, encoded, 'final answer') == 'next-run'
     # The database committed but DBOS did not record the step: execute it again.
-    await workflows.finish_run(resources, run, encoded, 'final answer')
+    assert await workflows.finish_run(resources, run, encoded, 'final answer') == 'next-run'
 
     assert lock.await_count == 2
+    hand_on.assert_awaited_once_with(connection, run)
     append.assert_awaited_once_with(connection, run.thread_id, messages)
     finish.assert_awaited_once_with(connection, run.id, 'done', output='final answer')
 

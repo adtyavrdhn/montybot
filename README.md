@@ -219,6 +219,12 @@ review before sending. Watch Sammy's browser while it works, take over when it a
 questions or approve actions in the chat. Saved sign-ins and schedules are available in the sidebar, alongside
 notification opt-in. Motion respects your device's reduced-motion preference.
 
+You can keep typing while Sammy works ("oh, and get the large size"). The message joins the task that is going
+rather than waiting for it: the chat marks it "Sammy will see this next" until Sammy's next model request reads it.
+If the task finishes before it reads the message, the message starts the next task in the chat; a task you stop
+or that fails starts nothing. A message with files still waits for the task to finish
+([`sammy/steering.py`](sammy/steering.py)).
+
 ## Mac app
 
 [`macos/`](macos/README.md) is Sammy for Mac: a native SwiftUI client of this server, in Logfire's design. Run

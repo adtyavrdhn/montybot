@@ -502,7 +502,11 @@ async function loadChat() {
   $('title').textContent = thread.title || 'Sammy';
   const box = $('messages');
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-  box.replaceChildren(...thread.messages.map((m) => messageBubble(m.role, m.text, m.files)));
+  box.replaceChildren(...thread.messages.map((m) => {
+    const bubble = messageBubble(m.role, m.text, m.files);
+    if (m.unread) bubble.append(element('small', 'Sammy will see this next', 'unread'));  // sent while it works
+    return bubble;
+  }));
   if (!thread.messages.length) {  // a scheduled task's chat, before its first run
     box.append(element('p', 'Nothing here yet. Each time this scheduled task runs, what Sammy did shows up here.', 'empty-chat'));
   }
@@ -516,12 +520,12 @@ function renderRun(run) {
   state.run = run;
   const active = Boolean(run && ACTIVE.includes(run.status));
   const working = Boolean(run && WORKING.includes(run.status));
-  $('send').hidden = active;
+  $('send').hidden = active && !working;  // while it works, a message joins what it is doing
   $('send').disabled = false;
   $('stop').hidden = !active;
   $('stop').disabled = false;
   $('message').placeholder = !active ? 'What would you like Sammy to do?'
-    : run.status === 'waiting' ? 'Sammy is waiting for you: answer above.' : 'Sammy is on it. Stop it, or wait to send your next message.';
+    : run.status === 'waiting' ? 'Sammy is waiting for you: answer above.' : 'Sammy is on it. Add to what it is doing, or stop it.';
   $('status').hidden = !working;
   renderStatus();
   renderAsk(run && run.status === 'waiting' ? run.ask : null);
@@ -595,6 +599,8 @@ function follow(run) {
       telemetry.log('run events ended', { ...ids, status: status.status });
       closeEvents();  // and the draft: the saved reply replaces it
       report(loadChat());
+    } else if (before && before.unread !== status.unread) {
+      report(loadChat());  // Sammy read what the user sent while it worked: no longer "will see this next"
     }
   });
   source.onerror = () => {

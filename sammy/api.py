@@ -27,11 +27,12 @@ from pydantic import AfterValidator, BaseModel, Field, StrictBool, StringConstra
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
-from sammy import approvals, attachments, auth, schedules, store, streaming, workflows
+from sammy import approvals, attachments, auth, schedules, steering, store, streaming, workflows
 from sammy.browser.contract import (
     BrowserError,
 )
 from sammy.browser.state import BLANK_URL, BrowserState
+from sammy.db import Connection
 from sammy.integrations import IntegrationError, mcp
 from sammy.memory import delete_memory, list_memories
 from sammy.models import ACTIVE, Ask, Run, Schedule, User
@@ -73,6 +74,20 @@ class NewMessage(BaseModel):
             connection, run_id=run_id, user_id=user.id, thread_id=thread_id, prompt=self.text, trigger='message'
         )
         return await attachments.attach(connection, user.id, run_id, [str(i) for i in self.attachments])
+
+    async def start_or_steer(self, connection: Connection, user: User, thread_id: str, run_id: str) -> str:
+        """Make the message's run, or add it to the run the thread has going (`sammy.steering`). Returns the id of
+        the run it went to. Files go with a run of their own: with one going, raises `store.ActiveRun`."""
+        if self.attachments:
+            await self.start(connection, user, thread_id, run_id)
+            return run_id
+        while (active := await steering.add(connection, thread_id, self.text)) is None:
+            try:
+                await self.start(connection, user, thread_id, run_id)
+                return run_id
+            except store.ActiveRun:
+                continue  # a run started meanwhile (a schedule's): the message joins it
+        return active
 
 
 async def remember_about_user(connection: Any, user: User, message: NewMessage) -> None:
@@ -245,13 +260,15 @@ async def add_message(request: Request, user: User) -> Response:
             if thread is None:
                 return NOT_FOUND
             await remember_about_user(connection, user, body)
-            await body.start(connection, user, thread.id, run_id)
+            sent_to = await body.start_or_steer(connection, user, thread.id, run_id)
     except store.ActiveRun as error:
-        return JSONResponse({'detail': str(error)}, status_code=409)
+        return JSONResponse({'detail': f'{error} Send files once it is done.'}, status_code=409)
     except store.ThreadGone:
         return NOT_FOUND
     except (attachments.AttachmentGone, attachments.TooMuch) as error:
         return JSONResponse({'detail': str(error)}, status_code=400)
+    if sent_to != run_id:  # it joined the run that is going, which reads it before its next model request
+        return JSONResponse({'thread_id': thread.id, 'run_id': sent_to, 'steered': True}, status_code=201)
     await workflows.start(run_id)
     return JSONResponse({'thread_id': thread.id, 'run_id': run_id}, status_code=201)
 
@@ -336,7 +353,8 @@ async def read_thread(request: Request, user: User) -> Response:
         run_json = None if not runs else await run_view(connection, user, runs[-1])
         activity = await store.list_thread_activity(connection, user.id, thread.id)
         files = await attachments.files_of_runs(connection, user.id, [run.id for run in runs])
-    messages, replies = chat_messages(runs, asks, files)
+        sent = await steering.of_thread(connection, user.id, thread.id)
+    messages, replies = chat_messages(runs, asks, files, sent)
     # What Sammy did for each earlier reply (the latest run's steps are in `run`): `after` is the reply's position in
     # `messages`, where an app shows them folded.
     steps = [
@@ -353,12 +371,16 @@ async def read_thread(request: Request, user: User) -> Response:
 
 
 def chat_messages(
-    runs: list[Run], asks: list[Ask], files: dict[str, dict[str, Any]] | None = None
+    runs: list[Run],
+    asks: list[Ask],
+    files: dict[str, dict[str, Any]] | None = None,
+    sent: dict[str, list[steering.Steer]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """The chat as the user sees it, and where each run's reply is in it, by run id. Each run is their message, what
-    Sammy asked them and how they answered, and Sammy's reply once the run has finished. `event` lines record
-    approvals and hand-offs. A message with files has them in `files`: the user's own on their message, and those
-    Sammy shared on its reply (`attachments.files_of_runs`)."""
+    Sammy asked them and how they answered, what they sent while it worked (`unread` until Sammy has read it), and
+    Sammy's reply once the run has finished. `event` lines record approvals and hand-offs. A message with files has
+    them in `files`: the user's own on their message, and those Sammy shared on its reply
+    (`attachments.files_of_runs`)."""
     asks_of_run: dict[str, list[Ask]] = {}
     for ask in asks:
         asks_of_run.setdefault(ask.run_id, []).append(ask)
@@ -367,8 +389,11 @@ def chat_messages(
     for run in runs:
         run_files = (files or {}).get(run.id, {})
         shown.append(with_files({'role': 'user', 'text': run.prompt}, run_files.get('user')))
-        for ask in asks_of_run.get(run.id, []):
-            shown.extend(ask_messages(ask))
+        # Each ask, then what the user sent while it was the run's latest; sorted() keeps each kind in its order.
+        lines = [((ask.occurrence, 0), ask_messages(ask)) for ask in asks_of_run.get(run.id, [])]
+        lines += [((steer.after_asks, 1), [steer.json()]) for steer in (sent or {}).get(run.id, [])]
+        for _, said in sorted(lines, key=lambda line: line[0]):
+            shown.extend(said)
         if run.output:
             replies[run.id] = len(shown)
             shown.append(with_files({'role': 'assistant', 'text': run.output}, run_files.get('sammy')))
@@ -475,6 +500,7 @@ async def run_view(connection: Any, user: User, run: Run) -> dict[str, Any]:
         'output': run.output,
         'activity': await store.list_activity(connection, user.id, run.id),
         'ask': None if ask is None else ask_json(ask),
+        'unread': await steering.unread(connection, run.id),  # what the user sent that Sammy will see next
     }
 
 
