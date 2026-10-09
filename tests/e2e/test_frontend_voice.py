@@ -5,9 +5,11 @@ device's. The browser's microphone, speech recognition and sound are stand-ins t
 
 from __future__ import annotations
 
+import test_frontend
 from playwright.sync_api import Page, ViewportSize, expect
 from test_frontend import THREAD, MockAPI, emit, streaming_chat, workspace
-from test_frontend import frontend as frontend_fixture  # noqa: F401  # pytest finds the `frontend` fixture by its name
+
+frontend = test_frontend.frontend  # the same fixture: pytest finds a fixture by the name it has here
 
 PHONE: ViewportSize = {'width': 390, 'height': 844}
 
