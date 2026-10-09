@@ -216,6 +216,10 @@ Considered:
 - **Cookie jar:** envelope-encrypted with a key per tenant (KMS). Saved after every run and every hand-off. One writer
   per user's jar at a time, through the same lease as the browser.
 - **Vector DB:** one namespace per user.
+- **Usage:** a row per model request (`sammy.usage`): user, run, model, tokens and genai-prices' cost, written by a
+  capability's `after_model_request` hook, once per run and request so a DBOS replay writes nothing new. Daily and
+  monthly caps per user are checked in the run's first step, so a run at a cap is refused before any model call, and a
+  refused schedule pauses (#136).
 - **Never** write `storageState`, cookies or live-view links into traces or logs.
 
 ## Open questions

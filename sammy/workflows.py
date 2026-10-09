@@ -5,10 +5,12 @@
 POST /api/threads/<id>/messages  (sammy.api)
   store.create_run, then DBOS.start_workflow(run_thread, run_id) with workflow id = run_id
 run_thread(run_id)                                   @DBOS.workflow
-  step run.start        status running, load the run and the thread's history, the message's files into /work/uploads
+  step run.start        status running, load the run and the thread's history, the message's files into /work/uploads;
+                        at a spend cap (sammy.usage), step run.refused ends the run before any model call instead
   agent.run(...)        model requests are steps (DBOSDurability); browser and memory calls are our own steps;
                         ask_user, approvals and hand-offs wait in DBOS.recv (sammy.approvals)
-  step run.finish       append the new messages (files as notes: sammy.attachments), status done (or failed)
+  step run.finish       append the new messages (files as notes: sammy.attachments), status done (or failed), and a
+                        note on the reply if it took the user near a spend cap
   step run.close        the browser service saves the user's sign-ins and closes the run's browser
 ```
 
@@ -34,7 +36,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from sammy import attachments, store, streaming
+from sammy import attachments, store, streaming, usage
 from sammy.browser.contract import BrowserError
 from sammy.browser.service import UnknownRun
 from sammy.deps import RunDeps
@@ -61,6 +63,8 @@ logging.getLogger('dbos').addFilter(HideStoppedRuns())
 
 FAILURE_NOTICE = 'Something went wrong while working on this, and I could not finish. Please try again.'
 STOPPED_NOTICE = 'You stopped this.'
+REFUSED = 'refused'
+"""What `run_thread` returns for a run refused at a spend cap, which pauses a schedule (`sammy.schedules`)."""
 
 # Why a task failed, in words the user can act on, by the error's type (its text stays private: it can quote the
 # user's content). A type not listed gets FAILURE_NOTICE.
@@ -115,9 +119,16 @@ async def run_thread(run_id: str) -> str:
         local_time = started[3] if len(started) > 3 else ''
         squirrel_name = started[4] if len(started) > 4 else ''  # and before the squirrel's name, a 4-tuple
         files: list[Attachment] = started[5] if len(started) > 5 else []  # and before files, a 5-tuple
+        refused: str = started[6] if len(started) > 6 else ''  # and before spend caps, a 6-tuple
         if run.status in FINISHED:
             return run.status  # stopped before its workflow started
         lifecycle.set_attributes({'thread_id': run.thread_id, 'user_id': run.user_id, 'trigger': run.trigger})
+        if refused:
+            try:
+                await DBOS.run_step_async({**RETRIED, 'name': 'run.refused'}, refuse_run, resources, run, refused)
+            finally:
+                streaming.discard(run_id)
+            return REFUSED
         history = recent(ModelMessagesTypeAdapter.validate_json(history_json), resources.settings.history_limit)
         # The files go in outside a step, so DBOS records no file's bytes: a replay reads the same rows again.
         asked = ModelRequest(parts=[UserPromptPart(content=attachments.prompt(run.prompt, files))])
@@ -168,7 +179,8 @@ async def start(run_id: str) -> WorkflowHandleAsync[str]:
 
 async def start_run(
     resources: Resources, run_id: str
-) -> tuple[Run, bytes, Schedule | None, str, str, list[Attachment]]:
+) -> tuple[Run, bytes, Schedule | None, str, str, list[Attachment], str]:
+    """The run and what it needs, and last why it may not start (`usage.refusal`), or nothing."""
     with timing('run.start'):
         async with resources.pool.connection() as connection, connection.transaction():
             run = await store.load_run(connection, run_id)
@@ -176,11 +188,15 @@ async def start_run(
             history = await store.load_history(connection, run.thread_id)
             schedule = await store.schedule_of_thread(connection, run.thread_id) if run.trigger == 'schedule' else None
             user = await store.get_user(connection, run.user_id)
+            spent = await usage.spent(connection, run.user_id)
+        refused = usage.refusal(resources.settings, spent, scheduled=schedule is not None)
+        if refused:
+            return run, b'[]', schedule, '', '', [], refused
         timezone = user.timezone if user is not None else 'UTC'
         squirrel_name = user.squirrel_name if user is not None else ''
         files = await attachments.into_workspace(resources, run.user_id, run.id)
         history_json = ModelMessagesTypeAdapter.dump_json(history)
-        return run, history_json, schedule, local_time_in(timezone), squirrel_name, files
+        return run, history_json, schedule, local_time_in(timezone), squirrel_name, files, ''
 
 
 def local_time_in(timezone: str) -> str:
@@ -198,13 +214,21 @@ async def finish_run(resources: Resources, run: Run, new_messages: bytes, output
             if await store.lock_finished(connection, run.id):
                 return  # this step ran before and committed, but DBOS had not recorded it
             await store.append_history(connection, run.thread_id, ModelMessagesTypeAdapter.validate_json(new_messages))
-            await store.finish_run(connection, run.id, 'done', output=output)
+            # On the reply the user sees, not in the history the model reads.
+            spent = await usage.spent(connection, run.user_id, run.id)
+            await store.finish_run(connection, run.id, 'done', output=output + usage.warning(resources.settings, spent))
 
 
 async def fail_run(resources: Resources, run: Run, error_type: str, notice: str = FAILURE_NOTICE) -> None:
     await close_browser(resources, run)
     with timing('run.fail'):
         await end_run(resources, run, 'failed', notice, error=error_type)
+
+
+async def refuse_run(resources: Resources, run: Run, notice: str) -> None:
+    """A run refused at a spend cap: the user's message gets `notice` as its reply, and no model call is made."""
+    with timing('run.refuse'):
+        await end_run(resources, run, 'failed', notice, error='SpendCapReached')
 
 
 async def stop(resources: Resources, run: Run) -> bool:

@@ -339,6 +339,8 @@ public final class APIClient: Sendable {
         let _: Ok = try await send("DELETE", "/api/schedules/\(schedule)")
     }
 
+    public func usage() async throws -> Usage { try await send("GET", "/api/usage") }
+
     public func memories() async throws -> [Memory] { try await send("GET", "/api/memories") }
 
     public func deleteMemory(_ memory: String) async throws {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+from decimal import Decimal
 from pathlib import Path
 
 from pydantic import Field, SecretStr, field_validator
@@ -100,10 +101,19 @@ class Settings(BaseSettings):
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
     history_limit: int = 40
 
-    @field_validator('composio_api_key', mode='before')
+    daily_spend_cap: Decimal | None = Field(default=None, gt=0)
+    """Each user's model spend per day (their own time zone), in US dollars, as genai-prices estimates it
+    (`sammy/usage.py`). At the cap, new runs are refused and schedules pause. Unset: no cap."""
+    monthly_spend_cap: Decimal | None = Field(default=None, gt=0)
+    """The same per calendar month."""
+    spend_warning: float = Field(default=0.8, gt=0, le=1)
+    """The share of a cap at which Sammy warns the user in the chat."""
+
+    @field_validator('composio_api_key', 'daily_spend_cap', 'monthly_spend_cap', mode='before')
     @classmethod
     def blank_is_unset(cls, value: object) -> object:
-        """`COMPOSIO_API_KEY=` (as in `.env.example`) means no Composio, not a key that is empty."""
+        """`COMPOSIO_API_KEY=` (as in `.env.example`) means no Composio, not a key that is empty; the same for the
+        spend caps."""
         return None if isinstance(value, str) and not value.strip() else value
 
     @field_validator('public_url')

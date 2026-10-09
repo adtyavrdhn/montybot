@@ -340,7 +340,7 @@ function syncDrawer() {
   $('drawer').inert = !desktop.matches && !open;
   $('drawer-backdrop').hidden = !open;
   $('menu-button').setAttribute('aria-expanded', String(open));
-  for (const id of ['layout', 'signins', 'integrations', 'schedules', 'browser-button']) $(id).inert = open;
+  for (const id of ['layout', 'signins', 'integrations', 'schedules', 'usage', 'browser-button']) $(id).inert = open;
 }
 function closeDrawer(restoreFocus = false) {
   const focusInside = $('drawer').contains(document.activeElement);
@@ -1484,8 +1484,35 @@ async function openSchedules() {
   }) : [element('li', 'No scheduled tasks yet. Tell Sammy what to do and when in a chat.')]));
 }
 
+// --- usage: what the model has cost the user, and their spending limits ---
+
+function dollars(amount) {
+  return amount > 0 && amount < 0.005 ? 'under $0.01' : `$${amount.toFixed(2)}`;
+}
+
+async function openUsage() {
+  $('usage-title').focus();
+  const usage = await api('/api/usage');
+  const total = (label, spent, cap) => {
+    const item = element('li');
+    item.append(element('span', label), element('strong', cap === null ? dollars(spent) : `${dollars(spent)} of ${dollars(cap)}`));
+    return item;
+  };
+  $('usage-totals').replaceChildren(total('Today', usage.today, usage.daily_cap), total('This month', usage.month, usage.monthly_cap));
+  const { input, output, cache_read: cached } = usage.tokens;
+  $('usage-tokens').textContent = `This month: ${input.toLocaleString()} tokens in (${cached.toLocaleString()} of them from the cache), ${output.toLocaleString()} out.`;
+  const rows = (spenders, empty) => (spenders.length ? spenders.map((s) => {
+    const item = element('li');
+    item.append(element('span', s.id ? s.name : 'Deleted chats'), element('span', dollars(s.cost)));
+    return item;
+  }) : [element('li', empty)]);
+  $('usage-threads').replaceChildren(...rows(usage.threads, 'Nothing spent this month yet.'));
+  $('usage-schedules').replaceChildren(...rows(usage.schedules, 'No schedule has spent anything this month.'));
+}
+
 $('open-signins').addEventListener('click', () => { location.hash = '#/sign-ins'; closeDrawer(); });
 $('open-schedules').addEventListener('click', () => { location.hash = '#/schedules'; closeDrawer(); });
+$('open-usage').addEventListener('click', () => { location.hash = '#/usage'; closeDrawer(); });
 $('open-integrations').addEventListener('click', () => { location.hash = '#/integrations'; closeDrawer(); });
 for (const back of document.querySelectorAll('.page .back')) {
   back.addEventListener('click', () => { location.hash = state.threadId ? `#/t/${state.threadId}` : '#/new'; });
@@ -1553,8 +1580,10 @@ $('enable-notifications').addEventListener('click', () => (
 // --- routing ---
 
 const PAGES = { '#/sign-ins': ['signins', 'Saved browser data', openSignins],
-  '#/integrations': ['integrations', 'Integrations', openIntegrations], '#/schedules': ['schedules', 'Schedules', openSchedules] };
-const PAGE_BUTTONS = { '#/sign-ins': 'open-signins', '#/integrations': 'open-integrations', '#/schedules': 'open-schedules' };
+  '#/integrations': ['integrations', 'Integrations', openIntegrations], '#/schedules': ['schedules', 'Schedules', openSchedules],
+  '#/usage': ['usage', 'Usage', openUsage] };
+const PAGE_BUTTONS = { '#/sign-ins': 'open-signins', '#/integrations': 'open-integrations', '#/schedules': 'open-schedules',
+  '#/usage': 'open-usage' };
 
 async function route() {
   const hash = location.hash;

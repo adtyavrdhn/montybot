@@ -82,6 +82,7 @@ def create_app(settings: Settings) -> ASGIApp:
             Route('/api/integrations/servers/{server_id:uuid}', api.remove_server, methods=['DELETE']),
             Route('/integrations/composio/callback', api.composio_callback),
             Route('/integrations/mcp/callback', api.mcp_callback),
+            Route('/api/usage', api.read_usage),
             Route('/api/memories', api.read_memories),
             Route('/api/memories/{memory_id:uuid}', api.remove_memory, methods=['DELETE']),
             Route('/api/telemetry', api.telemetry_settings),

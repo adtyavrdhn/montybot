@@ -64,6 +64,7 @@
           <button id="open-signins" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="4"/><path d="m11 12 8 8 3-3-3-3-2 2"/></svg> Saved browser data</button>
           <button id="open-integrations" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v4m6-4v4M7 7h10v4a5 5 0 0 1-10 0Zm5 9v5"/></svg> Integrations</button>
           <button id="open-schedules" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16m-12 4h3"/></svg> Schedules</button>
+          <button id="open-usage" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M7 16v-5m5 5V6m5 10v-8"/></svg> Usage</button>
           <button id="enable-notifications" class="link" hidden><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9Zm4 12h4"/></svg> <span id="notifications-label">Notify me when Sammy needs me</span></button>
           <button id="signout" class="link">Sign out</button>
         </div>
@@ -164,6 +165,19 @@
           <div class="page-heading"><span class="page-symbol" aria-hidden="true">◷</span><h2 id="schedules-title" tabindex="-1">Schedules</h2></div>
           <p class="muted">Tasks Sammy runs on your schedule. Pause a task without deleting it, or resume it when you're ready.</p>
           <ul id="schedule-list" aria-label="Scheduled tasks"></ul>
+        </div>
+      </section>
+      <section id="usage" class="page" aria-labelledby="usage-title" hidden>
+        <div class="page-content">
+          <button class="secondary back">Back to chat</button>
+          <div class="page-heading"><span class="page-symbol" aria-hidden="true">$</span><h2 id="usage-title" tabindex="-1">Usage</h2></div>
+          <p class="muted">What Sammy's AI model has cost you, estimated from its published prices. Days and months are in your time zone.</p>
+          <ul id="usage-totals" aria-label="Spending"></ul>
+          <p id="usage-tokens" class="muted"></p>
+          <h3 class="group-title">This month by chat</h3>
+          <ul id="usage-threads" aria-label="This month by chat"></ul>
+          <h3 class="group-title">This month by schedule</h3>
+          <ul id="usage-schedules" aria-label="This month by schedule"></ul>
         </div>
       </section>
     </section>
