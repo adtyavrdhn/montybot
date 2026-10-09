@@ -134,9 +134,9 @@ def test_a_requested_secret_is_used_in_a_request_and_never_seen(
         reply = client.wait_for_reply(thread)
         assert reply.startswith('201 ')
         assert '"you_sent": "Bearer {{secret:notes_token}}"' in reply and '"note": "Buy oat milk"' in reply
-        assert notes_api.received == [
-            {'authorization': f'Bearer {TOKEN}', 'body': json.dumps({'text': 'Buy oat milk'})}
-        ]
+        [sent] = notes_api.received
+        assert sent['authorization'] == f'Bearer {TOKEN}'
+        assert json.loads(sent['body']) == {'text': 'Buy oat milk'}
 
         # The same placeholder, to another host: refused before anything is sent.
         other = f'http://localhost:{notes_api.port}'
