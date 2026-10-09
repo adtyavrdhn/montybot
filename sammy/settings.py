@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     """A Pydantic AI model name; `claude-code:NAME` for a Claude Code subscription model (sign in with
     `sammy claude-code-login`); or `script:module:attribute` for a `Model` object, which is how tests script the
     model."""
+    model_chains: dict[str, list[str]] = Field(default_factory=dict)
+    """Fallback chains by name, for a `MODEL` of `chain:NAME` (`sammy/chains.py`): the models in order, each taking
+    over when the one before fails with a provider error, a rate limit or an expired Claude Code sign-in. JSON, such as
+    `{"main": ["claude-code:claude-opus-5-5", "anthropic:claude-opus-5-5"]}`."""
     browser_backend: str = 'sammy.browser.fake:FakeBrowser'
     """`module:attribute` of a callable that makes a closed `BrowserBackend` for one run."""
     browser_idle_timeout_seconds: float = 24 * 60 * 60

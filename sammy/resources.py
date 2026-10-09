@@ -9,7 +9,7 @@ hands them out.
 from __future__ import annotations
 
 import inspect
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,12 +17,14 @@ from typing import TYPE_CHECKING, Any, cast
 
 from dbos import DBOS, DBOSConfig
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import UserError
 from pydantic_ai.models import Model
 
 from sammy import store
 from sammy.browser.contract import BrowserBackend, TabsBackend
 from sammy.browser.host import BrowserHost, Detour
 from sammy.browser.tunnel import NOWHERE, Place, Tunnels
+from sammy.chains import chain, chain_name, check_member
 from sammy.crypto import deployment_key
 from sammy.db import Pool, create_pool, migrate
 from sammy.imports import import_object
@@ -63,9 +65,15 @@ def current() -> Resources:
 CLAUDE_CODE_PREFIX = 'claude-code:'
 
 
-def load_model(name: str) -> Model | str:
-    """A model name for Pydantic AI, `claude-code:NAME` for a Claude Code subscription model, or
-    `script:module:attribute` for a `Model` object (or a function making one)."""
+def load_model(name: str, chains: Mapping[str, Sequence[str]] | None = None) -> Model | str:
+    """A model name for Pydantic AI, `claude-code:NAME` for a Claude Code subscription model,
+    `script:module:attribute` for a `Model` object (or a function making one), or `chain:NAME` for the fallback
+    chain of that name in `chains` (`sammy.chains`)."""
+    if (name_of_chain := chain_name(name)) is not None:
+        members = (chains or {}).get(name_of_chain)
+        if not members:
+            raise UserError(f'No chain named {name_of_chain!r}: name its models in MODEL_CHAINS.')
+        return chain([load_model(check_member(member)) for member in members])
     if name.startswith(CLAUDE_CODE_PREFIX):
         from sammy.vendor.claude_code import ClaudeCodeModel
 
@@ -153,7 +161,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
             enable_otlp=False,
         )
     )
-    model = load_model(settings.model)
+    model = load_model(settings.model, settings.model_chains)
     agent = build_agent(model)
     async with browser, open_monty(settings) as monty:
         _current = Resources(
