@@ -288,8 +288,10 @@ async def test_final_write_skips_already_finished_run(monkeypatch: pytest.Monkey
     async def connect() -> AsyncIterator[Any]:
         yield connection
 
-    resources: Any = SimpleNamespace(pool=SimpleNamespace(connection=connect))
-    run: Any = SimpleNamespace(id='finished-run', thread_id='thread')
+    resources: Any = SimpleNamespace(
+        pool=SimpleNamespace(connection=connect), settings=SimpleNamespace(public_url='http://sammy.test')
+    )
+    run: Any = SimpleNamespace(id='finished-run', thread_id='thread', user_id='user')
     messages: list[ModelMessage] = [ModelResponse(parts=[TextPart('final answer')])]
     encoded = ModelMessagesTypeAdapter.dump_json(messages)
     lock = AsyncMock(side_effect=[False, True])
@@ -300,6 +302,8 @@ async def test_final_write_skips_already_finished_run(monkeypatch: pytest.Monkey
     monkeypatch.setattr(store, 'finish_run', finish)
     # Main's browser-before-terminal fix is independent of the final-history guard.
     monkeypatch.setattr(workflows, 'close_browser', AsyncMock())
+    reply = AsyncMock()  # a run from a chat app also answers there, once (sammy.channels.outbound)
+    monkeypatch.setattr(workflows, 'enqueue_reply', reply)
 
     await workflows.finish_run(resources, run, encoded, 'final answer')
     # The database committed but DBOS did not record the step: execute it again.
@@ -308,6 +312,7 @@ async def test_final_write_skips_already_finished_run(monkeypatch: pytest.Monkey
     assert lock.await_count == 2
     append.assert_awaited_once_with(connection, run.thread_id, messages)
     finish.assert_awaited_once_with(connection, run.id, 'done', output='final answer')
+    reply.assert_awaited_once()
 
 
 async def test_part_end_reconciles_text_without_appending_it_twice(run_id: str) -> None:
