@@ -215,7 +215,7 @@ async def screen(resources: Resources, user_id: str, run_id: str) -> bytes | Non
 async def frame(resources: Resources, user_id: str, run_id: str) -> bytes | None:
     """The job's tab now, or its last frame while it is busy, in a hand-off or not open; None if never seen."""
     try:
-        shot = await resources.browser.peek_screenshot(run_id=run_id, user_id=user_id, parked=False)
+        shot = await resources.browser.peek_tab(run_id=run_id, user_id=user_id)
     except BrowserError:
         return _frames.get(run_id)
     _frames[run_id] = shot.png
