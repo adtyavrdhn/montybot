@@ -62,11 +62,11 @@ layer reports in, in **one connected trace**.
   (`service.version`) and environment, then `instrument_pydantic_ai`, `instrument_httpx` and
   `instrument_system_metrics`. Agent runs, every model request, every tool call, **token usage, cache hits and
   cost**, every outgoing HTTP call to a model provider, CPU and memory.
-- **44 hand-named spans across the whole system:**
+- **45 hand-named spans across the whole system:**
   - runs: `run.lifecycle`, `run.start`, `run.agent`, `run.dispatch`, `run.finish`, `run.fail`, `run.close`
   - Monty: `monty.run`, `monty.session`, `monty.snippet`, `monty.dump`, `monty.load`
   - the agent driving the browser: `code.browser.goto`, `code.browser.click`, `code.browser.type`,
-    `code.browser.read`
+    `code.browser.read`, and calling APIs: `code.http` (host only)
   - the browser itself: `browser.snapshot`, `browser.act`, `browser.handoff.start`, `browser.handoff.end`,
     `browser.state.save`, `browser.reap_idle`, `browser.live_view`
   - the database: `db.query`, `db.pool.acquire`, `db.migrate`
@@ -105,6 +105,9 @@ layer reports in, in **one connected trace**.
   **asks you first**.
 - **Connect in the middle of a task.** Say "what's on my linear" without Linear connected, and the chat shows a
   connect card. Sign in, and **the same run carries on**.
+- **Secrets it uses but never sees.** A personal API token or a webhook URL goes into a private field in the chat,
+  sealed with your data key. The agent's code names it (`{{secret:todoist_token}}`), and the host puts it in only for
+  the site it was given for, and scrubs it from the response (`sammy/vault.py`).
 - **A real browser with your sign-ins.** Chromium in a bubblewrap jail, driven over Sammy's own CDP pipe, behind a
   public-only SOCKS egress proxy. Saved sign-ins use **envelope encryption** (AES-256-GCM, a per-user data key
   wrapped by the deployment key, with associated data tied to the user and version) (`sammy/signins.py`,
@@ -173,6 +176,19 @@ and removed on the Integrations page of the web and Mac apps.
   with the user's data key. Requests go to public addresses only, checked as each connection opens
   (`sammy/integrations/egress.py`), and are never traced, as a server's URL can hold a key.
 
+## Secrets
+
+Some tasks need a key that is not an integration: a personal API token, a webhook URL. Pasted into the chat, it would
+be in the history, the model's context and the traces. Instead the agent calls `request_secret(name, why, host)`
+(`sammy/secret_tools.py`), and the chat shows a private field (an ask of kind `secret`). What the user types goes to
+`POST /api/asks/<id>`, which seals it with their data key into `sammy.secrets` (`sammy/vault.py`) and answers the ask
+with `{saved: true}` only. The agent then calls `http_request` in `run_code` (`sammy/http_calls.py`), writing
+`{{secret:NAME}}` in the URL, a header or the body. The host function opens the secret, sends it only to the host it
+was saved for (HTTPS to a public address, no redirects followed, no HTTP client span), and puts the placeholder back
+wherever the response quotes the value, before Monty sees it. So the value is never in a step's recorded result, an
+ask's answer, the history, a model request or a span. Users list and forget their secrets on the Secrets page;
+`forget_secret` asks the user first.
+
 ## Observability
 
 `LOGFIRE_TOKEN` is optional: without it, no telemetry is sent to Logfire. What is exported is decided per field in
@@ -187,8 +203,9 @@ and removed on the Integrations page of the web and Mac apps.
 - **With `LOGFIRE_INCLUDE_CONTENT` (default on, for the demo):** messages, replies, instructions (with the user's
   memories), the agent's code, page snapshots, and exception messages and tracebacks. Turn it off before real users'
   data flows through.
-- **Never:** cookies and browser state, saved sign-ins, integration credentials and MCP server URLs, passwords typed
-  in live view, session cookies, app secrets,
+- **Never:** cookies and browser state, saved sign-ins, integration credentials and MCP server URLs, the user's
+  secrets (`sammy/vault.py`; `code.http` spans record the host only), passwords typed in live view, session cookies,
+  app secrets,
   hand-off ids and links, push subscription URLs. None reach the agent. HTTP server requests are not traced. Logfire's default scrubbing stays on as a backstop: it replaces values that mention a password,
   cookie, session and so on, including a sign-in page's snapshot.
 
@@ -216,7 +233,7 @@ On desktop, chats stay in a persistent sidebar; on a phone, the Chats button ope
 
 Create an account or sign in, then describe a task in a new chat. Example prompts fill the message box for you to
 review before sending. Watch Sammy's browser while it works, take over when it asks you to sign in, and answer
-questions or approve actions in the chat. Saved sign-ins and schedules are available in the sidebar, alongside
+questions or approve actions in the chat. Saved sign-ins, schedules and secrets are available in the sidebar, alongside
 notification opt-in. Motion respects your device's reduced-motion preference.
 
 ## Mac app

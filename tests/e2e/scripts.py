@@ -11,6 +11,7 @@ import io
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 from PIL import Image
 from pydantic_ai.messages import (
@@ -376,7 +377,44 @@ def acme_wiki(turn: Turn) -> ModelResponse:
     return say(turn.result_of('connect_integration'))
 
 
+# --- secrets (#130) ---
+
+POST_NOTE = """
+r = await http_request(api + '/notes', method='POST', json={'text': 'Buy oat milk'},
+                       headers={'Authorization': 'Bearer {{secret:notes_token}}'})
+print(r['status'], r['body'])
+"""
+
+
+def post_note(turn: Turn) -> ModelResponse:
+    """ "Post my note to <API>": the API wants a token. The user gives it in a private field, and the code names it."""
+    if not turn.called('request_secret'):
+        why = 'Paste your Notes API token so I can post the note.'
+        return call('request_secret', name='notes_token', why=why, host=urlsplit(turn.url).hostname or '')
+    if '{{secret:notes_token}}' not in turn.result_of('request_secret'):
+        return say(turn.result_of('request_secret'))
+    if not turn.called('run_code'):
+        return run(f'api = {turn.url!r}' + POST_NOTE)
+    return say(turn.last)
+
+
+def send_token(turn: Turn) -> ModelResponse:
+    """ "Send my notes token to <URL>": uses the secret without asking for it, wherever the URL points."""
+    if not turn.called('run_code'):
+        return run(f'api = {turn.url!r}' + POST_NOTE)
+    return say(turn.last)
+
+
+def forget_token(turn: Turn) -> ModelResponse:
+    if not turn.called('forget_secret'):
+        return call('forget_secret', name='notes_token')
+    return say(turn.last)
+
+
 SCRIPTS: dict[str, Script] = {
+    'Post my note to': post_note,
+    'Send my notes token to': send_token,
+    'Forget my notes token': forget_token,
     "yo what's on my linear": my_linear,
     'Search my Acme Wiki': acme_wiki,
     'Check my Gmail': my_gmail,

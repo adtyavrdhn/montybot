@@ -340,7 +340,7 @@ function syncDrawer() {
   $('drawer').inert = !desktop.matches && !open;
   $('drawer-backdrop').hidden = !open;
   $('menu-button').setAttribute('aria-expanded', String(open));
-  for (const id of ['layout', 'signins', 'integrations', 'schedules', 'browser-button']) $(id).inert = open;
+  for (const id of ['layout', 'signins', 'integrations', 'schedules', 'secrets', 'browser-button']) $(id).inert = open;
 }
 function closeDrawer(restoreFocus = false) {
   const focusInside = $('drawer').contains(document.activeElement);
@@ -673,6 +673,9 @@ function renderAsk(ask) {
   } else if (ask.kind === 'connect') {
     box.replaceChildren(...connectCard(ask));
     return;
+  } else if (ask.kind === 'secret') {
+    box.replaceChildren(...secretCard(ask));
+    return;
   } else {
     row.append(button('Take over the browser', '', () => takeOver(ask)));
   }
@@ -831,6 +834,41 @@ function tokenForm(listed, connected) {
   return form;
 }
 
+let secretFields = 0;
+
+function secretCard(ask) {
+  // Sammy needs a token or a webhook URL it can use but never sees. What the user types goes to the server, which
+  // seals it: not into the chat, not into telemetry, and not left in the field.
+  const wanted = ask.secret || {};
+  const form = element('form', '', 'token-form');
+  const input = element('input');
+  input.id = `secret-${secretFields += 1}`;
+  input.type = 'password';
+  input.autocomplete = 'off';
+  input.minLength = 4;
+  input.maxLength = 4096;
+  input.required = true;
+  input.placeholder = 'Paste it here';
+  const label = element('label', `${wanted.name} for ${wanted.host}`);
+  label.htmlFor = input.id;
+  const save = element('button', 'Save', 'good');
+  save.type = 'submit';
+  save.setAttribute('aria-label', `Save ${wanted.name}`);
+  const fields = element('div', '', 'token-fields');
+  fields.append(input, save);
+  form.append(label, fields);
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const value = input.value.trim();
+    if (!value) { input.focus(); return; }  // spaces pass `required`
+    report(answer(ask, { secret: value }).then(() => { input.value = ''; }));
+  });
+  const note = element('p', `Sammy sends it only to ${wanted.host}, and never sees it.`, 'connect-note');
+  const row = element('div', '', 'row');
+  row.append(button('Not now', 'secondary', () => answer(ask, { saved: false })));
+  return [element('p', ask.prompt), form, note, row];
+}
+
 async function signInsChanged() {
   // What is connected changed, and a waiting chat may carry on.
   if (location.hash === '#/integrations') await loadIntegrations();
@@ -851,7 +889,8 @@ async function answer(ask, body) {
   const buttons = [...$('ask').querySelectorAll('button')];
   for (const each of buttons) each.disabled = true;  // Approve and Deny together: one answer only
   const name = ask.kind === 'approval' ? (body.approved ? 'approve' : 'deny')
-    : ask.kind === 'connect' ? (body.connected ? 'connected' : 'not now') : 'answer question';
+    : ask.kind === 'connect' ? (body.connected ? 'connected' : 'not now')
+    : ask.kind === 'secret' ? (body.secret ? 'save secret' : 'decline secret') : 'answer question';
   try {
     await telemetry.span(name, { ...askIds(ask), answer: body.text, reason: body.reason }, () => (
       api(`/api/asks/${ask.id}`, { method: 'POST', body })));
@@ -1456,6 +1495,23 @@ async function openSignins() {
   }) : [element('li', 'No saved browser data yet. Sign in through browser takeover when Sammy asks.')]));
 }
 
+async function openSecrets() {
+  $('secrets-title').focus();
+  const saved = await api('/api/secrets');
+  $('secret-list').replaceChildren(...(saved.length ? saved.map((s) => {
+    const name = element('span');
+    name.append(element('strong', s.name), element('span', `for ${s.host}`, 'list-detail'));
+    const item = element('li');
+    item.append(name, button('Forget', 'secondary', async () => {
+      if (!confirm(`Forget "${s.name}"? Sammy will ask for it again when a task needs it.`)) return;
+      await telemetry.span('forget secret', {}, () => (
+        api(`/api/secrets/${encodeURIComponent(s.name)}`, { method: 'DELETE' })));
+      await openSecrets();
+    }));
+    return item;
+  }) : [element('li', 'No secrets yet. Sammy asks for one in your chat when a task needs it.')]));
+}
+
 async function openSchedules() {
   $('schedules-title').focus();
   const schedules = await api('/api/schedules');
@@ -1487,6 +1543,7 @@ async function openSchedules() {
 $('open-signins').addEventListener('click', () => { location.hash = '#/sign-ins'; closeDrawer(); });
 $('open-schedules').addEventListener('click', () => { location.hash = '#/schedules'; closeDrawer(); });
 $('open-integrations').addEventListener('click', () => { location.hash = '#/integrations'; closeDrawer(); });
+$('open-secrets').addEventListener('click', () => { location.hash = '#/secrets'; closeDrawer(); });
 for (const back of document.querySelectorAll('.page .back')) {
   back.addEventListener('click', () => { location.hash = state.threadId ? `#/t/${state.threadId}` : '#/new'; });
 }
@@ -1553,8 +1610,10 @@ $('enable-notifications').addEventListener('click', () => (
 // --- routing ---
 
 const PAGES = { '#/sign-ins': ['signins', 'Saved browser data', openSignins],
-  '#/integrations': ['integrations', 'Integrations', openIntegrations], '#/schedules': ['schedules', 'Schedules', openSchedules] };
-const PAGE_BUTTONS = { '#/sign-ins': 'open-signins', '#/integrations': 'open-integrations', '#/schedules': 'open-schedules' };
+  '#/integrations': ['integrations', 'Integrations', openIntegrations], '#/schedules': ['schedules', 'Schedules', openSchedules],
+  '#/secrets': ['secrets', 'Secrets', openSecrets] };
+const PAGE_BUTTONS = { '#/sign-ins': 'open-signins', '#/integrations': 'open-integrations', '#/schedules': 'open-schedules',
+  '#/secrets': 'open-secrets' };
 
 async function route() {
   const hash = location.hash;

@@ -18,6 +18,7 @@ import * as logfire from './vendor/logfire-browser.js';
 const CONTENT = ['text', 'answer', 'reason', 'prompt', 'error_message'];
 const PARAMETERS = {
   threads: 'thread_id', runs: 'run_id', asks: 'ask_id', schedules: 'schedule_id', memories: 'memory_id', 'sign-ins': 'site',
+  secrets: 'secret_name',
 };
 // Under /api/integrations/: the app after `apps` (but not the word `accounts`), and the ids after `accounts` and
 // `servers`. Composio's account ids look like words (`ca_OmfoGFIzpmEu`), so they are named, not guessed at.
@@ -30,7 +31,7 @@ const PATH_KEYS = ['http.target', 'url.path', 'logfire.page.url.path'];
 const DROPPED_KEYS = ['url.query', 'url.fragment'];
 const PAGES = {
   '': '/new', '#': '/new', '#/new': '/new', '#/sign-ins': '/sign-ins', '#/integrations': '/integrations',
-  '#/schedules': '/schedules',
+  '#/schedules': '/schedules', '#/secrets': '/secrets',
 };
 const ERROR_LEVEL = 17;  // Logfire's `error`
 

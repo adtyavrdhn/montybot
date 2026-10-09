@@ -84,6 +84,8 @@ def create_app(settings: Settings) -> ASGIApp:
             Route('/integrations/mcp/callback', api.mcp_callback),
             Route('/api/memories', api.read_memories),
             Route('/api/memories/{memory_id:uuid}', api.remove_memory, methods=['DELETE']),
+            Route('/api/secrets', api.list_secrets),
+            Route('/api/secrets/{name:str}', api.forget_secret, methods=['DELETE']),
             Route('/api/telemetry', api.telemetry_settings),
             Route('/api/telemetry/{path:path}', api.forward_telemetry, methods=['POST']),
         ],

@@ -175,6 +175,8 @@ def describe(tool: str, args: dict[str, Any]) -> str:
         what = f'{kind} "{args.get("name")}" {args.get("when")} ({args.get("timezone")}): {args.get("prompt")}'
         # What the user approves here covers every run's own steps: `commit` does not ask in a scheduled run.
         return f'{what.rstrip(".")}. Each run does this without asking you again, orders and messages included.'
+    if tool == 'forget_secret':
+        return f'Forget your secret "{args.get("name")}"'
     return str(args.get('description') or tool)
 
 

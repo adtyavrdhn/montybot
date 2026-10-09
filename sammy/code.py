@@ -45,6 +45,8 @@ from sammy.browser.service import UserBusy
 from sammy.browser.state import BLANK_URL
 from sammy.browsing import BROWSER_BUSY, Session, host_of, refused_url, target_of
 from sammy.deps import RunDeps
+from sammy.http_calls import INSTRUCTIONS as HTTP_INSTRUCTIONS
+from sammy.http_calls import http_functions
 from sammy.observability import timed, timing
 from sammy.resources import Resources, current
 from sammy.settings import Settings
@@ -63,6 +65,7 @@ session that keeps its variables for this whole task. Your browser is a set of a
 - `await type_text(target, text, press_enter=False) -> str`: replace a text box's value.
 - `await press_key(key) -> str`: one key. Enter is only allowed for a just-typed searchbox;
   other submissions use approval or hand-off. Space activation is not available from code.
+{HTTP_INSTRUCTIONS}
 
 Each returns the page afterwards: use that returned snapshot instead of immediately calling `read_page()` again.
 When the next steps are known, do them sequentially in one `run_code` call: open, inspect the returned page, search,
@@ -300,7 +303,7 @@ async def run_snippet(
                         async with asyncio.timeout(resources.settings.code_timeout_seconds):
                             result = await monty.feed_run(
                                 code,
-                                external_lookup=browser_functions(session),
+                                external_lookup={**browser_functions(session), **http_functions(resources, user_id)},
                                 print_callback=printed,
                                 os=resources.workspaces.files(user_id),
                                 cwd=VIRTUAL_ROOT,
