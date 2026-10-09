@@ -27,7 +27,8 @@ from pydantic import AfterValidator, BaseModel, Field, StrictBool, StringConstra
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
-from sammy import approvals, attachments, auth, schedules, store, streaming, workflows
+from sammy import approval_rules, approvals, attachments, auth, schedules, store, streaming, workflows
+from sammy.approval_rules import RISK_WORDS, Action
 from sammy.browser.contract import (
     BrowserError,
 )
@@ -42,6 +43,8 @@ from sammy.signins import PostgresLease
 T = TypeVar('T')
 logger = logging.getLogger(__name__)
 NOT_FOUND = JSONResponse({'detail': 'not found'}, status_code=404)
+AUTO_APPROVED = {'rule': 'Approved by your rule', 'reviewer': 'Approved by the automatic reviewer'}
+"""How the chat shows an approval that went through without the user (`approvals.decide`)."""
 
 
 class Credentials(BaseModel):
@@ -94,6 +97,10 @@ class Answer(BaseModel):
     """For a question."""
     approved: StrictBool | None = None
     """For an approval."""
+    remember: StrictBool | None = None
+    """With `approved: true`: "Always allow this", a rule for the action the approval offers (`ask.rule`)."""
+    allow_risky: StrictBool | None = None
+    """With `remember`, for an action that spends money, sends as the user or deletes: the user means it."""
     reason: str | None = Field(default=None, max_length=2_000)
     done: StrictBool | None = None
     """For a hand-off: the user hands the browser back."""
@@ -391,6 +398,7 @@ def ask_messages(ask: Ask) -> list[dict[str, str]]:
             return [{'role': 'assistant', 'text': ask.prompt}, {'role': 'user', 'text': str(answer.get('text', ''))}]
         case 'approval':
             verdict = 'You approved' if answer.get('approved') else 'You said no to'
+            verdict = AUTO_APPROVED.get(str(answer.get('auto')), verdict)
             return [{'role': 'event', 'text': f'{verdict}: {ask.prompt}'}]
         case 'handoff':
             return [{'role': 'event', 'text': f'You took over the browser: {ask.prompt}'}]
@@ -502,6 +510,7 @@ async def answer_ask(request: Request, user: User) -> Response:
         ask = await store.get_ask(connection, user.id, request.path_params['ask_id'])
     if ask is None:
         return NOT_FOUND
+    remembered: Action | None = None
     match ask.kind:
         case 'question':
             if body.text is None:
@@ -511,6 +520,13 @@ async def answer_ask(request: Request, user: User) -> Response:
             if body.approved is None:
                 return JSONResponse({'detail': 'answer with approved: true or false'}, status_code=422)
             value = {'approved': body.approved, 'reason': body.reason or ''}
+            if body.remember:
+                remembered = Action.from_json(ask.details.get('rule'))
+                if remembered is None or not body.approved:
+                    return JSONResponse({'detail': 'Only an approval that offers to remember can be.'}, 422)
+                if remembered.risk is not None and not body.allow_risky:
+                    detail = f'This {RISK_WORDS[remembered.risk]}: send allow_risky: true to always allow it anyway.'
+                    return JSONResponse({'detail': detail}, status_code=422)
         case 'handoff':
             if not body.done:
                 return JSONResponse({'detail': 'answer with done: true when you hand the browser back'}, 422)
@@ -521,6 +537,9 @@ async def answer_ask(request: Request, user: User) -> Response:
             value = {'connected': body.connected}
     if not await approvals.answer(resources, user.id, ask.id, value):
         return JSONResponse({'detail': 'That was answered already.'}, status_code=409)
+    if remembered is not None:
+        async with resources.pool.connection() as connection:
+            await approval_rules.add_rule(connection, user.id, remembered, allow_risky=bool(body.allow_risky))
     return JSONResponse({'ok': True})
 
 
@@ -1029,10 +1048,13 @@ def schedule_json(schedule: Schedule, paused: bool, last: Run | None, now: datet
 def ask_json(ask: Ask) -> dict[str, Any]:
     """A hand-off's id stays on the server: the live view finds it from the signed-in user's open ask. A connect ask
     says what to connect (`integration`: `provider`, `key`, `name`, `logo`, a listed MCP server's `url` and `auth`, and
-    `server_id` to sign in to a server again)."""
+    `server_id` to sign in to a server again). An approval that can be remembered says what "Always allow this" would
+    cover (`rule`: `summary` and `risk`, see `approval_rules.Action`)."""
     shown: dict[str, Any] = {'id': ask.id, 'kind': ask.kind, 'prompt': ask.prompt}
     if ask.kind == 'connect':
         shown['integration'] = ask.integration
+    if ask.kind == 'approval' and (offered := Action.from_json(ask.details.get('rule'))) is not None:
+        shown['rule'] = offered.json()  # "Always allow this": what it would cover, and its risk
     return shown
 
 

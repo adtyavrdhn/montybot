@@ -50,6 +50,8 @@ class Resources:
     integrations: Integrations
     # Retained for the experimental Jev helpers; production never constructs or calls this model.
     jev_model: Model | None = None
+    reviewer_model: Model | str | None = None
+    """The automatic reviewer's model (`sammy.reviewer`); None when it is off."""
 
 
 _current: Resources | None = None
@@ -167,6 +169,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
             workspaces=Workspaces(settings.workspaces_dir),
             tunnels=tunnels,
             integrations=integrations,
+            reviewer_model=load_model(settings.approval_reviewer_model) if settings.approval_reviewer_model else None,
         )
         try:
             DBOS.launch()

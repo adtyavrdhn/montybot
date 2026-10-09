@@ -211,6 +211,20 @@ Considered:
   the user returns, launch a fresh Chromium from the cookie jar for them to drive.
 - **Return control:** the agent resumes with a short summary of what the user did, not screenshots.
 
+## Approvals
+
+- **When:** anything that cannot be undone (`commit`) and an integration's tool that changes something wait for the
+  user's approval, the same way a hand-off waits. A schedule's runs never ask: approving the schedule approved them.
+- **Remembered approvals:** "Always allow this" keeps a rule per user for one action: the tool, where (the site's host,
+  or the integration) and what (the control as the page names it, or the integration's tool). The model's own
+  description never decides what a rule covers. Spending money, sending as the user and deleting are covered only by
+  a rule the user confirmed for that risk.
+- **Automatic reviewer (opt-in):** a small, fast model judges low-risk actions no rule covers, from the task, the
+  action and arguments with secrets taken out. It fails towards asking: unsure, slow (about 1.5 s) or broken means
+  the user decides.
+- **Durability:** whether an approval went through by itself is decided once and kept on the ask's own row, not in
+  DBOS steps, so a replay decides the same and a run paused before rules existed replays as recorded.
+
 ## Data
 
 - **Cookie jar:** envelope-encrypted with a key per tenant (KMS). Saved after every run and every hand-off. One writer

@@ -160,6 +160,45 @@ def test_a_change_in_an_app_waits_for_approval(client: Client, composio: FakeCom
     assert composio.issues[account.id] == ['Fix the login page', 'Ship integrations']
 
 
+def test_an_action_the_user_always_allows_runs_end_to_end_without_stopping(
+    client: Client, composio: FakeComposio
+) -> None:
+    client.sign_up()
+    connect_app(client, 'linear')
+    first = client.ask('Create a Linear issue called Weekly groceries')
+    ask = client.wait_for_ask(first, 'approval')
+    rule = {
+        'tool': 'call_integration_tool',
+        'scope': 'linear',
+        'name': 'LINEAR_CREATE_LINEAR_ISSUE',
+        'risk': None,
+        'summary': 'Use linear: LINEAR_CREATE_LINEAR_ISSUE',
+    }
+    assert ask['rule'] == rule  # the card offers "Always allow this"
+    client.answer(ask, approved=True, remember=True)
+    assert 'Weekly groceries' in client.wait_for_reply(first)
+    [kept] = client.http.get('/api/approvals').json()['rules']
+    assert kept == {'id': kept['id'], **rule, 'allow_risky': False}
+
+    # The same change again, in another chat: nobody is asked, and the chat says why.
+    second = client.ask('Create a Linear issue called Weekly cleaning')
+    assert 'Weekly cleaning' in client.wait_for_reply(second)
+    assert client.thread(second)['messages'][1] == {
+        'role': 'event',
+        'text': 'Approved by your rule: Use linear: LINEAR_CREATE_LINEAR_ISSUE {"title": "Weekly cleaning"}',
+    }
+    [account] = [a for a in composio.accounts.values() if a.user_id == f'sammy:{user_id(client)}']
+    assert composio.issues[account.id][-2:] == ['Weekly groceries', 'Weekly cleaning']
+
+    # Removed in settings: the next one asks again.
+    assert client.http.delete(f'/api/approvals/rules/{kept["id"]}').status_code == 200
+    assert client.http.get('/api/approvals').json() == {'rules': [], 'reviewer': {'available': False, 'enabled': False}}
+    third = client.ask('Create a Linear issue called Weekly laundry')
+    client.answer(client.wait_for_ask(third, 'approval'), approved=False, reason='not this week')
+    client.wait_for_reply(third)
+    assert composio.issues[account.id][-1] == 'Weekly cleaning'
+
+
 def test_not_now(client: Client, composio: FakeComposio) -> None:
     client.sign_up()
     thread = client.ask("yo what's on my linear")
