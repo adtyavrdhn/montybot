@@ -15,11 +15,13 @@ one, and nothing else), no scripts.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from http.cookies import SimpleCookie
@@ -27,7 +29,7 @@ from urllib.parse import urlencode, urljoin, urlsplit
 
 from sammy.browser.contract import Action, Click, Download, MouseDown, MouseUp, Press, Ref, Selector
 from sammy.browser.fake import VIEWPORT_HEIGHT, VIEWPORT_WIDTH, FakeBrowser, FakeElement, FakePage
-from sammy.browser.state import BLANK_URL, Cookie
+from sammy.browser.state import BLANK_URL, BrowserState, Cookie
 
 ENGINE = 'fake (html)'
 BLOCKS = {'p', 'div', 'h1', 'h2', 'h3', 'li', 'tr', 'table', 'ul', 'ol', 'form', 'section', 'br'}
@@ -376,3 +378,43 @@ def _file_name(url: str, disposition: str) -> str:
 
 def new_backend() -> HtmlBrowser:
     return HtmlBrowser()
+
+
+@dataclass
+class _Jar:
+    cookies: list[Cookie] = field(default_factory=list[Cookie])
+
+
+class TabbedHtmlBrowser(HtmlBrowser):
+    """`HtmlBrowser` with tabs (`TabsBackend`), as Chrome has, for subagents (#132): the runs of one user share its
+    cookies, each in a tab of its own. Pages load on a thread, so tabs load side by side as a real browser's do. The
+    tabs' cookies are one jar, read before and written back after each load."""
+
+    def __init__(self, jar: _Jar | None = None) -> None:
+        self._jar = jar if jar is not None else _Jar()
+        self._is_tab = jar is not None
+        super().__init__()
+
+    def new_tab(self) -> TabbedHtmlBrowser:
+        return TabbedHtmlBrowser(self._jar)
+
+    async def open(self, state: BrowserState | None) -> None:
+        if self._is_tab:  # a tab has the browser's own cookies, and only goes to the state's page
+            state = BrowserState(url=state.url if state is not None else BLANK_URL, cookies=self._jar.cookies)
+        await self._off_loop(lambda: HtmlBrowser.open(self, state))
+
+    async def act(self, action: Action) -> None:
+        await self._off_loop(lambda: HtmlBrowser.act(self, action))
+
+    async def export(self) -> BrowserState:
+        self.cookies = list(self._jar.cookies)
+        return await super().export()
+
+    async def _off_loop(self, work: Callable[[], Coroutine[object, object, None]]) -> None:
+        self.cookies = list(self._jar.cookies)
+        await asyncio.to_thread(asyncio.run, work())
+        self._jar.cookies = list(self.cookies)
+
+
+def new_tabbed_backend() -> TabbedHtmlBrowser:
+    return TabbedHtmlBrowser()

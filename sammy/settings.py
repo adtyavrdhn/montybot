@@ -99,6 +99,11 @@ class Settings(BaseSettings):
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
     history_limit: int = 40
+    subagent_max_jobs: int = Field(default=3, ge=1)
+    """How many subagents one `run_subagents` call starts side by side, each in a tab of the user's browser."""
+    subagent_token_budget: int = Field(default=1_000_000, ge=1)
+    """The most tokens all the subagents of one run may use together. Each call splits what is left between its
+    jobs, and a subagent that reaches its share stops."""
 
     @field_validator('composio_api_key', mode='before')
     @classmethod

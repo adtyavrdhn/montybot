@@ -42,6 +42,19 @@ class Connected:
     text: str | None = None
 
 
+@dataclass
+class Subagents:
+    """The subagents this run started (`sammy.subagents`): how many `run_subagents` calls, and the tokens they used.
+    Set in workflow code from the children's recorded results, so a replay counts the same."""
+
+    calls: int = 0
+    tokens: int = 0
+
+    def next(self) -> int:
+        self.calls += 1
+        return self.calls
+
+
 @dataclass(frozen=True)
 class RunDeps:
     resources: Resources
@@ -56,6 +69,7 @@ class RunDeps:
     code: CodeState = field(default_factory=CodeState)
     notified: Notified = field(default_factory=Notified)
     connected: Connected = field(default_factory=Connected)
+    subagents: Subagents = field(default_factory=Subagents)
 
     @property
     def user_id(self) -> str:

@@ -208,13 +208,18 @@ async def fail_run(resources: Resources, run: Run, error_type: str, notice: str 
 
 
 async def stop(resources: Resources, run: Run) -> bool:
-    """The user stops their run, whatever it is doing or waiting for. False if it had finished already.
+    """The user stops their run, whatever it is doing or waiting for, and its subagents (`sammy.subagents`). False
+    if it had finished already.
 
-    DBOS cancels the workflow at its next step, so it makes no more model calls or browser actions; a workflow that
-    wakes up later finds the run finished and changes nothing. The browser is saved and closed here, which frees it
-    for the user's other chats."""
-    await DBOS.cancel_workflow_async(run.id)
+    DBOS cancels the workflows at their next step, so they make no more model calls or browser actions; a workflow
+    that wakes up later finds its run finished and changes nothing. The browsers are saved and closed here, which
+    frees them for the user's other chats."""
+    await DBOS.cancel_workflow_async(run.id, cancel_children=True)
     stopped = await end_run(resources, run, 'stopped', STOPPED_NOTICE)
+    async with resources.pool.connection() as connection, connection.transaction():
+        subagents = await store.stop_subagents(connection, run.id, STOPPED_NOTICE)
+    for subagent in subagents:
+        await close_browser(resources, subagent)
     await close_browser(resources, run)
     return stopped
 
@@ -267,9 +272,9 @@ def recent(history: list[ModelMessage], limit: int) -> list[ModelMessage]:
 @timed('run.start_queued')
 async def start_queued(resources: Resources) -> int:
     """Start the workflow of every run still queued, in case the app stopped between recording a run and starting
-    it. Starting a workflow that exists is harmless."""
+    it. Starting a workflow that exists is harmless. A subagent's run is started by its parent's workflow."""
     async with resources.pool.connection() as connection:
-        cursor = await connection.execute("SELECT id FROM sammy.runs WHERE status = 'queued'")
+        cursor = await connection.execute("SELECT id FROM sammy.runs WHERE status = 'queued' AND parent_run_id IS NULL")
         run_ids = [str(row['id']) for row in await cursor.fetchall()]
     for run_id in run_ids:
         await start(run_id)

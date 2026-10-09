@@ -461,9 +461,10 @@ async def run_events(request: Request, user: User) -> Response:
 
 
 async def run_view(connection: Any, user: User, run: Run) -> dict[str, Any]:
-    ask = await store.open_ask(connection, user.id, run.id) if run.status == 'waiting' else None
+    # The run's open ask, or one of its subagents' (sammy.subagents) while it waits for their answers.
+    ask = await store.open_ask(connection, user.id, run.id) if run.status in ('running', 'waiting') else None
     # Answered, and about to carry on: for the user it is working again, not waiting for them.
-    status = 'running' if run.status == 'waiting' and ask is None else run.status
+    status = 'waiting' if ask is not None else 'running' if run.status == 'waiting' else run.status
     return {
         'id': run.id,
         'thread_id': run.thread_id,
@@ -528,13 +529,16 @@ async def answer_ask(request: Request, user: User) -> Response:
 
 
 async def open_handoff(request: Request, user: User) -> tuple[Run, Ask] | None:
-    """The run and its hand-off ask, if the run is the user's and waits for them to hand the browser back."""
+    """The run and its hand-off ask, if the run is the user's and waits for them to hand the browser back. For a
+    subagent's hand-off (sammy.subagents), the subagent's run: the user takes over its tab."""
     async with resources_of(request).pool.connection() as connection:
         run = await store.get_run(connection, user.id, str(request.path_params['run_id']))
-        if run is None or run.status != 'waiting':
+        if run is None or run.status not in ('running', 'waiting'):
             return None
         ask = await store.open_ask(connection, user.id, run.id)
-    if ask is None or ask.kind != 'handoff':
+        if ask is not None and ask.run_id != run.id:
+            run = await store.get_run(connection, user.id, ask.run_id)
+    if run is None or ask is None or ask.kind != 'handoff':
         return None
     return run, ask
 

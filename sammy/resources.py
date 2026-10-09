@@ -33,6 +33,7 @@ from sammy.workspaces import Workspaces
 
 if TYPE_CHECKING:
     from sammy.code import MontyRunner
+    from sammy.deps import RunDeps
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -43,6 +44,8 @@ class Resources:
     jar: PostgresJar
     lease: PostgresLease
     agent: Agent[Any, str]
+    subagent: Agent[RunDeps, str]
+    """What each job of `run_subagents` runs (`sammy.subagents`)."""
     monty: MontyRunner
     workspaces: Workspaces
     tunnels: Tunnels | None = None
@@ -118,7 +121,7 @@ def mac_route(pool: Pool, tunnels: Tunnels) -> Callable[[str, str], Awaitable[Pa
 @asynccontextmanager
 async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
     global _current
-    from sammy.agent import build_agent  # the agent imports the tools, which import this module
+    from sammy.agent import build_agent, build_subagent  # the agent imports the tools, which import this module
     from sammy.code import open_monty
 
     await migrate(settings.database_url)
@@ -155,6 +158,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
     )
     model = load_model(settings.model)
     agent = build_agent(model)
+    subagent = build_subagent(model)
     async with browser, open_monty(settings) as monty:
         _current = Resources(
             settings=settings,
@@ -163,6 +167,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
             jar=jar,
             lease=lease,
             agent=agent,
+            subagent=subagent,
             monty=monty,
             workspaces=Workspaces(settings.workspaces_dir),
             tunnels=tunnels,

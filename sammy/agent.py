@@ -25,6 +25,8 @@ from sammy.integration_tools import connected_integrations, integration_tools
 from sammy.memory import memory_tools, recall
 from sammy.schedule_tools import INSTRUCTIONS as SCHEDULE_INSTRUCTIONS
 from sammy.schedule_tools import schedule_tools, scheduled_run
+from sammy.subagents import INSTRUCTIONS as SUBAGENT_INSTRUCTIONS
+from sammy.subagents import subagent_tools
 
 INSTRUCTIONS = """\
 You are Sammy, a flying squirrel with a browser and opinions. You do things for the user on the web, in your own
@@ -124,6 +126,7 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
             memory_tools,
             schedule_tools,
             integration_tools,
+            subagent_tools,
         ],
         capabilities=[
             HandleDeferredToolCalls(handler=approvals.handle_approvals),
@@ -137,6 +140,23 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
                     None if isinstance(model, FunctionModel) and model.stream_function is None else streaming.handler
                 ),
             ),
+        ],
+        model_settings=CACHE,
+    )
+
+
+def build_subagent(model: Model | str) -> Agent[RunDeps, str]:
+    """What each job of `run_subagents` runs (`sammy.subagents`): Sammy's rules, a brief for one part of a task, and
+    only the browser, code and asking tools. It does not stream: its answer goes to the parent, not to the user."""
+    return Agent[RunDeps, str](
+        model,
+        name='sammy_subagent',
+        deps_type=RunDeps,
+        instructions=[INSTRUCTIONS, SUBAGENT_INSTRUCTIONS, CODE_INSTRUCTIONS, user_time],
+        toolsets=[code_tools, browser_tools, user_tools],
+        capabilities=[
+            HandleDeferredToolCalls(handler=approvals.handle_approvals),
+            DBOSDurability(name='sammy_subagent', parallel_execution_mode='sequential'),
         ],
         model_settings=CACHE,
     )

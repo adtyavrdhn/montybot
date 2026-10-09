@@ -186,6 +186,11 @@ class BrowserHost:
         self._closed: set[RunId] = set()
         self._reaper: asyncio.Task[None] | None = None
 
+    @property
+    def shares_browser(self) -> bool:
+        """Whether runs of one user get tabs of one browser (`share_browser`), so they can work side by side."""
+        return self._share_browser
+
     async def __aenter__(self) -> Self:
         self._reaper = asyncio.create_task(self._reap_forever())
         return self
