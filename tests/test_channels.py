@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import LiteralString
 
 import pytest
 from fake_channel import FakeChannel
@@ -225,13 +227,28 @@ def recording_channel(settings: Settings) -> Recording:
     return RECORDING
 
 
-async def test_a_message_that_fails_for_any_reason_does_not_hold_back_its_chat(
-    database_url: str, tmp_path: Path
-) -> None:
-    # The pump sends each chat's oldest unsent message first, so a message whose delivery fails anywhere (here in the
-    # adapter's formatting, before any platform call) must be marked failed, or the chat would never get another.
-    RECORDING.sent.clear()
-    configured = Settings(
+class Windowed(Recording):
+    """A platform that may write to a chat only within an hour of its last message, as WhatsApp within 24."""
+
+    name = 'windowed'
+    capabilities = Capabilities(
+        max_text=100, max_buttons=2, edits=False, threads=False, max_file_bytes=1000, reply_window=timedelta(hours=1)
+    )
+
+    async def reopen(self, chat_id: str) -> str:
+        self.sent.append((chat_id, 'REOPEN'))
+        return str(len(self.sent))
+
+
+WINDOWED = Windowed()
+
+
+def windowed_channel(settings: Settings) -> Windowed:
+    return WINDOWED
+
+
+def app_settings(database_url: str, tmp_path: Path, backend: str) -> Settings:
+    return Settings(
         _env_file=None,  # pyright: ignore[reportCallIssue]
         database_url=database_url,
         session_secret=SecretStr(SECRET),
@@ -242,8 +259,17 @@ async def test_a_message_that_fails_for_any_reason_does_not_hold_back_its_chat(
         monty_url=None,
         workspaces_dir=tmp_path,
         composio_api_key=None,
-        channel_backends=['test_channels:recording_channel'],
+        channel_backends=[backend],
     )
+
+
+async def test_a_message_that_fails_for_any_reason_does_not_hold_back_its_chat(
+    database_url: str, tmp_path: Path
+) -> None:
+    # The pump sends each chat's oldest unsent message first, so a message whose delivery fails anywhere (here in the
+    # adapter's formatting, before any platform call) must be marked failed, or the chat would never get another.
+    RECORDING.sent.clear()
+    configured = app_settings(database_url, tmp_path, 'test_channels:recording_channel')
     async with open_resources(configured) as resources:
         chat = Chat(channel='recording', chat_id='chat-1')
         async with resources.pool.connection() as connection:
@@ -260,3 +286,88 @@ async def test_a_message_that_fails_for_any_reason_does_not_hold_back_its_chat(
                 'SELECT error FROM sammy.channel_outbox WHERE failed_at IS NOT NULL ORDER BY seq'
             )
             assert [row['error'] for row in await cursor.fetchall()] == ['RuntimeError']
+
+
+async def test_outside_a_reply_window_the_chat_is_reopened_once_and_its_messages_wait(
+    database_url: str, tmp_path: Path
+) -> None:
+    # A platform with a reply window (WhatsApp's 24 hours): outside it, only its re-engagement message goes, once per
+    # closed window, and the chat's messages wait, in order, until the chat writes again.
+    WINDOWED.sent.clear()
+    chat = Chat(channel='windowed', chat_id='chat-1')
+    async with open_resources(app_settings(database_url, tmp_path, 'test_channels:windowed_channel')) as resources:
+        pump = Pump(resources)
+
+        async def sql(query: LiteralString) -> int:
+            async with resources.pool.connection() as connection:
+                cursor = await connection.execute(query)
+                row = await cursor.fetchone()
+            return 0 if row is None else int(row['n'])
+
+        async def held(releases: int = 0) -> bool:
+            query: LiteralString = (
+                "SELECT count(*) AS n FROM sammy.channel_outbox WHERE channel = 'windowed' AND held_at IS NOT NULL "
+                'AND releases = '
+            )
+            return await sql(query + ('1' if releases else '0')) == 2
+
+        async def pump_until(done: Callable[[], Awaitable[bool]]) -> None:
+            deadline = time.monotonic() + 60
+            while not await done():
+                assert time.monotonic() < deadline, 'timed out'
+                await pump.pump()
+                await asyncio.sleep(0.2)
+
+        async def enqueue(*texts: str) -> None:
+            async with resources.pool.connection() as connection:
+                for text in texts:
+                    await channel_store.enqueue(connection, f'w:{text}', chat, Outgoing(text=text))
+
+        async def seen(at: datetime | None = None) -> int:
+            async with resources.pool.connection() as connection, connection.transaction():
+                return await channel_store.seen(connection, chat, at)
+
+        async def sent(count: int) -> bool:
+            return len(WINDOWED.sent) >= count
+
+        # The chat never wrote: one re-engagement message, and both messages held.
+        await enqueue('first', 'second')
+        await pump_until(held)
+        assert WINDOWED.sent == [('chat-1', 'REOPEN')]
+
+        # It writes: the held messages go, in order; while the window is open, so does the next one.
+        assert await seen() == 2
+        await pump_until(lambda: sent(3))
+        await enqueue('third')
+        await pump_until(lambda: sent(4))
+        assert [text for _, text in WINDOWED.sent] == ['REOPEN', 'first', 'second', 'third']
+
+        # Two hours later the window is closed again: one more re-engagement message.
+        await sql(
+            "UPDATE sammy.channel_windows SET last_inbound_at = last_inbound_at - interval '2 hours', "
+            "reopened_at = reopened_at - interval '2 hours' RETURNING 0 AS n"
+        )
+        await enqueue('fourth', 'fifth')
+        await pump_until(held)
+        assert [text for _, text in WINDOWED.sent][4:] == ['REOPEN']
+
+        # A late delivery of an old message moves nothing back: the messages are held again, with no second reopen.
+        assert await seen(datetime.now(UTC) - timedelta(hours=3)) == 2
+        await pump_until(lambda: held(releases=1))
+        assert [text for _, text in WINDOWED.sent].count('REOPEN') == 2
+
+        assert await seen() == 2
+        await pump_until(lambda: sent(7))
+        assert [text for _, text in WINDOWED.sent] == [
+            'REOPEN',
+            'first',
+            'second',
+            'third',
+            'REOPEN',
+            'fourth',
+            'fifth',
+        ]
+        assert (
+            await sql("SELECT count(*) AS n FROM sammy.channel_outbox WHERE channel = 'windowed' AND sent_at IS NULL")
+            == 0
+        )

@@ -1,4 +1,4 @@
-"""The SQL of the chat tables (`migrations/0013_channels.sql`). Kept apart from `sammy/store.py`, which is long
+"""The SQL of the chat tables (`migrations/0013_channels.sql`, `0014_channel_reply_window.sql`). Kept apart from `sammy/store.py`, which is long
 enough already. Functions a web request reaches take the user's id and touch only that user's rows."""
 
 from __future__ import annotations
@@ -7,6 +7,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
 from psycopg.types.json import Jsonb
 
@@ -223,14 +224,16 @@ async def enqueue(
     )
 
 
-async def next_rows(connection: Connection, channels: Sequence[str]) -> list[str]:
-    """The oldest unsent row of each chat, so each chat's messages go out one at a time, in order."""
+async def next_rows(connection: Connection, channels: Sequence[str]) -> list[tuple[str, int]]:
+    """The oldest unsent row of each chat (and how often it was released from a hold), so each chat's messages go out
+    one at a time, in order. A held row is skipped: the chat's next rows are then held after it."""
     cursor = await connection.execute(
-        'SELECT DISTINCT ON (channel, chat_id) id FROM sammy.channel_outbox '
-        'WHERE sent_at IS NULL AND failed_at IS NULL AND channel = ANY(%s) ORDER BY channel, chat_id, seq',
+        'SELECT DISTINCT ON (channel, chat_id) id, releases FROM sammy.channel_outbox '
+        'WHERE sent_at IS NULL AND failed_at IS NULL AND held_at IS NULL AND channel = ANY(%s) '
+        'ORDER BY channel, chat_id, seq',
         (list(channels),),
     )
-    return [str(row['id']) for row in await cursor.fetchall()]
+    return [(str(row['id']), int(row['releases'])) for row in await cursor.fetchall()]
 
 
 async def load_row(connection: Connection, row_id: str) -> OutboxRow | None:
@@ -266,6 +269,60 @@ async def mark_failed(connection: Connection, row_id: str, error_type: str) -> N
     await connection.execute(
         'UPDATE sammy.channel_outbox SET failed_at = now(), error = %s WHERE id = %s', (error_type, row_id)
     )
+
+
+# --- reply windows (Capabilities.reply_window) ---
+
+Window = Literal['open', 'reopen', 'closed']
+"""A chat's reply window: open; closed, and the re-engagement message not yet sent since the chat last wrote; closed."""
+
+
+async def seen(connection: Connection, chat: Chat, at: datetime | None) -> int:
+    """The chat wrote (at `at`, or now): its window opens, and the messages held while it was closed are released.
+    Returns how many were."""
+    await connection.execute(
+        'INSERT INTO sammy.channel_windows (channel, chat_id, last_inbound_at) '
+        'VALUES (%s, %s, coalesce(%s::timestamptz, now())) ON CONFLICT (channel, chat_id) DO UPDATE SET '
+        'last_inbound_at = greatest(sammy.channel_windows.last_inbound_at, EXCLUDED.last_inbound_at)',
+        (chat.channel, chat.chat_id, at),
+    )
+    cursor = await connection.execute(
+        'UPDATE sammy.channel_outbox SET held_at = NULL, releases = releases + 1 '
+        'WHERE channel = %s AND chat_id = %s AND held_at IS NOT NULL',
+        (chat.channel, chat.chat_id),
+    )
+    return cursor.rowcount
+
+
+async def window(connection: Connection, chat: Chat, seconds: float) -> Window:
+    cursor = await connection.execute(
+        "SELECT coalesce(last_inbound_at > now() - %s * interval '1 second', false) AS open, "
+        'reopened_at IS NOT NULL AND (last_inbound_at IS NULL OR reopened_at >= last_inbound_at) AS reopened '
+        'FROM sammy.channel_windows WHERE channel = %s AND chat_id = %s',
+        (seconds, chat.channel, chat.chat_id),
+    )
+    row = await cursor.fetchone()
+    if row is not None and row['open']:
+        return 'open'
+    return 'closed' if row is not None and row['reopened'] else 'reopen'
+
+
+async def hold(connection: Connection, row_id: str, chat: Chat, seconds: float, reopened: bool) -> bool:
+    """Hold the row while the chat's window is still closed, noting that the re-engagement message went if it did.
+    False if the chat wrote in the meantime, so the row is sent now instead."""
+    if reopened:
+        await connection.execute(
+            'INSERT INTO sammy.channel_windows (channel, chat_id, reopened_at) VALUES (%s, %s, now()) '
+            'ON CONFLICT (channel, chat_id) DO UPDATE SET reopened_at = now()',
+            (chat.channel, chat.chat_id),
+        )
+    cursor = await connection.execute(
+        'UPDATE sammy.channel_outbox SET held_at = now() WHERE id = %s AND NOT EXISTS ('
+        'SELECT 1 FROM sammy.channel_windows WHERE channel = %s AND chat_id = %s '
+        "AND last_inbound_at > now() - %s * interval '1 second')",
+        (row_id, chat.channel, chat.chat_id, seconds),
+    )
+    return cursor.rowcount > 0
 
 
 async def ask_message(connection: Connection, ask_id: str) -> tuple[Chat, str] | None:

@@ -177,7 +177,7 @@ and removed on the Integrations page of the web and Mac apps.
 
 People can message Sammy from chat apps as well as the web and Mac apps, through one shared layer
 (`sammy/channels/`, see [`DESIGN.md`](DESIGN.md#chat-apps)). Each platform is a thin adapter, on only when all its
-credentials are set; the platforms themselves come in their own changes (#139 Slack, #140 Telegram, #141 WhatsApp,
+credentials are set; the platforms come in their own changes (#139 Slack, #140 Telegram, #141 WhatsApp (below),
 #142 Discord). Webhooks arrive at `POST /api/channels/<name>/webhook`.
 
 - **Linking.** Message the bot directly and it sends a link (`/#/link/<code>`) to open in the web app, signed in;
@@ -197,6 +197,36 @@ credentials are set; the platforms themselves come in their own changes (#139 Sl
 
 `CHANNEL_BACKENDS` adds platforms by `module:function` (comma-separated); the tests add a fake one this way
 (`tests/fake_channel.py`), whose `PlatformServer` a platform's own tests can reuse to stand in for its API.
+
+### WhatsApp
+
+Sammy talks to WhatsApp through the Business Cloud API (`sammy/channels/whatsapp.py`). It is on when all four of
+these are set:
+
+| Setting | Where it comes from |
+|---|---|
+| `WHATSAPP_ACCESS_TOKEN` | A permanent token for a system user (Business settings > Users > System users) that has the app and the WhatsApp Business account, with the `whatsapp_business_messaging` and `whatsapp_business_management` permissions. The temporary token on the API Setup page lasts 24 hours. |
+| `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp > API Setup: the *Phone number ID* of the number Sammy writes from (an id, not the number). |
+| `WHATSAPP_APP_SECRET` | App settings > Basic > App secret. Meta signs every webhook with it (`X-Hub-Signature-256`). |
+| `WHATSAPP_VERIFY_TOKEN` | Any random string you choose, entered as the webhook's verify token too. |
+
+1. Create a Meta app of the Business type with the WhatsApp product, and add a phone number.
+2. Under WhatsApp > Configuration, set the callback URL to `<PUBLIC_URL>/api/channels/whatsapp/webhook` and the
+   verify token to `WHATSAPP_VERIFY_TOKEN`; Meta checks it at once, so start Sammy first. Subscribe to the
+   `messages` field.
+3. Create a message template (WhatsApp Manager > Message templates), category Utility, named `sammy_update` in
+   English (`en`), with the body "Sammy has an update for you." and a quick reply button "Show me". Another name
+   or language goes in `WHATSAPP_TEMPLATE` and `WHATSAPP_TEMPLATE_LANGUAGE`.
+
+Each phone number is one direct chat and one Sammy thread; link it as for any chat app (send the bot `/start <code>`).
+Approvals come as reply buttons. WhatsApp cannot edit messages, so a pressed ask stays as it was. Files come in up to
+20 MB; images Sammy shares arrive as images, anything else as a document (up to 100 MB). Replies are split at 4096
+characters, with Markdown turned into WhatsApp's `*bold*` and `_italic_`.
+
+**The 24-hour window.** WhatsApp lets a business write freely only within 24 hours of the user's last message. Outside
+it, a scheduled result, a ping or any other message waits, and Sammy sends the approved template once instead. When
+you reply (or press "Show me"), everything that waited arrives in order. This is the shared layer's reply window
+(`Capabilities.reply_window`), so another platform with a window gets it by implementing `reopen`.
 
 ## Observability
 

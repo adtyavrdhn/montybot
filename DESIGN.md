@@ -237,6 +237,11 @@ through its API. It registers with one line in `registry.BUILT_IN`, and is on on
   retried step. A restart in the middle of a reply sends each part once; a crash in the instant between the platform
   accepting a part and DBOS recording it can repeat that one part, as platform APIs take no idempotency key.
 - **Pings.** A linked direct chat is a notification target next to web push and email, which the user can turn off.
+- **Reply windows.** A platform may say the bot can write to a chat only for a while after the chat's last message
+  (`Capabilities.reply_window`; WhatsApp's 24 hours). The receive workflow records when each such chat last wrote.
+  Delivering to a chat whose window is closed sends the platform's re-engagement message once per closed window
+  (`Reopens.reopen`; WhatsApp's approved template) and holds the row; the chat's later rows are held behind it. The
+  chat's next message releases them, and each goes out in a new delivery workflow, in order.
 
 ## Data
 
