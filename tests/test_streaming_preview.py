@@ -63,13 +63,14 @@ async def events(*items: AgentStreamEvent) -> AsyncIterator[AgentStreamEvent]:
 
 @pytest.fixture
 def deps(run_id: str, monkeypatch: pytest.MonkeyPatch) -> Any:
-    # Recall and the connected integrations are instruction providers with a database dependency, not part of
-    # streaming.
+    # Recall, the connected integrations and the skill index are instruction providers with a database dependency,
+    # not part of streaming.
     async def nothing(ctx: Any) -> str:
         return ''
 
     monkeypatch.setattr(agent_module, 'recall', nothing)
     monkeypatch.setattr(agent_module, 'connected_integrations', nothing)
+    monkeypatch.setattr(agent_module, 'skill_index', nothing)
     return SimpleNamespace(
         run_id=run_id, run=SimpleNamespace(id=run_id, prompt='hello'), schedule=None, local_time='', squirrel_name=''
     )
