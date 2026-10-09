@@ -72,7 +72,7 @@ layer reports in, in **one connected trace**.
   - the database: `db.query`, `db.pool.acquire`, `db.migrate`
   - ...and more. Every layer, every hop.
 - **`run_id` on every span of a run** through OpenTelemetry baggage. Model calls, browser calls and Monty snippets
-  all carry it, and `run.lifecycle` adds `thread_id`, `user_id` and `trigger` (message or schedule). Each browser
+  all carry it, and `run.lifecycle` adds `thread_id`, `user_id` and `trigger` (message, schedule or webhook). Each browser
   step records the **site it opened** (host only).
 - **One trace from the click to the database.** The web app (Logfire's browser SDK, `sammy/static/telemetry.js`)
   and the native Mac app (OpenTelemetry Swift, `macos/Sources/SammyKit/Telemetry.swift`) trace page loads, **Web
@@ -115,6 +115,8 @@ layer reports in, in **one connected trace**.
   opens spreadsheets with real CPython, and hands files back with `share_file`.
 - **Memory, schedules and notifications.** Per-user memories, cron schedules in your own time zone, watches, and web
   push plus email when Sammy needs you or finishes.
+- **Webhook triggers.** A task can start from a signed event, such as GitHub publishing a release, instead of a
+  message or a cron ([below](#webhook-triggers)).
 - **Everywhere you are.** A framework-free web app that works on phones, and a native SwiftUI **Mac app** with a
   menu bar, a command palette and an animated 3D squirrel. 🐿️
 
@@ -208,6 +210,38 @@ one). Forwarded data
 skips the server's scrubbing, so each app keeps to the lines above itself: URLs only as route templates, nothing
 from under `/live/`, no passwords, emails or file names, and content only with `LOGFIRE_INCLUDE_CONTENT`.
 
+## Webhook triggers
+
+A trigger starts a task when another service sends an event: "when a GitHub release is published, summarise it"
+(`sammy/webhooks.py`). Add one on the Triggers page, or with `POST /api/webhooks` (`name`, `prompt`, and `source`:
+`github` or `hmac`). Sammy shows its URL and secret once: give both to the service. Each event runs in the trigger's
+own chat, with the event's body attached as a file that the model reads as the sender's data, never as instructions.
+A trigger can be paused, given a new URL and secret (the old ones stop working), or deleted.
+
+- **GitHub** (`github`): in the repository's Settings, Webhooks, paste the URL as the payload URL, pick
+  `application/json`, and paste the secret. GitHub signs each delivery (`X-Hub-Signature-256`).
+- **Any other sender** (`hmac`): send a unique `X-Sammy-Delivery` id, and `X-Sammy-Signature: sha256=` followed by
+  the hex HMAC-SHA256 of `<id>.<body>` with the secret:
+
+```bash
+id=$(uuidgen); body='{"answer": "yes"}'
+signature=$(printf '%s.%s' "$id" "$body" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.* //')
+curl -X POST "$URL" -H 'Content-Type: application/json' -H "X-Sammy-Delivery: $id" \
+  -H "X-Sammy-Signature: sha256=$signature" -d "$body"
+```
+
+A signed event starts exactly one run. Sammy remembers each delivery id (and each body for GitHub, which does not sign
+its ids) for `WEBHOOK_DELIVERY_DAYS` (30), so a replay or a redelivery starts none; a daily DBOS schedule forgets older
+ones. Senders retry within days, but a request captured and replayed after that window would be taken again, so give
+a trigger a new URL and secret if its secret may have leaked. When the run ends you get a push and an email that it
+finished (or could not), as for a scheduled task. Bodies are capped at 1 MB. The answers: `202` started, `200`
+already received (or GitHub's `ping`), `401` bad signature, `404` unknown URL, `409` paused, and `503` while the last
+event's run is still going (nothing is recorded, so send it again later). A webhook's run asks you before anything
+that cannot be undone, as a run from a message does. Its browser goes out through the server, never the Mac. The
+token in the URL is kept only hashed and the secret sealed with your data key; neither is logged or traced. On the
+server, Caddy leaves `/hooks/*` open without the basic-auth login (`deploy/Caddyfile`), and `PUBLIC_URL` is the
+address the URLs start with.
+
 ## Web workspace
 
 The frontend is plain HTML, CSS, and JavaScript in `sammy/static`, with no framework or build step.
@@ -216,7 +250,7 @@ On desktop, chats stay in a persistent sidebar; on a phone, the Chats button ope
 
 Create an account or sign in, then describe a task in a new chat. Example prompts fill the message box for you to
 review before sending. Watch Sammy's browser while it works, take over when it asks you to sign in, and answer
-questions or approve actions in the chat. Saved sign-ins and schedules are available in the sidebar, alongside
+questions or approve actions in the chat. Saved sign-ins, schedules and triggers are available in the sidebar, alongside
 notification opt-in. Motion respects your device's reduced-motion preference.
 
 ## Mac app

@@ -340,7 +340,7 @@ function syncDrawer() {
   $('drawer').inert = !desktop.matches && !open;
   $('drawer-backdrop').hidden = !open;
   $('menu-button').setAttribute('aria-expanded', String(open));
-  for (const id of ['layout', 'signins', 'integrations', 'schedules', 'browser-button']) $(id).inert = open;
+  for (const id of ['layout', 'signins', 'integrations', 'schedules', 'webhooks', 'browser-button']) $(id).inert = open;
 }
 function closeDrawer(restoreFocus = false) {
   const focusInside = $('drawer').contains(document.activeElement);
@@ -1484,8 +1484,81 @@ async function openSchedules() {
   }) : [element('li', 'No scheduled tasks yet. Tell Sammy what to do and when in a chat.')]));
 }
 
+// --- triggers: webhooks that start a task (sammy/webhooks.py) ---
+
+const WEBHOOK_SOURCES = { github: 'GitHub', hmac: 'Another service' };
+
+function showWebhookKeys(keys) {
+  // A new URL and secret, shown this once; never traced.
+  $('webhook-keys').hidden = !keys;
+  $('webhook-url').value = keys ? keys.url : '';
+  $('webhook-secret').value = keys ? keys.secret : '';
+}
+
+async function openWebhooks() {
+  $('webhooks-title').focus();
+  const webhooks = await api('/api/webhooks');
+  $('webhook-list').replaceChildren(...(webhooks.length ? webhooks.map((w) => {
+    const name = element('span');
+    name.append(element('strong', w.name),
+      element('span', `${WEBHOOK_SOURCES[w.source]}${w.paused ? ' (paused)' : ''}`, 'list-detail'));
+    const actions = element('span', '', 'list-actions');
+    actions.append(
+      button('Open chat', 'secondary', () => { location.hash = `#/t/${w.thread_id}`; }),
+      button(w.paused ? 'Resume' : 'Pause', 'secondary', async () => {
+        const action = w.paused ? 'resume' : 'pause';
+        await telemetry.span(`${action} trigger`, { webhook_id: w.id, thread_id: w.thread_id }, () => (
+          api(`/api/webhooks/${w.id}/${action}`, { method: 'POST', body: {} })));
+        await openWebhooks();
+      }),
+      button('New URL', 'secondary', async () => {
+        if (!confirm(`Make a new URL and secret for "${w.name}"? The old ones stop working.`)) return;
+        showWebhookKeys(await telemetry.span('rotate trigger', { webhook_id: w.id }, () => (
+          api(`/api/webhooks/${w.id}/rotate`, { method: 'POST', body: {} }))));
+      }),
+      button('Delete', 'bad', async () => {
+        if (!confirm(`Delete "${w.name}"? Its URL stops working.`)) return;
+        await telemetry.span('delete trigger', { webhook_id: w.id, thread_id: w.thread_id }, () => (
+          api(`/api/webhooks/${w.id}`, { method: 'DELETE' })));
+        showWebhookKeys(null);
+        await Promise.all([openWebhooks(), loadThreads()]);  // its chat goes too if it never ran
+      }),
+    );
+    const item = element('li');
+    item.append(name, actions);
+    return item;
+  }) : [element('li', 'No triggers yet. Add one below, then give its URL and secret to the service that sends the events.')]));
+}
+
+async function addWebhook() {
+  $('webhook-error').textContent = '';
+  $('add-webhook').disabled = true;
+  const source = $('webhook-source').value;
+  let created;
+  try {
+    created = await telemetry.span('add trigger', { source }, () => api('/api/webhooks', {
+      method: 'POST', body: { name: $('webhook-name').value, prompt: $('webhook-prompt').value, source },
+    }));
+  } catch (error) {
+    $('webhook-error').textContent = error.message;
+    return;
+  } finally {
+    $('add-webhook').disabled = false;
+  }
+  $('webhook-form').reset();
+  await Promise.all([openWebhooks(), loadThreads()]);
+  showWebhookKeys(created);
+  $('webhook-url').focus();
+}
+
+$('webhook-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  report(addWebhook());
+});
+
 $('open-signins').addEventListener('click', () => { location.hash = '#/sign-ins'; closeDrawer(); });
 $('open-schedules').addEventListener('click', () => { location.hash = '#/schedules'; closeDrawer(); });
+$('open-webhooks').addEventListener('click', () => { location.hash = '#/triggers'; closeDrawer(); });
 $('open-integrations').addEventListener('click', () => { location.hash = '#/integrations'; closeDrawer(); });
 for (const back of document.querySelectorAll('.page .back')) {
   back.addEventListener('click', () => { location.hash = state.threadId ? `#/t/${state.threadId}` : '#/new'; });
@@ -1553,8 +1626,10 @@ $('enable-notifications').addEventListener('click', () => (
 // --- routing ---
 
 const PAGES = { '#/sign-ins': ['signins', 'Saved browser data', openSignins],
-  '#/integrations': ['integrations', 'Integrations', openIntegrations], '#/schedules': ['schedules', 'Schedules', openSchedules] };
-const PAGE_BUTTONS = { '#/sign-ins': 'open-signins', '#/integrations': 'open-integrations', '#/schedules': 'open-schedules' };
+  '#/integrations': ['integrations', 'Integrations', openIntegrations], '#/schedules': ['schedules', 'Schedules', openSchedules],
+  '#/triggers': ['webhooks', 'Triggers', () => { showWebhookKeys(null); return openWebhooks(); }] };
+const PAGE_BUTTONS = { '#/sign-ins': 'open-signins', '#/integrations': 'open-integrations', '#/schedules': 'open-schedules',
+  '#/triggers': 'open-webhooks' };
 
 async function route() {
   const hash = location.hash;

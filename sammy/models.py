@@ -6,10 +6,11 @@ from datetime import datetime
 from typing import Any, Literal
 
 RunStatus = Literal['queued', 'running', 'waiting', 'done', 'failed', 'stopped']
-Trigger = Literal['message', 'schedule']
+Trigger = Literal['message', 'schedule', 'webhook']
 AskKind = Literal['question', 'approval', 'handoff', 'connect']
-NoticeKind = AskKind | Literal['finished', 'failed', 'found']
-"""What a notification tells the user: an ask, a scheduled task that ended, or a watch that found something."""
+NoticeKind = AskKind | Literal['finished', 'failed', 'found', 'event_finished', 'event_failed']
+"""What a notification tells the user: an ask, a scheduled task that ended, a watch that found something, or a task
+a webhook trigger started that ended."""
 ACTIVE: tuple[RunStatus, ...] = ('queued', 'running', 'waiting')
 FINISHED: tuple[RunStatus, ...] = ('done', 'failed', 'stopped')
 
@@ -78,6 +79,23 @@ class Schedule:
     """The schedule in plain words, as the agent put it to the user: "Mondays at 09:00"."""
     prompt: str
     watch: bool
+
+
+WebhookSource = Literal['github', 'hmac']
+"""How a webhook's requests are signed: GitHub's own scheme, or ours (`X-Sammy-Signature`) for any other sender."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class Webhook:
+    """A task that starts when another service sends an event to its URL (`sammy.webhooks`)."""
+
+    id: str
+    user_id: str
+    thread_id: str
+    name: str
+    prompt: str
+    source: WebhookSource
+    paused: bool
 
 
 @dataclass(frozen=True, kw_only=True)

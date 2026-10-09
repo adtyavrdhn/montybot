@@ -9,8 +9,8 @@ Exported only with `LOGFIRE_INCLUDE_CONTENT` (on by default for the demo): messa
 include the user's memories), the code the agent writes, page snapshots, and exception messages and tracebacks.
 
 Never exported, whatever the settings: cookies and browser state, saved sign-ins, passwords typed in live view,
-session cookies, app secrets and API keys, hand-off ids and links, and push subscription URLs. None of these reach
-the agent. HTTP server requests are not traced.
+session cookies, app secrets and API keys, hand-off ids and links, push subscription URLs, and webhook trigger URLs
+and signing secrets. None of these reach the agent. HTTP server requests are not traced.
 `tests/e2e/test_traces.py` holds these lines.
 
 The web and Mac apps send their own telemetry through `/api/telemetry/v1/...` (`api.forward_telemetry`), which

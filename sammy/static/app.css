@@ -20,7 +20,7 @@
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-size: 16px; line-height: 1.5; }
 body { overflow: hidden; }
 [hidden] { display: none !important; }
-button, input, textarea { font: inherit; }
+button, input, textarea, select { font: inherit; }
 button { cursor: pointer; border: 1px solid transparent; border-radius: 8px; padding: .7em 1em; background: var(--purple); color: #fff; font-weight: 600; line-height: 1.4; min-height: 44px; }
 button:hover { filter: brightness(1.12); }
 button:disabled { opacity: .5; cursor: not-allowed; filter: none; }
@@ -30,7 +30,7 @@ button.icon { background: none; color: inherit; padding: .4em .6em; font-size: 1
 button.good { background: var(--good); }
 button.bad { background: #fff0f4; border-color: #edc5d1; color: var(--bad); }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
-input, textarea { width: 100%; min-width: 0; color: var(--text); background: var(--panel); border: 1px solid #c5b6cc; border-radius: 8px; padding: .8em 1em; }
+input, textarea, select { width: 100%; min-width: 0; color: var(--text); background: var(--panel); border: 1px solid #c5b6cc; border-radius: 8px; padding: .8em 1em; }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
 label { display: block; margin: 1.3em 0 .4em; font-size: .9rem; font-weight: 600; }
 h1, h2, p { margin-top: 0; }

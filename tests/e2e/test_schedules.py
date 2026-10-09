@@ -67,6 +67,11 @@ def schedules(client: Client) -> list[dict[str, Any]]:
     return response.json()
 
 
+def users_schedules(dbos: DBOSClient) -> list[str]:
+    """The DBOS schedules of users' tasks, not the app's own (such as `sammy.webhooks.PRUNE_SCHEDULE`)."""
+    return [s['schedule_name'] for s in dbos.list_schedules(schedule_name_prefix='sammy-schedule-')]
+
+
 def fire(dbos: DBOSClient, schedule: dict[str, Any]) -> WorkflowHandle[None]:
     """One occurrence, now."""
     return dbos.trigger_schedule(f'sammy-schedule-{schedule["id"]}')
@@ -161,7 +166,7 @@ def test_a_weekly_cart_fill_over_two_weeks(
 
     assert client.http.delete(f'/api/schedules/{weekly["id"]}').status_code == 200
     assert schedules(client) == []
-    assert dbos.list_schedules() == []
+    assert users_schedules(dbos) == []
 
 
 def approvals_in(database_url: str, thread_id: str) -> int:
@@ -238,7 +243,7 @@ def test_a_slot_watch_notifies_once(
 
     assert client.wait_for_reply(client.ask(f'Delete the schedule {watch["id"]}')) == 'Deleted.'
     assert schedules(client) == []
-    assert dbos.list_schedules() == []
+    assert users_schedules(dbos) == []
     assert reply_of(client, thread)  # it ran, so its chat stays, with what it found
 
 
@@ -270,8 +275,8 @@ def test_a_schedule_outlives_the_app(app: App, client: Client, slots: Slots, dat
 def test_deleting_a_schedules_chat_deletes_the_schedule(client: Client, slots: Slots, dbos: DBOSClient) -> None:
     client.sign_up()
     watch = set_up(client, f'Tell me when a delivery slot opens at {slots.url}')
-    assert len(dbos.list_schedules()) == 1
+    assert len(users_schedules(dbos)) == 1
 
     assert client.http.delete(f'/api/threads/{watch["thread_id"]}').status_code == 200
     assert schedules(client) == []
-    assert dbos.list_schedules() == []  # nothing fires for a chat that is gone
+    assert users_schedules(dbos) == []  # nothing fires for a chat that is gone

@@ -1,7 +1,7 @@
 """Telling the user the bot needs them: a web push to each browser or phone they turned it on in, and an email.
 
-Sent when a run asks something (`sammy.approvals.open_ask`), when a scheduled task finishes, and when a watch finds
-what the user waits for (`sammy.schedules`). The message says only which of these it is and links to the chat,
+Sent when a run asks something (`sammy.approvals.open_ask`), when a scheduled task finishes, when a watch finds
+what the user waits for (`sammy.schedules`), and when a task a webhook trigger started ends (`sammy.webhooks`). The message says only which of these it is and links to the chat,
 which needs signing in: no prompt, no page, no hand-off link. Either channel is off until it is
 configured (`VAPID_*` for push, `SMTP_URL` for email). A failure to notify is logged by type and never fails the run.
 """
@@ -35,11 +35,15 @@ WHAT = {
     'finished': 'Sammy finished a scheduled task.',
     'failed': 'Sammy could not finish a scheduled task.',
     'found': 'Sammy found what you asked it to watch for.',
+    'event_finished': 'Sammy finished a task one of your triggers started.',
+    'event_failed': 'Sammy could not finish a task one of your triggers started.',
 }
 SUBJECT = {
     'finished': 'Sammy finished a task',
     'failed': 'Sammy could not finish a task',
     'found': 'Sammy found something',
+    'event_finished': 'Sammy finished a task',
+    'event_failed': 'Sammy could not finish a task',
 }
 
 
