@@ -9,7 +9,12 @@
   <link rel="manifest" href="/static/manifest.json">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/markdown.js" defer></script>
+  <!-- Classic scripts share the app helpers; pages.js starts routing after all features load. -->
   <script src="/static/app.js" defer></script>
+  <script src="/static/chat.js" defer></script>
+  <script src="/static/integrations.js" defer></script>
+  <script src="/static/composer.js" defer></script>
+  <script src="/static/pages.js" defer></script>
 </head>
 <body>
   <div id="app">
