@@ -395,6 +395,37 @@ public final class APIClient: Sendable {
         return url
     }
 
+    // MARK: voice
+
+    /// Whether the server's speech provider can transcribe the user's words and read replies aloud.
+    public func voice() async throws -> VoiceSupport { try await send("GET", "/api/voice") }
+
+    /// The words in a recording (AAC in an .m4a is `audio/mp4`), at most 10 MB. The server does not keep it.
+    public func transcribe(audio: Data, mediaType: String = "audio/mp4") async throws -> String {
+        let transcript: Transcript = try await decode(transcriptionRequest(audio: audio, mediaType: mediaType))
+        return transcript.text
+    }
+
+    func transcriptionRequest(audio: Data, mediaType: String) -> URLRequest {
+        var request = request("POST", "/api/voice/transcriptions", timeout: 60)
+        request.httpBody = audio  // the bytes as they are, as uploads are
+        request.setValue(mediaType, forHTTPHeaderField: "Content-Type")
+        return request
+    }
+
+    private struct Transcript: Decodable { let text: String }
+
+    /// `text` (plain, up to 20,000 characters) read aloud by the server's provider, as MP3.
+    public func speech(_ text: String) async throws -> Data {
+        var request = request("POST", "/api/voice/speech", accept: "audio/mpeg", timeout: 60)
+        request.httpBody = try JSONEncoder().encode(["text": text])
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return try await raw(request) { data, response in
+            guard response.statusCode == 200 else { throw error(response.statusCode, data) }
+            return data
+        }
+    }
+
     // MARK: the live view
 
     /// The WebSocket request of a live-view link, with the session cookie. No `Origin`: the server accepts clients

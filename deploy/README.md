@@ -265,8 +265,8 @@ It ran on colima's Ubuntu 24.04 arm64 VM with the AppArmor profile installed.
 
 ## Jev and Logfire keys
 
-Add `TYPESAFE_API_KEY`, `LOGFIRE_TOKEN` and `COMPOSIO_API_KEY` (one-click apps for Integrations) in the repository's
-Actions secrets. Only the trusted main deploy
+Add `TYPESAFE_API_KEY`, `LOGFIRE_TOKEN`, `COMPOSIO_API_KEY` (one-click apps for Integrations) and `VOICE_API_KEY`
+(the speech provider's key, below) in the repository's Actions secrets. Only the trusted main deploy
 receives them. `deploy/update-secrets.py` sends nonempty values over SSH stdin and atomically updates the VM's
 owner-only `.env`; unset repo secrets do not erase existing VM values. Tokens must use letters, digits or
 `_.:/+=-`; malformed updates fail rather than interpolating shell syntax. No secrets enter image layers.
@@ -274,6 +274,10 @@ owner-only `.env`; unset repo secrets do not erase existing VM values. Tokens mu
 Each deploy bakes its commit into the image; Logfire shows it as `service.version`, so traces can be compared across
 deploys. `ENVIRONMENT` (default `production`) and `LOGFIRE_INCLUDE_CONTENT` (default `true`: messages, the agent's
 code and page snapshots are exported; see the README's Observability section) can be set in the VM's `.env`.
+
+Voice (dictation for browsers without speech recognition, and replies in the provider's voice) is off until
+`VOICE_PROVIDER` (`openai` or `elevenlabs`) is set in the VM's `.env` and `VOICE_API_KEY` reaches it, from the
+Actions secret above or set there by hand; `VOICE_NAME` picks the voice. See the README's Voice section.
 
 Jev advice is disabled in production. Setting `TYPESAFE_API_KEY` does not add tools or make Jev requests.
 The experimental helpers and their tests remain in the repository for later evaluation. Existing credentials

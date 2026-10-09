@@ -167,6 +167,9 @@ struct CommandPalette: View {
             items.append(Item(id: "rename", title: "Rename chat…", icon: "character.cursor.ibeam") { app.renaming = thread })
             items.append(Item(id: "delete", title: "Delete chat", icon: "trash") { app.deleting = thread })
         }
+        let voice = app.voice
+        items.append(Item(id: "read-aloud", title: voice.readRepliesAloud ? "Stop reading replies aloud" : "Read replies aloud",
+                          icon: voice.readRepliesAloud ? "speaker.slash" : "speaker.wave.2") { voice.readRepliesAloud.toggle() })
         items += [
             Item(id: "schedules", title: "Schedules", icon: "calendar.badge.clock", shortcut: "⇧⌘1") { app.open(.schedules) },
             Item(id: "signins", title: "Saved sign-ins", icon: "key", shortcut: "⇧⌘2") { app.open(.signIns) },

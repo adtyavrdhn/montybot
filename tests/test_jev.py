@@ -107,6 +107,8 @@ def test_secret_updates_keep_unset_and_unrelated_values(tmp_path: Path) -> None:
     module['update'](path, {'TYPESAFE_API_KEY': 'new-key'})
     assert path.read_text() == "MODEL=existing\nLOGFIRE_TOKEN=old\nTYPESAFE_API_KEY='new-key'\n"
     assert path.stat().st_mode & 0o777 == 0o600
+    module['update'](path, {'VOICE_API_KEY': 'sk-voice_1'})
+    assert path.read_text().endswith("TYPESAFE_API_KEY='new-key'\nVOICE_API_KEY='sk-voice_1'\n")
     before = path.read_text()
     for bad in [{'OTHER': 'x'}, {'LOGFIRE_TOKEN': '$(command)'}, {'LOGFIRE_TOKEN': 'x\nMODEL=bad'}]:
         with pytest.raises(ValueError, match='Invalid secret update'):

@@ -102,6 +102,8 @@ public final class AppModel {
             updateTunnel()
         }
     }
+    /// Dictating messages and reading replies aloud (`Voice`).
+    public let voice: Voice
     /// The tunnel's state, for the "browsing from your Mac" indicator.
     public private(set) var tunnelStatus = MacTunnel.Status()
     @ObservationIgnored private var tunnel: MacTunnel?
@@ -228,6 +230,7 @@ public final class AppModel {
         self.cookies = cookies
         self.defaults = defaults
         browseFromMac = defaults.object(forKey: "browseFromMac") as? Bool ?? true
+        voice = Voice(defaults: defaults)
         let url = serverURL ?? defaults.string(forKey: "serverURL").flatMap(URL.init(string:)) ?? Self.defaultServer
         client = APIClient(baseURL: url, cookies: cookies, siteLogin: Self.siteLogins(defaults)[url.absoluteString])
     }
@@ -384,6 +387,7 @@ public final class AppModel {
         open(defaults.string(forKey: "route.\(user.id)").flatMap(Route.init(stored:)) ?? .chat(nil))
         startWatching()
         updateTunnel()
+        voice.connect(client)
         let client = client
         let launch = launchLogged ? nil : launched
         launchLogged = true
@@ -429,6 +433,7 @@ public final class AppModel {
     private func reset() {
         persistedUser = nil  // before clearing: what is kept for next time stays
         stopTunnel()
+        voice.disconnect()
         signedOutOfNotifications?()
         retrying?.cancel()
         watching?.cancel()

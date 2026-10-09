@@ -38,6 +38,10 @@ class MockAPI:
     connections: list[dict[str, str]] = field(default_factory=list)
     apps: list[dict[str, object]] = field(default_factory=list)
     server_sign_in: bool = False  # whether an added MCP server needs the user to sign in
+    voice: dict[str, bool] = field(default_factory=lambda: {'transcribe': False, 'speak': False})
+    transcribed: list[tuple[str, bytes]] = field(default_factory=list)  # (content type, recording) sent to the server
+    spoken: list[str] = field(default_factory=list)  # the texts the server was asked to read aloud
+    speech_status: int = 200
 
     def handle(self, route: Route) -> None:
         request = route.request
@@ -51,6 +55,19 @@ class MockAPI:
             return
         if path == '/api/attachments' and method == 'POST':  # the file's own bytes, not JSON
             self.upload(route)
+            return
+        if path == '/api/voice/transcriptions':  # a recording, not JSON
+            self.transcribed.append((request.headers['content-type'], request.post_data_buffer or b''))
+            route.fulfill(status=200, json={'text': 'add eggs and milk'})
+            return
+        if path == '/api/voice/speech':
+            spoken = request.post_data_json
+            assert isinstance(spoken, dict)
+            self.spoken.append(spoken['text'])
+            if self.speech_status != 200:
+                route.fulfill(status=self.speech_status, json={'detail': 'Speech is not working right now.'})
+            else:
+                route.fulfill(status=200, body=b'ID3 not really an mp3', content_type='audio/mpeg')
             return
         body = request.post_data_json if request.post_data else None
         self.calls.append((method, path, body))
@@ -69,6 +86,8 @@ class MockAPI:
         if path == '/api/me':
             status = 200 if self.signed_in else 401
             result = {'id': USER, 'email': 'pat@example.test', 'name': 'Pat'} if self.signed_in else {}
+        elif path == '/api/voice':
+            result = self.voice
         elif path == '/api/telemetry':
             result = {
                 'enabled': self.telemetry,

@@ -154,6 +154,20 @@ tool, and they appear on its reply.
 Jev intent and navigation advice is disabled for now, even when `TYPESAFE_API_KEY` is set. The main agent handles
 these decisions directly. Experimental Jev helpers remain available in the source for later evaluation.
 
+## Voice
+
+On a phone, talking is faster than typing (`sammy/voice.py`, `sammy/static/voice.js`). The microphone in the
+composer dictates a message into the message box, to read over and send. The web app uses the browser's own speech
+recognition where there is one (Safari on iPhone and Mac, Chrome); the Mac app uses Apple's. Elsewhere it records,
+and the server turns the recording into text. Each Sammy reply has a speaker button that reads it aloud, and "Read
+replies aloud" (in the menu, kept per browser) reads each new reply once its task is done, and each question Sammy
+asks while you watch.
+
+Set `VOICE_PROVIDER` (`openai` or `elevenlabs`) and `VOICE_API_KEY` for the server's part: transcribing recordings
+(`POST /api/voice/transcriptions`) and reading replies in the provider's voice (`POST /api/voice/speech`; `VOICE_NAME`
+picks the voice). Unset, dictation needs the browser's own speech recognition, and replies are read in the device's
+voice. The key stays on the server. A recording is held in memory for the one request and is never stored.
+
 ## Integrations
 
 Users connect the services they use, and Sammy works in them through three agent tools that never change
@@ -189,7 +203,8 @@ and removed on the Integrations page of the web and Mac apps.
   data flows through.
 - **Never:** cookies and browser state, saved sign-ins, integration credentials and MCP server URLs, passwords typed
   in live view, session cookies, app secrets,
-  hand-off ids and links, push subscription URLs. None reach the agent. HTTP server requests are not traced. Logfire's default scrubbing stays on as a backstop: it replaces values that mention a password,
+  hand-off ids and links, push subscription URLs, voice recordings and the words in them or read aloud. None reach
+  the agent. HTTP server requests are not traced. Logfire's default scrubbing stays on as a backstop: it replaces values that mention a password,
   cookie, session and so on, including a sign-in page's snapshot.
 
 `tests/e2e/test_traces.py` holds these lines through a whole sign-in hand-off and order, with content on and off.

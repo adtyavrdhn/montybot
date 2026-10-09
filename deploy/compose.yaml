@@ -105,6 +105,9 @@ services:
       MONTY_URL: ${MONTY_URL:-}
       MONTY_EXECUTION_KEY: ${MONTY_EXECUTION_KEY:-}
       COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
+      VOICE_PROVIDER: ${VOICE_PROVIDER:-}
+      VOICE_API_KEY: ${VOICE_API_KEY:-}
+      VOICE_NAME: ${VOICE_NAME:-}
     volumes:
       - claude-code:/data/claude-code
       - workspaces:/data/workspaces

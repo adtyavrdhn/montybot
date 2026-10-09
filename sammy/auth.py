@@ -3,7 +3,8 @@
 Passwords are hashed with scrypt from the standard library. The session cookie is Starlette's `SessionMiddleware`
 (signed with `SESSION_SECRET`, HttpOnly, SameSite=Lax). Writes to the API need a JSON body, which a page on another
 site cannot send with the user's cookie without a CORS preflight we never answer; a file's upload, which is its raw
-bytes, carries an `X-Filename` header instead, which needs the same preflight.
+bytes, carries an `X-Filename` header instead, which needs the same preflight, and a recording an audio
+`Content-Type`, which does too.
 """
 
 from __future__ import annotations
@@ -80,6 +81,11 @@ def signed_in_upload(handler: Handler) -> Callable[[Request], Awaitable[Response
     return _signed_in(handler, refuse_unnamed_file)
 
 
+def signed_in_audio(handler: Handler) -> Callable[[Request], Awaitable[Response]]:
+    """As `signed_in`, for a POST of recorded audio: its `Content-Type` must be `audio/...`."""
+    return _signed_in(handler, refuse_non_audio)
+
+
 def _signed_in(
     handler: Handler, refuse: Callable[[Request], Response | None]
 ) -> Callable[[Request], Awaitable[Response]]:
@@ -98,6 +104,13 @@ def refuse_unnamed_file(request: Request) -> Response | None:
     if request.headers.get('x-filename'):
         return None
     return JSONResponse({'detail': 'name the file in X-Filename'}, status_code=400)
+
+
+def refuse_non_audio(request: Request) -> Response | None:
+    """A form on another site can send only text and form types without a CORS preflight, never audio."""
+    if request.headers.get('content-type', '').split(';')[0].strip().lower().startswith('audio/'):
+        return None
+    return JSONResponse({'detail': 'send audio'}, status_code=415)
 
 
 def refuse_non_json(request: Request) -> Response | None:

@@ -175,7 +175,8 @@ func recording(includeContent: Bool, into telemetry: Telemetry = Telemetry()) ->
 }
 
 /// A stand-in Sammy server, one per test (its own host): `/api/telemetry` says `settings`, `/api/threads` is empty, the
-/// telemetry endpoints take anything, the rest is 404. Keeps every request it gets.
+/// telemetry endpoints take anything, voice transcribes and speaks (failing for text that says "fail"), the rest is
+/// 404. Keeps every request it gets.
 final class Stub: @unchecked Sendable {
     let host = "stub-\(UUID().uuidString.prefix(8).lowercased()).test"
     let client: APIClient
@@ -224,9 +225,14 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
             Self.log[host, default: []].append((request, body))
             return Self.settings[host] ?? "{}"
         }
+        let text = body.map { String(decoding: $0, as: UTF8.self) } ?? ""
         let (status, answer): (Int, String) = switch path {
         case "/api/telemetry": (200, settings)
         case "/api/threads": (200, "[]")
+        case "/api/voice": (200, #"{"transcribe": true, "speak": false}"#)
+        case "/api/voice/transcriptions": (200, #"{"text": "Order eggs"}"#)
+        case "/api/voice/speech" where text.contains("fail"): (502, #"{"detail": "the speech provider is down"}"#)
+        case "/api/voice/speech": (200, "ID3 not really an MP3")
         case _ where path.hasPrefix("/api/telemetry/v1/"): (200, "")
         default: (404, #"{"detail": "not here"}"#)
         }

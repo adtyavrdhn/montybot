@@ -45,6 +45,7 @@ function newPage() {
   stopWatching();
   closeTakeover('left the chat');
   hideNotice();
+  stopReading();  // voice.js
 }
 
 // --- telemetry ---
@@ -503,6 +504,7 @@ async function loadChat() {
   const box = $('messages');
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
   box.replaceChildren(...thread.messages.map((m) => messageBubble(m.role, m.text, m.files)));
+  addReadButtons(box);  // voice.js
   if (!thread.messages.length) {  // a scheduled task's chat, before its first run
     box.append(element('p', 'Nothing here yet. Each time this scheduled task runs, what Sammy did shows up here.', 'empty-chat'));
   }
@@ -590,11 +592,14 @@ function follow(run) {
       });
     }
     renderRun(status);
+    if (status.ask && status.ask.kind === 'question' && (before && before.ask && before.ask.id) !== status.ask.id) {
+      readQuestion(status.ask);  // voice.js: asked while the user watched, not one already open
+    }
     report(loadThreads());
     if (!ACTIVE.includes(status.status)) {
       telemetry.log('run events ended', { ...ids, status: status.status });
       closeEvents();  // and the draft: the saved reply replaces it
-      report(loadChat());
+      report(loadChat().then(() => { if (status.status === 'done') readLatestReply(); }));
     }
   });
   source.onerror = () => {
@@ -1590,6 +1595,7 @@ async function start() {
   startTelemetry(me && me.id);  // in the background: nothing waits for it
   show('main');
   showNotificationButton().catch(console.error);  // optional: the button simply stays hidden
+  startVoice();  // voice.js; never fails
   await route();
 }
 

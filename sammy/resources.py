@@ -33,6 +33,7 @@ from sammy.workspaces import Workspaces
 
 if TYPE_CHECKING:
     from sammy.code import MontyRunner
+    from sammy.voice import Speech
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -48,6 +49,8 @@ class Resources:
     tunnels: Tunnels | None = None
     """The users' Mac tunnels; None when `mac_tunnel` is off or the engine has no egress proxy to swap."""
     integrations: Integrations
+    speech: Speech | None = None
+    """The speech provider (`sammy.voice`); None without `VOICE_PROVIDER`."""
     # Retained for the experimental Jev helpers; production never constructs or calls this model.
     jev_model: Model | None = None
 
@@ -120,6 +123,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
     global _current
     from sammy.agent import build_agent  # the agent imports the tools, which import this module
     from sammy.code import open_monty
+    from sammy.voice import open_speech  # the voice endpoints import this module
 
     await migrate(settings.database_url)
     pool = create_pool(settings.database_url)
@@ -155,6 +159,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
     )
     model = load_model(settings.model)
     agent = build_agent(model)
+    speech = open_speech(settings)
     async with browser, open_monty(settings) as monty:
         _current = Resources(
             settings=settings,
@@ -167,6 +172,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
             workspaces=Workspaces(settings.workspaces_dir),
             tunnels=tunnels,
             integrations=integrations,
+            speech=speech,
         )
         try:
             DBOS.launch()
@@ -177,4 +183,6 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
             if tunnels is not None:
                 await tunnels.aclose()
             await integrations.aclose()
+            if speech is not None:
+                await speech.aclose()
             await pool.close()

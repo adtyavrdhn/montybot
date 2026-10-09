@@ -2,8 +2,9 @@
 # Builds Sammy.app into macos/build: `scripts/build-app.sh [server-url]`. The server URL (default: the local dev
 # server) is the one the app talks to until the user picks another on the sign-in screen.
 #
-# The app is signed ad hoc, for this Mac. To give it to users, sign it with a Developer ID and notarize it:
-#   codesign --force --options runtime --sign "Developer ID Application: …" build/Sammy.app
+# The app is signed ad hoc, for this Mac. To give it to users, sign it with a Developer ID and notarize it (the
+# hardened runtime needs the entitlements this writes, for the microphone that dictation uses):
+#   codesign --force --options runtime --entitlements build/Sammy.entitlements --sign "Developer ID Application: …" build/Sammy.app
 #   xcrun notarytool submit … && xcrun stapler staple build/Sammy.app
 set -eu
 cd "$(dirname "$0")/.."
@@ -42,9 +43,22 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>SammyServerURL</key><string>$SERVER</string>
   <key>NSAppTransportSecurity</key>
   <dict><key>NSAllowsLocalNetworking</key><true/></dict>
+  <key>NSMicrophoneUsageDescription</key><string>Sammy listens while you dictate a message, and only then.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>Sammy turns what you dictate into text for your message.</string>
 </dict>
 </plist>
 EOF
 
-codesign --force --sign - "$APP"
+# Dictation's microphone, for a signature with the hardened runtime (a Developer ID's); ad hoc it is not needed.
+cat > build/Sammy.entitlements <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.device.audio-input</key><true/>
+</dict>
+</plist>
+EOF
+
+codesign --force --entitlements build/Sammy.entitlements --sign - "$APP"
 echo "$APP"

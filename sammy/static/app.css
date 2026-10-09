@@ -139,6 +139,18 @@ h1, h2 { letter-spacing: -.045em; font-weight: 600; line-height: 1.15; }
 #attach { flex-shrink: 0; color: var(--muted); padding: .4em; }
 #attach:hover { color: var(--accent); }
 #attach .nav-icon { width: 22px; height: 22px; margin: 0; }
+/* Voice: the microphone in the composer, and reading a reply aloud. */
+#dictate { flex-shrink: 0; color: var(--muted); padding: .4em; border-radius: 50%; }
+#dictate:hover, .read-aloud:hover { color: var(--accent); }
+#dictate .nav-icon { width: 22px; height: 22px; margin: 0; }
+#dictate.listening { color: #fff; background: var(--accent); animation: listening 1.4s ease-in-out infinite; }
+#dictate.working { opacity: .6; cursor: progress; }
+@keyframes listening { 50% { box-shadow: 0 0 0 6px #a90dab33; } }
+@media (prefers-reduced-motion: reduce) { #dictate.listening { animation: none; } }
+.read-aloud { display: block; margin-top: 6px; color: var(--muted); padding: .2em .3em; font-size: 1rem; }
+.read-aloud .nav-icon { width: 18px; height: 18px; margin: 0; }
+.read-aloud.reading { color: var(--accent); }
+.drawer-tools button[aria-pressed="true"] { background: #613451; }
 #composer:focus-within { border-color: var(--accent); }
 #composer textarea { border: 0; border-radius: 0; padding: 8px; resize: none; max-height: 160px; }
 #composer textarea:focus-visible { outline-offset: 0; border-radius: 4px; }
