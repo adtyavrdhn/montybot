@@ -3,7 +3,8 @@
 // Dictation uses the browser's own speech recognition where there is one (Safari on iPhone and Mac, Chrome).
 // Elsewhere it records, and the server turns the recording into text if it has a speech provider (`GET /api/voice`).
 // The words land in the message box, to read over and send. Replies are read in the server's voice when it has one,
-// and in the device's own otherwise; "Read replies aloud" reads each new reply once its task is done.
+// and in the device's own otherwise; "Read replies aloud" reads each new reply once its task is done, and each
+// question Sammy asks while the user watches.
 //
 // iPhones make sound only from a tap. So the sound is started, silently, in a tap first (`primeSound`), and later
 // replies play when they come. A recording goes to the server once and is not kept.
@@ -25,7 +26,7 @@ const voice = {
   listening: null,  // while dictating: { stop, cancel }
   audio: null,  // the one <audio> the server's voice plays in
   primed: false,  // sound has started in a tap, so it may play later
-  reading: null,  // the read-aloud button of the reply being read
+  reading: null,  // what is being read: { button }, the reply's read-aloud button, or null for a question
 };
 
 function canDictate() {
@@ -162,7 +163,8 @@ function readButton(bubble) {
   made.innerHTML = '<svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9Z"/>' +
     '<path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>';
   made.addEventListener('click', () => {
-    if (voice.reading === made) stopReading(); else report(readAloud(bubble, made, 'button'));
+    if (voice.reading && voice.reading.button === made) stopReading();
+    else report(readAloud(spokenText(bubble), made, 'button'));
   });
   return made;
 }
@@ -190,37 +192,38 @@ function primeSound() {
   }
 }
 
-async function readAloud(bubble, button, how) {
+async function readAloud(text, button, how) {
+  // `button`: the reply's read-aloud button, which says Stop reading meanwhile; null for a question.
   stopReading();
-  const text = spokenText(bubble);
   if (!text) return;
   primeSound();  // before anything is awaited: still in the tap, if there was one
   const audio = voice.server.speak ? voice.audio : null;
-  voice.reading = button;
+  const reading = { button };
+  voice.reading = reading;
   renderReading();
   telemetry.log('read aloud', { how, chars: text.length, voice: audio ? 'server' : 'device' });  // never the words
   try {
-    if (audio) await playFromServer(audio, text, button); else speakOnDevice(text, button);
+    if (audio) await playFromServer(audio, text, reading); else speakOnDevice(text, reading);
   } catch (error) {
-    if (voice.reading === button) stopReading();
+    if (voice.reading === reading) stopReading();
     throw error;
   }
 }
 
-async function playFromServer(audio, text, button) {
+async function playFromServer(audio, text, reading) {
   const response = await voiceFetch('/api/voice/speech', 'application/json', JSON.stringify({ text }));
   const speech = await response.blob();
-  if (voice.reading !== button) return;  // stopped, or another reply started, meanwhile
+  if (voice.reading !== reading) return;  // stopped, or something else started, meanwhile
   if (audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
   audio.src = URL.createObjectURL(speech);
-  audio.onended = () => { if (voice.reading === button) stopReading(); };
+  audio.onended = () => { if (voice.reading === reading) stopReading(); };
   await audio.play();
 }
 
-function speakOnDevice(text, button) {
+function speakOnDevice(text, reading) {
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = navigator.language || 'en-US';
-  utterance.onend = () => { if (voice.reading === button) stopReading(); };
+  utterance.onend = () => { if (voice.reading === reading) stopReading(); };
   utterance.onerror = utterance.onend;
   speechSynthesis.speak(utterance);
 }
@@ -234,7 +237,7 @@ function stopReading() {
 
 function renderReading() {
   for (const each of document.querySelectorAll('.read-aloud')) {
-    const on = each === voice.reading;
+    const on = Boolean(voice.reading) && each === voice.reading.button;
     each.classList.toggle('reading', on);
     each.setAttribute('aria-pressed', String(on));
     each.setAttribute('aria-label', on ? 'Stop reading' : 'Read aloud');
@@ -248,7 +251,13 @@ function readLatestReply() {
   const replies = $('messages').querySelectorAll('.msg.assistant:not(.draft)');
   const latest = replies[replies.length - 1];
   const button = latest && latest.querySelector('.read-aloud');
-  if (button) report(readAloud(latest, button, 'auto'));
+  if (button) report(readAloud(spokenText(latest), button, 'auto'));
+}
+
+function readQuestion(ask) {
+  // Sammy asked a question in a task the user is watching: read it as it reads a reply, if they asked for that.
+  if (!voice.autoRead || !canSpeak()) return;
+  report(readAloud(ask.prompt.trim().slice(0, MAX_SPEECH_CHARS), null, 'question'));
 }
 
 byId('auto-read').addEventListener('click', () => {

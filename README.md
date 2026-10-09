@@ -160,7 +160,8 @@ On a phone, talking is faster than typing (`sammy/voice.py`, `sammy/static/voice
 composer dictates a message into the message box, to read over and send. The web app uses the browser's own speech
 recognition where there is one (Safari on iPhone and Mac, Chrome); the Mac app uses Apple's. Elsewhere it records,
 and the server turns the recording into text. Each Sammy reply has a speaker button that reads it aloud, and "Read
-replies aloud" (in the menu, kept per browser) reads each new reply once its task is done.
+replies aloud" (in the menu, kept per browser) reads each new reply once its task is done, and each question Sammy
+asks while you watch.
 
 Set `VOICE_PROVIDER` (`openai` or `elevenlabs`) and `VOICE_API_KEY` for the server's part: transcribing recordings
 (`POST /api/voice/transcriptions`) and reading replies in the provider's voice (`POST /api/voice/speech`; `VOICE_NAME`

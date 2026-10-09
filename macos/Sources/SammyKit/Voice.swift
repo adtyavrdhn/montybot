@@ -469,10 +469,11 @@ public final class Voice {
 
     // MARK: replies
 
-    /// A task the user is watching finished with `reply`: read it aloud if they asked for that.
-    func replyFinished(_ reply: String) {
+    /// In a task the user is watching, Sammy finished with a reply or asked a question: read it aloud if they asked
+    /// for that.
+    func sammySaid(_ text: String) {
         guard readRepliesAloud, dictation == .idle else { return }
-        read(reply)
+        read(text)
     }
 }
 
@@ -488,9 +489,10 @@ private final class PlaybackObserver: NSObject, AVAudioPlayerDelegate, AVSpeechS
 }
 
 extension AppModel {
-    /// The open chat's task finished `done` while the user watched it (the window on screen): its reply may be read.
-    func replyFinished(in chat: ChatModel, _ reply: String) {
+    /// The open chat's task finished `done`, or asked a question, while the user watched it (the window on screen):
+    /// the reply or the question may be read.
+    func sammySaid(in chat: ChatModel, _ text: String) {
         guard self.chat === chat, isWindowVisible else { return }
-        voice.replyFinished(reply)
+        voice.sammySaid(text)
     }
 }

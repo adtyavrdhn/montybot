@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import test_frontend
 from playwright.sync_api import Page, ViewportSize, expect
-from test_frontend import THREAD, MockAPI, emit, streaming_chat, workspace
+from test_frontend import ASK, THREAD, MockAPI, emit, streaming_chat, workspace
 
 frontend = test_frontend.frontend  # the same fixture: pytest finds a fixture by the name it has here
 
@@ -200,3 +200,37 @@ def test_read_replies_aloud_reads_a_reply_once_its_task_is_done(frontend: tuple[
     assert mock.spoken == ['Committed flight options']
     toggle.click()
     expect(toggle).to_have_attribute('aria-pressed', 'false')
+
+
+def test_read_replies_aloud_reads_a_question_sammy_asks_while_you_watch(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.voice = {'transcribe': False, 'speak': True}
+    page.add_init_script(SOUND)
+    streaming_chat(page, mock)
+    page.get_by_role('button', name='Read replies aloud').click()
+    question = 'Which date works for you, Friday or Saturday?'
+    mock.run = {'id': 'run', 'thread_id': THREAD, 'status': 'waiting', 'activity': [],
+                'ask': {'id': ASK, 'kind': 'question', 'prompt': question}}  # fmt: skip
+    emit(page, 'status', mock.run)
+    expect(page.locator('#ask')).to_contain_text(question)
+    page.wait_for_function('window.played.length === 2')  # sound started by the tap on the setting, then the question
+    assert mock.spoken == [question]
+
+    emit(page, 'status', mock.run)  # the stream says it again: the same question is not read twice
+    mock.messages.extend([{'role': 'assistant', 'text': question}, {'role': 'user', 'text': 'Friday'},
+                          {'role': 'assistant', 'text': 'Booked for Friday.'}])  # fmt: skip
+    mock.run = {'id': 'run', 'thread_id': THREAD, 'status': 'done', 'activity': [], 'ask': None}
+    emit(page, 'status', mock.run)
+    page.wait_for_function('window.played.length === 3')
+    assert mock.spoken == [question, 'Booked for Friday.']
+
+    # A chat opened while its question is already waiting does not read it out.
+    mock.run = {'id': 'run', 'thread_id': THREAD, 'status': 'waiting', 'activity': [],
+                'ask': {'id': ASK, 'kind': 'question', 'prompt': question}}  # fmt: skip
+    page.reload()
+    expect(page.locator('#ask')).to_contain_text(question)
+    page.wait_for_function('window.eventSources.length === 1')
+    emit(page, 'status', mock.run)
+    page.get_by_role('button', name='Read aloud').last.click()  # a tap: whatever is read now comes after
+    page.wait_for_function('window.played.length === 2')  # this page's silent start in the tap, then the reply
+    assert mock.spoken == [question, 'Booked for Friday.', 'Booked for Friday.']

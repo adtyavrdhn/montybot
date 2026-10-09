@@ -155,7 +155,7 @@ struct GeneralSettings: View {
         return Section {
             Toggle("Read replies aloud", isOn: $voice.readRepliesAloud)
         } footer: {
-            Text("When a task you're watching is done, \(app.sammyName) reads its reply aloud. Any reply can also be read with its Read aloud button, and the microphone in the message box dictates what you want.")
+            Text("When a task you're watching is done, \(app.sammyName) reads its reply aloud, and the questions it asks along the way. Any reply can also be read with its Read aloud button, and the microphone in the message box dictates what you want.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
         }

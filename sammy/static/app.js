@@ -592,6 +592,9 @@ function follow(run) {
       });
     }
     renderRun(status);
+    if (status.ask && status.ask.kind === 'question' && (before && before.ask && before.ask.id) !== status.ask.id) {
+      readQuestion(status.ask);  // voice.js: asked while the user watched, not one already open
+    }
     report(loadThreads());
     if (!ACTIVE.includes(status.status)) {
       telemetry.log('run events ended', { ...ids, status: status.status });

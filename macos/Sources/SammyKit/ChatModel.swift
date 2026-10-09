@@ -252,7 +252,11 @@ public final class ChatModel {
     private func runChanged(from old: Run?) {
         if let run, let old, old.id == run.id, old.status.isActive, run.status == .done, !closed,
            let reply = run.output ?? messages.last(where: { $0.role == .assistant })?.text {
-            app?.replyFinished(in: self, reply)  // seen finishing, not opened finished: it may be read aloud
+            app?.sammySaid(in: self, reply)  // seen finishing, not opened finished: it may be read aloud
+        }
+        if let run, let old, old.id == run.id, !closed, run.status == .waiting, let ask = run.ask, ask.kind == .question,
+           old.ask?.id != ask.id {
+            app?.sammySaid(in: self, ask.prompt)  // asked while watched, not already open: it may be read aloud too
         }
         guard let run, let old, old.id != run.id || old.status != run.status, telemetry.isEnabled else { return }
         telemetry.log("run status changed", [

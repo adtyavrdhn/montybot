@@ -87,4 +87,11 @@ import Testing
         voice.read("")  // nothing to say: nothing plays
         #expect(voice.reading == nil)
     }
+
+    @MainActor @Test func repliesAndQuestionsAreReadOnlyWhenTheUserAskedForThat() throws {
+        let defaults = try #require(UserDefaults(suiteName: "sammy-test-\(UUID().uuidString)"))
+        let voice = Voice(defaults: defaults)
+        voice.sammySaid("Which delivery slot works for you?")  // the setting is off
+        #expect(voice.reading == nil)
+    }
 }

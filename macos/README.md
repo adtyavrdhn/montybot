@@ -67,8 +67,8 @@ talk); otherwise, if the server has a speech provider (`GET /api/voice`), it rec
 it to `/api/voice/transcriptions` and deletes it at once; the server keeps no audio either. Without either, there is
 no microphone. Each reply has Read aloud (on hover, in its menu, and as a VoiceOver action): the server's voice
 (`/api/voice/speech`, MP3) when it has one, otherwise the Mac's; one reply at a time, as plain words, not Markdown.
-Settings > General > Read replies aloud (or ⌘K) reads the reply of a task you are watching when it is done, never
-ones in chats you open later. Provider keys stay on the server. `Voice.swift` and `VoiceViews.swift` have it all;
+Settings > General > Read replies aloud (or ⌘K) reads the reply of a task you are watching when it is done, and each
+question it asks along the way, never ones in chats you open later. Provider keys stay on the server. `Voice.swift` and `VoiceViews.swift` have it all;
 `build-app.sh` adds the microphone and speech recognition descriptions, and the microphone entitlement.
 
 ## Telemetry
