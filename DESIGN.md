@@ -120,6 +120,11 @@ addresses. Together, the agent writes plain Python that drives a real Chromium.
 **Later:** a Playwright-shaped `browser` module inside Monty (`page.goto(...)`, `page.fill(...)`). It is a nicer API
 over the same hook.
 
+**Reading needs no browser.** A lookup ("what time does the pharmacy close", a docs page) is `web_search` and
+`web_fetch`, native agent tools outside Monty (`sammy/web_tools.py`). They are the model provider's own web tools where
+the model has them, or Sammy's: a search API, and a fetch through the same public-only check as integrations
+(`sammy/integrations/egress.py`). The browser is for what needs a session, a sign-in or clicks.
+
 **Never give Monty raw CDP.** The Chrome DevTools Protocol can read every cookie, download files, and close the
 browser. Monty gets a fixed list of browser actions, nothing more.
 

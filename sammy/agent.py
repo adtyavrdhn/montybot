@@ -25,6 +25,8 @@ from sammy.integration_tools import connected_integrations, integration_tools
 from sammy.memory import memory_tools, recall
 from sammy.schedule_tools import INSTRUCTIONS as SCHEDULE_INSTRUCTIONS
 from sammy.schedule_tools import schedule_tools, scheduled_run
+from sammy.web_tools import INSTRUCTIONS as WEB_INSTRUCTIONS
+from sammy.web_tools import web_capabilities
 
 INSTRUCTIONS = """\
 You are Sammy, a flying squirrel with a browser and opinions. You do things for the user on the web, in your own
@@ -109,6 +111,7 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
             FILE_INSTRUCTIONS,
             SCHEDULE_INSTRUCTIONS,
             INTEGRATION_INSTRUCTIONS,
+            WEB_INSTRUCTIONS,
             user_time,
             your_name,
             connected_integrations,
@@ -126,6 +129,7 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
             integration_tools,
         ],
         capabilities=[
+            *web_capabilities(),
             HandleDeferredToolCalls(handler=approvals.handle_approvals),
             DBOSDurability(
                 # The name runs' model steps were recorded under, from when there was a streaming and a

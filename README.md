@@ -36,6 +36,9 @@ Every layer of Sammy avoids paying for what it doesn't need.
   - Images are shrunk to 1568 px before the model sees them. Earlier turns' files come back only within a 16 MB
     budget (`sammy/attachments.py`).
   - Stored history keeps a short note per file, not the bytes.
+- **Lookups skip the browser.** "What time does the pharmacy close" is a `web_search` and a `web_fetch`: no
+  Chromium, no page snapshots in the context, and few model calls. The model's own web search and fetch are used
+  where it has them (`sammy/web_tools.py`).
 - **Crashes don't cost twice.** Every run is a **DBOS workflow**. Model requests, browser calls, memory writes and
   schedule changes are steps, and each step's result is recorded. If the server dies halfway through a run, DBOS
   starts it again and **every finished step returns its recorded result instead of running again**, so model calls
@@ -62,11 +65,12 @@ layer reports in, in **one connected trace**.
   (`service.version`) and environment, then `instrument_pydantic_ai`, `instrument_httpx` and
   `instrument_system_metrics`. Agent runs, every model request, every tool call, **token usage, cache hits and
   cost**, every outgoing HTTP call to a model provider, CPU and memory.
-- **44 hand-named spans across the whole system:**
+- **46 hand-named spans across the whole system:**
   - runs: `run.lifecycle`, `run.start`, `run.agent`, `run.dispatch`, `run.finish`, `run.fail`, `run.close`
   - Monty: `monty.run`, `monty.session`, `monty.snippet`, `monty.dump`, `monty.load`
   - the agent driving the browser: `code.browser.goto`, `code.browser.click`, `code.browser.type`,
     `code.browser.read`
+  - reading the web without it: `web.search`, `web.fetch`
   - the browser itself: `browser.snapshot`, `browser.act`, `browser.handoff.start`, `browser.handoff.end`,
     `browser.state.save`, `browser.reap_idle`, `browser.live_view`
   - the database: `db.query`, `db.pool.acquire`, `db.migrate`
@@ -151,6 +155,15 @@ Sammy opens spreadsheets, Word documents and the like. The stored history keeps 
 in Postgres, and later turns get the files back within a size budget. Sammy gives files back with the `share_file`
 tool, and they appear on its reply.
 
+Lookups and reading skip the browser (`sammy/web_tools.py`): the agent has `web_search` and `web_fetch`, and uses
+the browser only for what needs a session, a sign-in or clicks. They are Pydantic AI's `WebSearch` and `WebFetch`
+capabilities. A model with its own web tools (Anthropic, OpenAI, Google) searches and fetches on its provider's side;
+`NATIVE_WEB_TOOLS=false` turns that off. Otherwise Sammy's own tools do it (`sammy/web.py`), each a DBOS step.
+`web_fetch` reaches public addresses only, checked as each connection opens, redirects included
+(`sammy/integrations/egress.py`). It reads at most 2 MB within 30 seconds and returns the page as text with its
+links. `web_search` calls Tavily's search API with `TAVILY_API_KEY`; without a key, a model with no search of its
+own searches in the browser.
+
 Jev intent and navigation advice is disabled for now, even when `TYPESAFE_API_KEY` is set. The main agent handles
 these decisions directly. Experimental Jev helpers remain available in the source for later evaluation.
 
@@ -180,7 +193,7 @@ and removed on the Integrations page of the web and Mac apps.
 
 - **Always:** Pydantic AI's agent, model and tool spans with model, provider and tool names, token and cache usage
   (so Logfire shows cost) and the conversation's shape; database, run,
-  browser and Monty timings; the site a browser step opens (host only); outgoing HTTP calls made with httpx, such as
+  browser and Monty timings; the site a browser step opens or `web_fetch` reads (host only, `web.site`); outgoing HTTP calls made with httpx, such as
   model provider requests (method, URL and status, never headers or bodies); `run_id` on every span of a run and
   `thread_id`/`user_id` on `run.lifecycle`; exception types; the commit (`service.version`) and `ENVIRONMENT`;
   token and system (CPU, memory) metrics.

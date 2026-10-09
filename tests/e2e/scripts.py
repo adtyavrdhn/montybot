@@ -25,6 +25,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.profiles import ModelProfile
 
 
 @dataclass
@@ -34,6 +35,10 @@ class Turn:
     instructions: str = ''
     seen: list[str] = field(default_factory=list[str])
     """Each thing the user sent in the whole conversation, as the model got it (`seen_in`)."""
+    tools: list[str] = field(default_factory=list[str])
+    """The function tools the model was given."""
+    native_tools: list[str] = field(default_factory=list[str])
+    """The provider's own tools the model was given, by kind (`web_search`)."""
 
     @property
     def last(self) -> str:
@@ -248,6 +253,23 @@ def share_report(turn: Turn) -> ModelResponse:
     return say(f'Here is your report. ({turn.result_of("share_file")})')
 
 
+def pharmacy_hours(turn: Turn) -> ModelResponse:
+    """A lookup: search, read the first result, answer. No browser."""
+    if not turn.called('web_search'):
+        return call('web_search', query='Corner Pharmacy opening hours', max_results=3)
+    if not turn.called('web_fetch'):
+        found = re.search(r'https?://\S+', turn.result_of('web_search'))
+        assert found, turn.result_of('web_search')
+        return call('web_fetch', url=found.group(0))
+    return say(line_with(turn.last, 'Closes') or f'I could not find it. {turn.last}')
+
+
+def web_tools(turn: Turn) -> ModelResponse:
+    """Says which web tools the model was given: the provider's own, and Sammy's."""
+    local = [tool for tool in turn.tools if tool.startswith('web_')]
+    return say(f'native: {", ".join(turn.native_tools) or "none"}; local: {", ".join(local) or "none"}')
+
+
 def fail(turn: Turn) -> ModelResponse:
     raise RuntimeError('the model provider is down')
 
@@ -432,6 +454,8 @@ SCRIPTS: dict[str, Script] = {
     'Show me my files and the file': show_file,
     'Describe what I attached': describe_files,
     'Make me a report': share_report,
+    'When does the pharmacy close': pharmacy_hours,
+    'Which web tools do you have': web_tools,
 }
 
 
@@ -483,10 +507,21 @@ def current_turn(messages: list[ModelMessage]) -> Turn:
 
 def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
     turn = current_turn(messages)
+    turn.tools = sorted(tool.name for tool in info.function_tools)
+    turn.native_tools = sorted(tool.kind for tool in info.model_request_parameters.native_tools)
     for start, script in SCRIPTS.items():
         if turn.prompt.startswith(start):
             return script(turn)
     return say(f'I have no script for {turn.prompt!r}.')
 
 
-model = FunctionModel(respond, model_name='scripted')
+# Like a model with no web tools of its own, so the agent gets Sammy's `web_search` and `web_fetch`.
+model = FunctionModel(
+    respond,
+    model_name='scripted',
+    profile=ModelProfile(
+        supports_json_schema_output=True, supports_json_object_output=True, supported_native_tools=frozenset()
+    ),
+)
+native_model = FunctionModel(respond, model_name='scripted-native')
+"""Like a model with web search and fetch of its own (`FunctionModel` claims every native tool)."""

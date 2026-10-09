@@ -2,7 +2,7 @@
 
 Always exported: span names, model/provider/tool names, token usage and cost, the conversation's shape, the deploy's
 commit and environment, the run/thread/user ids (random UUIDs), the site
-(host) a browser step visits, outgoing HTTP calls made with httpx (method, URL, status; never headers or bodies),
+(host) a browser step visits or `web_fetch` reads, outgoing HTTP calls made with httpx (method, URL, status; never headers or bodies),
 exception types, metrics and system metrics.
 
 Exported only with `LOGFIRE_INCLUDE_CONTENT` (on by default for the demo): messages, replies, instructions (which
