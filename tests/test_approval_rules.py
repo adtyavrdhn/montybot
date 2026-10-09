@@ -69,7 +69,10 @@ def resources(pool: Pool, url: str = 'https://www.walmart.com/cart', model: Func
         return SimpleNamespace(snapshot=SimpleNamespace(url=url, text=PAGE))
 
     settings = Settings(
-        database_url='postgresql://unused', session_secret=SecretStr('x'), encryption_key=SecretStr('x')
+        database_url='postgresql://unused',
+        session_secret=SecretStr('x'),
+        encryption_key=SecretStr('x'),
+        approval_reviewer_timeout_seconds=30,  # a slow test machine is not a reviewer that timed out
     )
     fake = SimpleNamespace(
         pool=pool, settings=settings, browser=SimpleNamespace(snapshot=snapshot), reviewer_model=model
