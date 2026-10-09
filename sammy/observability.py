@@ -2,7 +2,8 @@
 
 Always exported: span names, model/provider/tool names, token usage and cost, the conversation's shape, the deploy's
 commit and environment, the run/thread/user ids (random UUIDs), the site
-(host) a browser step visits, outgoing HTTP calls made with httpx (method, URL, status; never headers or bodies),
+(host) a browser step visits, outgoing HTTP calls made with httpx (method, URL, status; never headers or bodies; not
+Discord's interaction callbacks or attachment downloads, whose URLs hold a token or a signature),
 exception types, metrics and system metrics.
 
 Exported only with `LOGFIRE_INCLUDE_CONTENT` (on by default for the demo): messages, replies, instructions (which
@@ -11,7 +12,7 @@ include the user's memories), the code the agent writes, page snapshots, and exc
 Never exported, whatever the settings: cookies and browser state, saved sign-ins, passwords typed in live view,
 session cookies, app secrets and API keys (chat platform tokens included), hand-off ids and links, chat app link
 codes, and push subscription URLs. None of these reach the agent. Chat app spans (`channel.receive`,
-`channel.deliver`) carry the platform's name and nothing else that identifies anyone. HTTP server requests are not traced.
+`channel.deliver`, `discord.event`) carry the platform's name or event type and nothing else that identifies anyone. HTTP server requests are not traced.
 `tests/e2e/test_traces.py` holds these lines.
 
 The web and Mac apps send their own telemetry through `/api/telemetry/v1/...` (`api.forward_telemetry`), which

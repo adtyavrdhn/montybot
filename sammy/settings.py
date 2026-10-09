@@ -100,12 +100,15 @@ class Settings(BaseSettings):
     channel_backends: Annotated[list[str], NoDecode] = Field(default_factory=list[str])
     """Extra chat platforms (`sammy.channels.registry`), comma-separated `module:function` factories that take the
     settings and return a `Channel`, or None when not configured. Tests add a fake platform this way."""
+    discord_bot_token: SecretStr | None = None
+    """Discord (`sammy.channels.discord`): the bot's token from the Developer Portal. Set: Sammy keeps one gateway
+    connection open, on one replica."""
 
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
     history_limit: int = 40
 
-    @field_validator('composio_api_key', mode='before')
+    @field_validator('composio_api_key', 'discord_bot_token', mode='before')
     @classmethod
     def blank_is_unset(cls, value: object) -> object:
         """`COMPOSIO_API_KEY=` (as in `.env.example`) means no Composio, not a key that is empty."""

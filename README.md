@@ -177,8 +177,8 @@ and removed on the Integrations page of the web and Mac apps.
 
 People can message Sammy from chat apps as well as the web and Mac apps, through one shared layer
 (`sammy/channels/`, see [`DESIGN.md`](DESIGN.md#chat-apps)). Each platform is a thin adapter, on only when all its
-credentials are set; the platforms themselves come in their own changes (#139 Slack, #140 Telegram, #141 WhatsApp,
-#142 Discord). Webhooks arrive at `POST /api/channels/<name>/webhook`.
+credentials are set: Discord is here (below); the other platforms come in their own changes (#139 Slack,
+#140 Telegram, #141 WhatsApp). Webhooks arrive at `POST /api/channels/<name>/webhook`.
 
 - **Linking.** Message the bot directly and it sends a link (`/#/link/<code>`) to open in the web app, signed in;
   the web app then shows a code to send back from that chat, which finishes it. Or open **Chat apps** in the web
@@ -194,6 +194,30 @@ credentials are set; the platforms themselves come in their own changes (#139 Sl
   recording it can send that one part twice: platform APIs take no idempotency key.
 - **Privacy.** Every webhook is size-capped and signature-checked before it is read, and handled once per delivery
   id. Message text is traced only with `LOGFIRE_INCLUDE_CONTENT`; tokens and link codes never are.
+
+### Discord
+
+A bot on Discord's gateway and HTTP API (`sammy/channels/discord.py` and `discord_gateway.py`, plain httpx and
+`websockets`). Discord sends messages over its gateway, a websocket, so there is no webhook to set up: Sammy keeps
+one connection open, on one replica at a time (the one holding a Postgres advisory lock; the others take over within
+seconds if it goes). It needs one setting:
+
+1. In the [Developer Portal](https://discord.com/developers/applications), make an application, open **Bot**, reset
+   the token and put it in `DISCORD_BOT_TOKEN`.
+2. On the same page, under **Privileged Gateway Intents**, turn on **Message Content Intent**. Without it Discord
+   refuses the connection (close code 4014), which Sammy logs. Leave **Interactions Endpoint URL** (General
+   Information) empty, so button clicks come over the gateway too.
+3. Invite the bot: under **OAuth2**, URL Generator, pick the `bot` scope and the permissions View Channels, Send
+   Messages, Send Messages in Threads, Create Public Threads, Read Message History and Attach Files, then open the
+   URL. Direct messages need no invite beyond sharing a server with the bot.
+
+Then message the bot directly: it sends a link to finish linking, or send it `/start <code>` with a code from the
+Chat apps page. A direct message is one Sammy thread. In a server, Sammy only reads messages that mention it, and
+answers each in a thread made from that message, which is then a Sammy thread of its own where no mention is needed.
+Approvals come with Approve and Decline buttons; the message then says what was chosen. Replies are split at 2000
+characters, and files go both ways as attachments, up to Discord's 10 MB upload limit (a bigger file Sammy shares
+comes as a link to the chat on the web). A dropped connection is resumed with the same session, and a message
+Discord sends again is handled once.
 
 `CHANNEL_BACKENDS` adds platforms by `module:function` (comma-separated); the tests add a fake one this way
 (`tests/fake_channel.py`), whose `PlatformServer` a platform's own tests can reuse to stand in for its API.

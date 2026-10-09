@@ -1,0 +1,27 @@
+{
+  "v": 10,
+  "user_settings": {},
+  "user": {
+    "verified": true,
+    "username": "Sammy",
+    "mfa_enabled": true,
+    "id": "1100000000000000001",
+    "global_name": null,
+    "flags": 0,
+    "email": null,
+    "discriminator": "4821",
+    "bot": true,
+    "avatar": null
+  },
+  "session_type": "normal",
+  "session_id": "",
+  "resume_gateway_url": "",
+  "relationships": [],
+  "private_channels": [],
+  "presences": [],
+  "guilds": [{"unavailable": true, "id": "1400000000000000004"}],
+  "guild_join_requests": [],
+  "geo_ordered_rtc_regions": ["us-east", "us-central"],
+  "application": {"id": "1100000000000000001", "flags": 8953856},
+  "_trace": ["[\"gateway-prd-us-east1-b-0568\",{\"micros\":0}]"]
+}

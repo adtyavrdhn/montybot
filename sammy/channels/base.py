@@ -7,9 +7,9 @@ messages, and send, edit and upload through its API. Linking, threads, asks, the
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 from starlette.responses import Response
@@ -152,3 +152,18 @@ class Channel(Protocol):
     async def download(self, file: InboundFile) -> bytes: ...
 
     async def aclose(self) -> None: ...
+
+
+Deliver = Callable[[Inbound], Awaitable[None]]
+"""Where a `Listener` hands each delivery: `inbound.receive` for its platform, which returns once it is recorded."""
+
+
+@runtime_checkable
+class Listener(Protocol):
+    """A `Channel` whose messages arrive over its own long-lived connection (Discord's gateway) rather than the webhook.
+    The app runs `listen` on one replica at a time (`sammy.channels.leader`)."""
+
+    async def listen(self, deliver: Deliver) -> None:
+        """Stay connected, reconnecting as needed, and pass each delivery to `deliver`; returns only if it cannot go on
+        (bad credentials). Cancelled when the app stops or the replica stops leading."""
+        ...

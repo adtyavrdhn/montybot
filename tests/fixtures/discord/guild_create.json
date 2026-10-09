@@ -1,0 +1,61 @@
+{
+  "id": "1400000000000000004",
+  "name": "Pat's server",
+  "owner_id": "1200000000000000002",
+  "unavailable": false,
+  "large": false,
+  "member_count": 3,
+  "joined_at": "2025-11-02T09:15:01.004000+00:00",
+  "channels": [
+    {"type": 0, "id": "1500000000000000005", "name": "general", "position": 0, "parent_id": null, "permission_overwrites": []}
+  ],
+  "threads": [
+    {
+      "type": 11,
+      "id": "1700000000000000011",
+      "guild_id": "1400000000000000004",
+      "parent_id": "1500000000000000005",
+      "owner_id": "1100000000000000001",
+      "name": "Plan my week",
+      "last_message_id": "1700000000000000099",
+      "message_count": 4,
+      "member_count": 2,
+      "rate_limit_per_user": 0,
+      "flags": 0,
+      "thread_metadata": {
+        "archived": false,
+        "auto_archive_duration": 1440,
+        "archive_timestamp": "2026-01-14T09:00:00.000000+00:00",
+        "locked": false,
+        "create_timestamp": "2026-01-14T09:00:00.000000+00:00"
+      }
+    },
+    {
+      "type": 11,
+      "id": "1700000000000000012",
+      "guild_id": "1400000000000000004",
+      "parent_id": "1500000000000000005",
+      "owner_id": "1200000000000000007",
+      "name": "lunch",
+      "last_message_id": "1700000000000000098",
+      "message_count": 12,
+      "member_count": 3,
+      "rate_limit_per_user": 0,
+      "flags": 0,
+      "thread_metadata": {
+        "archived": false,
+        "auto_archive_duration": 1440,
+        "archive_timestamp": "2026-01-14T12:00:00.000000+00:00",
+        "locked": false,
+        "create_timestamp": "2026-01-14T12:00:00.000000+00:00"
+      }
+    }
+  ],
+  "members": [],
+  "roles": [],
+  "emojis": [],
+  "voice_states": [],
+  "presences": [],
+  "stage_instances": [],
+  "guild_scheduled_events": []
+}

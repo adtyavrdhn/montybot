@@ -1,0 +1,36 @@
+{
+  "type": 0,
+  "tts": false,
+  "timestamp": "2026-01-15T10:05:00.000000+00:00",
+  "pinned": false,
+  "mentions": [],
+  "mention_roles": [],
+  "mention_everyone": false,
+  "id": "1460000000000000102",
+  "flags": 0,
+  "embeds": [],
+  "edited_timestamp": null,
+  "content": "Describe what I attached",
+  "components": [],
+  "channel_type": 1,
+  "channel_id": "1300000000000000003",
+  "author": {
+    "username": "pat",
+    "public_flags": 0,
+    "id": "1200000000000000002",
+    "global_name": "Pat",
+    "discriminator": "0",
+    "avatar": null
+  },
+  "attachments": [
+    {
+      "id": "1460000000000000901",
+      "filename": "notes.md",
+      "size": 23,
+      "url": "https://cdn.discordapp.com/attachments/1300000000000000003/1460000000000000901/notes.md?ex=6789abcd&is=67885a4d&hm=0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0&",
+      "proxy_url": "https://media.discordapp.net/attachments/1300000000000000003/1460000000000000901/notes.md?ex=6789abcd&is=67885a4d&hm=0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0&",
+      "content_type": "text/markdown; charset=utf-8",
+      "content_scan_version": 0
+    }
+  ]
+}
