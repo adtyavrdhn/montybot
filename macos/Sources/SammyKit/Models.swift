@@ -28,16 +28,20 @@ public struct ThreadSummary: Codable, Equatable, Identifiable, Sendable {
     public let updatedAt: Date?
     /// What a waiting chat waits for: a question, an approval or a sign-in; older servers don't say.
     public let waitingFor: AskKind?
+    /// A waiting chat has waited long enough that the user was reminded of it (`REMIND_AFTER_SECONDS`, 4 h); older
+    /// servers don't say.
+    public let waitingLong: Bool
 
     enum CodingKeys: String, CodingKey {
         case id, title, status, outcome
         case updatedAt = "updated_at"
         case waitingFor = "waiting_for"
+        case waitingLong = "waiting_long"
     }
 
     public init(
         id: String, title: String, status: RunStatus? = nil, outcome: RunStatus? = nil, updatedAt: Date? = nil,
-        waitingFor: AskKind? = nil
+        waitingFor: AskKind? = nil, waitingLong: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -45,6 +49,7 @@ public struct ThreadSummary: Codable, Equatable, Identifiable, Sendable {
         self.outcome = outcome
         self.updatedAt = updatedAt
         self.waitingFor = waitingFor
+        self.waitingLong = waitingLong
     }
 
     public init(from decoder: Decoder) throws {
@@ -56,6 +61,8 @@ public struct ThreadSummary: Codable, Equatable, Identifiable, Sendable {
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt).flatMap(Self.date)
         // A kind not known yet is left unsaid.
         waitingFor = (try? container.decodeIfPresent(AskKind.self, forKey: .waitingFor)).flatMap { $0 == .other ? nil : $0 }
+        let long = try container.decodeIfPresent(Bool.self, forKey: .waitingLong) ?? false
+        waitingLong = status == .waiting && long
     }
 
     /// Python's `isoformat()`: "2026-10-07T15:58:18.123456+00:00", the fraction only when there is one.
@@ -65,11 +72,13 @@ public struct ThreadSummary: Codable, Equatable, Identifiable, Sendable {
         return withFraction.date(from: text) ?? ISO8601DateFormatter().date(from: text)
     }
 
-    /// The same chat with another status, outcome or title, keeping when it was last active.
+    /// The same chat with another status, outcome or title, keeping when it was last active. A long wait stays long
+    /// only while the chat still waits for the same thing: anything else is a new wait.
     func with(title: String? = nil, status: RunStatus?, outcome: RunStatus?, waitingFor: AskKind? = nil) -> ThreadSummary {
-        ThreadSummary(
+        let waits = status == .waiting ? waitingFor ?? self.waitingFor : nil
+        return ThreadSummary(
             id: id, title: title ?? self.title, status: status, outcome: outcome, updatedAt: updatedAt,
-            waitingFor: status == .waiting ? waitingFor ?? self.waitingFor : nil
+            waitingFor: waits, waitingLong: waitingLong && self.status == .waiting && waits == self.waitingFor
         )
     }
 }
