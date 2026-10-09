@@ -340,7 +340,7 @@ function syncDrawer() {
   $('drawer').inert = !desktop.matches && !open;
   $('drawer-backdrop').hidden = !open;
   $('menu-button').setAttribute('aria-expanded', String(open));
-  for (const id of ['layout', 'signins', 'integrations', 'schedules', 'browser-button']) $(id).inert = open;
+  for (const id of ['layout', 'signins', 'integrations', 'schedules', 'account', 'browser-button']) $(id).inert = open;
 }
 function closeDrawer(restoreFocus = false) {
   const focusInside = $('drawer').contains(document.activeElement);
@@ -1487,8 +1487,76 @@ async function openSchedules() {
 $('open-signins').addEventListener('click', () => { location.hash = '#/sign-ins'; closeDrawer(); });
 $('open-schedules').addEventListener('click', () => { location.hash = '#/schedules'; closeDrawer(); });
 $('open-integrations').addEventListener('click', () => { location.hash = '#/integrations'; closeDrawer(); });
+$('open-account').addEventListener('click', () => { location.hash = '#/account'; closeDrawer(); });
 for (const back of document.querySelectorAll('.page .back')) {
   back.addEventListener('click', () => { location.hash = state.threadId ? `#/t/${state.threadId}` : '#/new'; });
+}
+
+// --- your account: take everything with you, or delete it all (#135) ---
+
+async function openAccount() {
+  $('account-title').focus();
+  $('export-status').textContent = '';
+  $('delete-error').textContent = '';
+  $('account-email').textContent = (await api('/api/me')).email;
+}
+
+$('export-data').addEventListener('click', () => {
+  $('export-data').disabled = true;
+  report(telemetry.span('export data', {}, exportData).finally(() => { $('export-data').disabled = false; }));
+});
+
+async function exportData() {
+  // Not `api()`: the answer is the zip itself, or (for a big account) word that a link is on its way by email.
+  $('export-status').textContent = 'Gathering your data…';
+  let response;
+  try {
+    response = await fetch('/api/export', { credentials: 'same-origin' });
+  } catch (error) {
+    $('export-status').textContent = '';
+    throw offlineError(error);
+  }
+  if (response.status === 202) {
+    const { email } = await response.json();
+    $('export-status').textContent = `There is a lot of it, so Sammy is zipping it up. A link to download it will arrive at ${email} soon, and works for a day.`;
+    return;
+  }
+  if (!response.ok) {
+    $('export-status').textContent = '';
+    if (response.status === 401) signedOut();
+    throw new Error(problem(response.status, null));
+  }
+  const name = (response.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/);
+  const url = URL.createObjectURL(await response.blob());
+  const link = element('a');
+  link.href = url;
+  link.download = name ? name[1] : 'sammy-export.zip';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  $('export-status').textContent = 'Your data is downloading.';
+}
+
+$('delete-account-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!confirm('Delete your Sammy account and everything in it? This cannot be undone.')) return;
+  report(deleteAccount());
+});
+
+async function deleteAccount() {
+  $('delete-error').textContent = '';
+  try {
+    await telemetry.span('delete account', {}, () => (
+      api('/api/account', { method: 'DELETE', body: { password: $('delete-password').value } })));
+  } catch (error) {
+    if (error.status !== 403) throw error;
+    $('delete-error').textContent = error.message;  // the password was wrong
+    return;
+  }
+  // The account is gone, and the session with it: what telemetry has left cannot be sent any more.
+  await Promise.race([stopTelemetry(), new Promise((resolve) => setTimeout(resolve, 2000))]);
+  signedOut();
+  location.hash = '';
+  location.reload();
 }
 
 // --- notifications: a push to the phone when the bot needs the user ---
@@ -1553,8 +1621,10 @@ $('enable-notifications').addEventListener('click', () => (
 // --- routing ---
 
 const PAGES = { '#/sign-ins': ['signins', 'Saved browser data', openSignins],
-  '#/integrations': ['integrations', 'Integrations', openIntegrations], '#/schedules': ['schedules', 'Schedules', openSchedules] };
-const PAGE_BUTTONS = { '#/sign-ins': 'open-signins', '#/integrations': 'open-integrations', '#/schedules': 'open-schedules' };
+  '#/integrations': ['integrations', 'Integrations', openIntegrations], '#/schedules': ['schedules', 'Schedules', openSchedules],
+  '#/account': ['account', 'Your account', openAccount] };
+const PAGE_BUTTONS = { '#/sign-ins': 'open-signins', '#/integrations': 'open-integrations', '#/schedules': 'open-schedules',
+  '#/account': 'open-account' };
 
 async function route() {
   const hash = location.hash;

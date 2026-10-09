@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     """The longest one `run_code` call may compute, not counting time waiting on the browser."""
     workspaces_dir: Path = Path('data/workspaces')
     """Each user's files, one directory per user, which code sees at `/work` and browser downloads go to."""
+    exports_dir: Path = Path('data/exports')
+    """Exports built in the background (sammy.export), each kept a day for the link emailed to its user."""
+    export_inline_bytes: int = 50 * 1024 * 1024
+    """With email set up, an account bigger than this is exported in the background and emailed as a link."""
     cpython: str = '/usr/bin/python3'
     """The CPython `run_python` runs in its jail (#6), with pandas and pypdf installed. Outside `/usr`, `/bin` and
     `/lib` the jail cannot see it."""

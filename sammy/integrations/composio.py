@@ -155,6 +155,13 @@ class Composio:
         await self._request('DELETE', f'connected_accounts/{account_id}')
         return True
 
+    async def disconnect_all(self, user_id: str) -> None:
+        """Remove every account of the user's, whatever its state (`accounts` leaves some out): for deleting them."""
+        who = self.composio_user(user_id)
+        for item in await self._pages('connected_accounts', {'user_ids': who}):
+            if item.get('user_id') == who:
+                await self._request('DELETE', f'connected_accounts/{item["id"]}')
+
     async def _auth_config(self, toolkit: str) -> str:
         """Our auth config for `toolkit`, made (Composio-managed OAuth) the first time anyone connects it."""
         name = f'{AUTH_CONFIG_PREFIX}{toolkit}'

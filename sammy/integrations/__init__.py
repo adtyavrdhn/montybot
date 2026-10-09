@@ -278,6 +278,12 @@ class Integrations:
     async def disconnect(self, user_id: str, account_id: str) -> bool:
         return self.composio is not None and await self.composio.disconnect(user_id, account_id)
 
+    async def disconnect_all(self, user_id: str) -> None:
+        """Every app the user connected, when their account is deleted. Their MCP servers are rows of ours, which go
+        with the account (sammy.accounts)."""
+        if self.composio is not None:
+            await self.composio.disconnect_all(user_id)
+
     # --- the user's MCP servers ---
 
     async def add_server(

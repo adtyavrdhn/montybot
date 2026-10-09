@@ -65,6 +65,7 @@
           <button id="open-integrations" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v4m6-4v4M7 7h10v4a5 5 0 0 1-10 0Zm5 9v5"/></svg> Integrations</button>
           <button id="open-schedules" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16m-12 4h3"/></svg> Schedules</button>
           <button id="enable-notifications" class="link" hidden><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9Zm4 12h4"/></svg> <span id="notifications-label">Notify me when Sammy needs me</span></button>
+          <button id="open-account" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg> Your account</button>
           <button id="signout" class="link">Sign out</button>
         </div>
         <p class="sidebar-note">A browser of its own.<br>You in control.</p>
@@ -164,6 +165,25 @@
           <div class="page-heading"><span class="page-symbol" aria-hidden="true">◷</span><h2 id="schedules-title" tabindex="-1">Schedules</h2></div>
           <p class="muted">Tasks Sammy runs on your schedule. Pause a task without deleting it, or resume it when you're ready.</p>
           <ul id="schedule-list" aria-label="Scheduled tasks"></ul>
+        </div>
+      </section>
+      <section id="account" class="page" aria-labelledby="account-title" hidden>
+        <div class="page-content">
+          <button class="secondary back">Back to chat</button>
+          <div class="page-heading"><span class="page-symbol" aria-hidden="true">◎</span><h2 id="account-title" tabindex="-1">Your account</h2></div>
+          <p class="muted">Signed in as <strong id="account-email"></strong>.</p>
+          <h3 class="account-heading">Take your data with you</h3>
+          <p class="muted">One zip file with your chats (as Markdown and JSON) and their files, your files, your memories, your schedules and the names of your integrations. Never your saved sign-ins, passwords or tokens.</p>
+          <button id="export-data" type="button" class="secondary">Export my data</button>
+          <p id="export-status" role="status"></p>
+          <h3 class="account-heading">Delete your account</h3>
+          <p class="muted">Sammy stops your tasks, deletes your schedules, disconnects your integrations, closes its browser, and deletes your chats, files, memories and saved sign-ins. This cannot be undone.</p>
+          <form id="delete-account-form" class="account-form">
+            <label for="delete-password">Your password, to confirm</label>
+            <input id="delete-password" type="password" autocomplete="current-password" maxlength="1024" required>
+            <p id="delete-error" class="error" role="alert"></p>
+            <button type="submit" class="bad">Delete my account</button>
+          </form>
         </div>
       </section>
     </section>

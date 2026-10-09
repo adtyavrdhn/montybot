@@ -96,6 +96,7 @@ services:
       CLAUDE_CODE_CREDENTIALS: file
       CLAUDE_CODE_AUTH_FILE: /data/claude-code/auth.json
       WORKSPACES_DIR: /data/workspaces
+      EXPORTS_DIR: /data/exports
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
       JEV_MODEL: ${JEV_MODEL:-jev-latest}
       JEV_THRESHOLD: ${JEV_THRESHOLD:-0.8}
@@ -108,6 +109,7 @@ services:
     volumes:
       - claude-code:/data/claude-code
       - workspaces:/data/workspaces
+      - exports:/data/exports
       - browser-egress:/run/browser-egress:ro
     # bwrap makes new namespaces for each Chrome. Docker's defaults forbid that, so (see deploy/README.md):
     # - seccomp.json is Docker's default profile plus the namespace and mount calls bwrap makes;
@@ -191,6 +193,7 @@ volumes:
   postgres: {}
   claude-code: {}
   workspaces: {}
+  exports: {}
   browser-egress: {}
   caddy-data: {}
   caddy-config: {}
