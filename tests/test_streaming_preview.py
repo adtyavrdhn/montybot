@@ -71,7 +71,11 @@ def deps(run_id: str, monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setattr(agent_module, 'recall', nothing)
     monkeypatch.setattr(agent_module, 'connected_integrations', nothing)
     return SimpleNamespace(
-        run_id=run_id, run=SimpleNamespace(id=run_id, prompt='hello'), schedule=None, local_time='', squirrel_name=''
+        run_id=run_id,
+        run=SimpleNamespace(id=run_id, prompt='hello', trigger='message'),
+        schedule=None,
+        local_time='',
+        squirrel_name='',
     )
 
 
