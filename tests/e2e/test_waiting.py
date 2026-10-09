@@ -138,6 +138,6 @@ def test_a_run_nobody_answers_stops_and_frees_its_browser(client: Client, shop: 
     assert lease is None  # the browser is free for the user's other chats
     (listed,) = client.http.get('/api/threads').json()
     assert (listed['status'], listed['outcome']) == (None, 'stopped')
-    assert client.http.post(f'/api/asks/{handoff["id"]}', json={}).status_code == 409  # too late
+    assert client.http.post(f'/api/asks/{handoff["id"]}', json={'done': True}).status_code == 409  # too late
     client.ask('Say hello.', thread)  # the chat takes a new message
     assert 'hello' in client.wait_for_reply(thread).lower()
