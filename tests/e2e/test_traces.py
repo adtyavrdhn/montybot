@@ -66,7 +66,9 @@ def traced(
 def serve_traced(
     database_url: str, workspaces_dir: Path, **settings: Any
 ) -> Iterator[tuple[InProcessApp, InMemorySpanExporter]]:
-    """The app on a thread with `sammy serve`'s observability, plus an in-memory exporter."""
+    """The app on a thread with `sammy serve`'s observability, plus an in-memory exporter. `settings` may name
+    another scripted model."""
+    settings = {'model': 'script:e2e.scripts:model', **settings}
     exporter = InMemorySpanExporter()
     port = free_port()
     configured = Settings(
@@ -74,7 +76,6 @@ def serve_traced(
         port=port,
         session_secret=SecretStr('test-session-secret'),
         encryption_key=SecretStr('bW9udHlib3QtdGVzdC1rZXktMzItYnl0ZXMtbG9uZyE='),
-        model='script:e2e.scripts:model',
         browser_backend='sites.html_browser:new_backend',
         allow_private_networks=True,
         workspaces_dir=workspaces_dir,

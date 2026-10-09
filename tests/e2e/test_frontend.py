@@ -27,6 +27,7 @@ class MockAPI:
     run: dict[str, object] | None = None
     sites: list[dict[str, str]] = field(default_factory=list)
     schedules: list[dict[str, object]] = field(default_factory=list)
+    usage: dict[str, object] = field(default_factory=dict)
     uploads: dict[str, dict[str, object]] = field(default_factory=dict)  # by id, as `POST /api/attachments` made them
     upload_status: int = 201
     thread_status: str | None = None
@@ -106,6 +107,8 @@ class MockAPI:
             self.sites = []
         elif path == '/api/schedules':
             result = self.schedules
+        elif path == '/api/usage':
+            result = self.usage
         elif path.startswith('/api/schedules/'):
             if method == 'DELETE':
                 self.schedules = []
@@ -315,6 +318,30 @@ def test_saved_signins_and_schedules(frontend: tuple[Page, MockAPI]) -> None:
     assert ('POST', '/api/schedules/task/pause', {}) in mock.calls
     assert ('POST', '/api/schedules/task/resume', {}) in mock.calls
     assert ('DELETE', '/api/schedules/task', None) in mock.calls
+
+
+def test_usage(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    mock.usage = {
+        'today': 0.004,
+        'month': 7.5,
+        'daily_cap': None,
+        'monthly_cap': 20.0,
+        'tokens': {'input': 1200000, 'output': 30000, 'cache_read': 900000},
+        'threads': [{'id': THREAD, 'name': 'Weekly groceries', 'cost': 6.0}, {'id': None, 'name': None, 'cost': 1.5}],
+        'schedules': [{'id': 'task', 'name': 'Weekly groceries', 'cost': 5.25}],
+    }
+    workspace(page, mock)
+    page.click('#open-usage')
+    expect(page.locator('#usage')).to_be_visible()
+    expect(page.locator('#usage-title')).to_be_focused()
+    expect(page.locator('#open-usage')).to_have_attribute('aria-current', 'page')
+    expect(page.locator('#usage-totals li').nth(0)).to_have_text('Todayunder $0.01')
+    expect(page.locator('#usage-totals li').nth(1)).to_have_text('This month$7.50 of $20.00')
+    expect(page.locator('#usage-tokens')).to_contain_text('1,200,000 tokens in (900,000 of them from the cache)')
+    expect(page.locator('#usage-threads li')).to_have_text(['Weekly groceries$6.00', 'Deleted chats$1.50'])
+    expect(page.locator('#usage-schedules li')).to_have_text(['Weekly groceries$5.25'])
+    no_overflow(page)
 
 
 @pytest.mark.parametrize('kind', ['question', 'approval', 'handoff'])

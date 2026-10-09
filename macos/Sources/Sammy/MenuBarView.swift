@@ -81,6 +81,7 @@ struct SettingsView: View {
         TabView {
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
             AccountSettings().tabItem { Label("Account", systemImage: "person.crop.circle") }
+            UsageSettings().tabItem { Label("Usage", systemImage: "chart.bar") }
         }
         .frame(width: 460)
     }
@@ -163,6 +164,64 @@ struct GeneralSettings: View {
         opensAtLogin = SMAppService.mainApp.status == .enabled
         guard Bundle.main.bundleIdentifier != nil else { return }
         status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
+}
+
+/// What the model has cost the user (`GET /api/usage`), with their spending limits.
+struct UsageSettings: View {
+    @Environment(AppModel.self) private var app
+    @State private var usage: Usage?
+    @State private var failure: String?
+
+    var body: some View {
+        Form {
+            if let usage {
+                Section {
+                    LabeledContent("Today", value: Self.spent(usage.today, of: usage.dailyCap))
+                    LabeledContent("This month", value: Self.spent(usage.month, of: usage.monthlyCap))
+                } footer: {
+                    Text("What Sammy's AI model has cost you, estimated from its published prices. Days and months are in your time zone.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                Section("This month by chat") { rows(usage.threads, empty: "Nothing spent this month yet.") }
+                Section("This month by schedule") { rows(usage.schedules, empty: "No schedule has spent anything this month.") }
+            } else if let failure {
+                Text(failure).font(.system(size: 12)).foregroundStyle(Palette.onErrorContainer)
+            } else {
+                ProgressView()
+            }
+        }
+        .formStyle(.grouped)
+        .task { await load() }
+    }
+
+    @ViewBuilder
+    private func rows(_ spenders: [Usage.Spender], empty: String) -> some View {
+        if spenders.isEmpty {
+            Text(empty).foregroundStyle(.secondary)
+        }
+        ForEach(spenders) { spender in
+            LabeledContent(spender.id == nil ? "Deleted chats" : spender.name ?? "", value: Self.dollars(spender.cost))
+        }
+    }
+
+    private func load() async {
+        do {
+            usage = try await app.client.usage()
+            failure = nil
+        } catch {
+            failure = "Couldn't load your usage: \(error.localizedDescription)"
+        }
+    }
+
+    static func spent(_ amount: Double, of cap: Double?) -> String {
+        guard let cap else { return dollars(amount) }
+        return "\(dollars(amount)) of \(dollars(cap))"
+    }
+
+    static func dollars(_ amount: Double) -> String {
+        amount > 0 && amount < 0.005 ? "under $0.01" : String(format: "$%.2f", amount)
     }
 }
 

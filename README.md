@@ -47,6 +47,10 @@ Every layer of Sammy avoids paying for what it doesn't need.
 - **One box, no fleet.** Everything is Caddy, the app, Postgres, nightly backups and an egress proxy on **one Linux
   server** with Docker Compose (`deploy/`). DBOS runs on the same Postgres, so there is no Redis, no queue service, no
   Kubernetes and no separate workflow cluster. The web app is plain HTML, CSS and JS with **no build step**.
+- **A ceiling on every user's spend.** Each model request's tokens and cost are recorded per user, run and model,
+  priced by genai-prices exactly as Logfire shows them. Optional daily and monthly caps (`DAILY_SPEND_CAP`,
+  `MONTHLY_SPEND_CAP`) warn in the chat near the limit, then refuse new runs **before any model call** and pause
+  schedules, so a runaway schedule cannot run up a bill (`sammy/usage.py`).
 - **Watches, not polling humans.** A schedule can be a *watch* ("tell me when a slot opens"): it calls
   `notify_user` once, by push and email, then **pauses itself** so it stops spending (`sammy/schedule_tools.py`).
 - **Telemetry that doesn't bloat your bill.** The apps' polling never starts a trace (`only_in_trace=True`). Client
@@ -172,6 +176,21 @@ and removed on the Integrations page of the web and Mac apps.
   or an OAuth sign-in (discovery, dynamic client registration, PKCE, refresh). The URL, headers and tokens are sealed
   with the user's data key. Requests go to public addresses only, checked as each connection opens
   (`sammy/integrations/egress.py`), and are never traced, as a server's URL can hold a key.
+
+## Usage and spending limits
+
+After each model request, Sammy records its tokens (cache reads and writes too) and its estimated cost per user, run
+and model in `sammy.usage` (`sammy/usage.py`). The cost is the one Pydantic AI puts on the response from
+[genai-prices](https://github.com/pydantic/genai-prices), the same number Logfire shows as `operation.cost`. A model
+genai-prices does not know records tokens without a cost, and does not count towards a limit. Deleting a chat keeps
+what it spent.
+
+Set `DAILY_SPEND_CAP` and `MONTHLY_SPEND_CAP` (US dollars; days and months in the user's time zone) to cap each user.
+The reply that takes a user past `SPEND_WARNING` (0.8) of a cap says so. At a cap, a new message gets a reply saying
+why instead of a run (`run.refused`, before any model call), and a schedule's next occurrence does the same and pauses
+the schedule until the user resumes it. A run already going when the cap is reached finishes. The Usage page of the
+web app and the Usage tab of the Mac app's Settings show today, this month, and the month by chat and by schedule
+(`GET /api/usage`).
 
 ## Observability
 

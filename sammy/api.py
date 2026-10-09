@@ -27,7 +27,7 @@ from pydantic import AfterValidator, BaseModel, Field, StrictBool, StringConstra
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
-from sammy import approvals, attachments, auth, schedules, store, streaming, workflows
+from sammy import approvals, attachments, auth, schedules, store, streaming, usage, workflows
 from sammy.browser.contract import (
     BrowserError,
 )
@@ -764,6 +764,35 @@ async def set_paused(request: Request, user: User, paused: bool) -> Response:
 async def delete_schedule(request: Request, user: User) -> Response:
     deleted = await schedules.delete(resources_of(request).pool, user.id, str(request.path_params['schedule_id']))
     return JSONResponse({'ok': True}) if deleted else NOT_FOUND
+
+
+# --- usage (sammy.usage) ---
+
+
+@auth.signed_in
+async def read_usage(request: Request, user: User) -> Response:
+    """What the user's model requests cost (US dollars, as genai-prices estimates them) today and this month, in their
+    time zone; the caps (null when unset); this month's tokens; and the month by chat and by schedule, most first. A
+    chat since deleted has a null `id` and `name`."""
+    resources = resources_of(request)
+    async with resources.pool.connection() as connection:
+        month = await usage.month(connection, user.id)
+    settings = resources.settings
+    return JSONResponse(
+        {
+            'today': float(month.spent.today),
+            'month': float(month.spent.month),
+            'daily_cap': None if settings.daily_spend_cap is None else float(settings.daily_spend_cap),
+            'monthly_cap': None if settings.monthly_spend_cap is None else float(settings.monthly_spend_cap),
+            'tokens': {
+                'input': month.input_tokens,
+                'output': month.output_tokens,
+                'cache_read': month.cache_read_tokens,
+            },
+            'threads': [{'id': s.id, 'name': s.name, 'cost': float(s.cost)} for s in month.threads],
+            'schedules': [{'id': s.id, 'name': s.name, 'cost': float(s.cost)} for s in month.schedules],
+        }
+    )
 
 
 # --- memory ---

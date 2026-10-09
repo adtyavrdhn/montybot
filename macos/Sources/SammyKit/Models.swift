@@ -543,6 +543,30 @@ public struct SavedSite: Codable, Equatable, Identifiable, Sendable {
     public var id: String { site }
 }
 
+/// What the model has cost the user, in US dollars as genai-prices estimates it: today and this month (in their time
+/// zone), the spending limits (none when unset), and the month by chat and by schedule, most first.
+public struct Usage: Codable, Equatable, Sendable {
+    public struct Spender: Codable, Equatable, Identifiable, Sendable {
+        /// None for chats since deleted.
+        public let id: String?
+        public let name: String?
+        public let cost: Double
+    }
+
+    public let today: Double
+    public let month: Double
+    public let dailyCap: Double?
+    public let monthlyCap: Double?
+    public let threads: [Spender]
+    public let schedules: [Spender]
+
+    enum CodingKeys: String, CodingKey {
+        case today, month, threads, schedules
+        case dailyCap = "daily_cap"
+        case monthlyCap = "monthly_cap"
+    }
+}
+
 extension String {
     /// A chat title as a person reads it: links shown as their site, "Order eggs from shop.example" rather than
     /// "Order eggs from https://shop.example/?ref=…".

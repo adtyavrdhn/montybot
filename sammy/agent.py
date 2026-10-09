@@ -25,6 +25,7 @@ from sammy.integration_tools import connected_integrations, integration_tools
 from sammy.memory import memory_tools, recall
 from sammy.schedule_tools import INSTRUCTIONS as SCHEDULE_INSTRUCTIONS
 from sammy.schedule_tools import schedule_tools, scheduled_run
+from sammy.usage import RecordUsage
 
 INSTRUCTIONS = """\
 You are Sammy, a flying squirrel with a browser and opinions. You do things for the user on the web, in your own
@@ -127,6 +128,7 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
         ],
         capabilities=[
             HandleDeferredToolCalls(handler=approvals.handle_approvals),
+            RecordUsage(),  # each model request's tokens and cost, for the user's spend caps (sammy.usage)
             DBOSDurability(
                 # The name runs' model steps were recorded under, from when there was a streaming and a
                 # non-streaming agent; keep it so paused runs resume.

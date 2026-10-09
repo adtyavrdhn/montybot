@@ -11,6 +11,7 @@ DBOS scheduler, at each time the cron names
     step schedule.start   skip if the schedule is gone, paused, or its last occurrence is still going;
                           else store.create_run(trigger='schedule') in the schedule's thread
     run_thread(run_id)    the usual run (sammy.workflows), as a child workflow with the run's id
+    step schedule.pause   a run refused at the user's spend cap (sammy.usage) pauses its schedule; its reply says so
     step schedule.notify  a recurring task tells the user it finished (or failed); a watch tells them itself when it
                           finds something (notify_user, which also pauses it), and otherwise only if it failed
 ```
@@ -172,6 +173,9 @@ async def run_schedule(scheduled_at: datetime, context: dict[str, str]) -> None:
     run_id, schedule = started
     handle = await workflows.start(run_id)
     outcome = await handle.get_result()
+    if outcome == workflows.REFUSED:
+        await DBOS.run_step_async({**workflows.RETRIED, 'name': 'schedule.pause'}, pause, schedule)
+        outcome = 'failed'
     if not schedule.watch or outcome == 'failed':
         await DBOS.run_step_async(
             {**workflows.RETRIED, 'name': 'schedule.notify'}, notify_ended, resources, schedule, run_id, outcome
@@ -216,4 +220,8 @@ async def notify_ended(resources: Resources, schedule: Schedule, run_id: str, ou
 async def notify_found(resources: Resources, schedule: Schedule, run_id: str) -> None:
     """A watch found what the user waits for: tell them, and pause it, so it tells them once."""
     await notify(resources, user_id=schedule.user_id, thread_id=schedule.thread_id, kind='found', tag=run_id)
+    await pause(schedule)
+
+
+async def pause(schedule: Schedule) -> None:
     await asyncio.to_thread(DBOS.pause_schedule, dbos_name(schedule.id))
