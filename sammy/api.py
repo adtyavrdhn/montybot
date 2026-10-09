@@ -17,7 +17,7 @@ import secrets
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, TypeVar
 from urllib.parse import quote, unquote, urlsplit
 from uuid import UUID
@@ -271,13 +271,17 @@ async def list_threads(request: Request, user: User) -> Response:
     """Each thread with the status of its unfinished run, if it has one: `running`, `waiting` (for the user) or
     `queued`; and otherwise how its latest run ended (`outcome`: `done`, `failed` or `stopped`); and when it last had
     something happen (`updated_at`, ISO 8601), which is also the order of the list; and for a waiting thread, what
-    it waits for (`waiting_for`: `question`, `approval` or `handoff`)."""
-    async with resources_of(request).pool.connection() as connection:
+    it waits for (`waiting_for`: `question`, `approval` or `handoff`), and whether it has waited long enough for a
+    reminder (`waiting_long`, `remind_after_seconds`)."""
+    resources = resources_of(request)
+    async with resources.pool.connection() as connection:
         threads = await store.list_threads(connection, user.id)
         active = await store.active_runs(connection, user.id)
         outcomes = await store.latest_outcomes(connection, user.id)
         last_active = await store.last_active(connection, user.id)
         waiting = await store.waiting_for(connection, user.id)
+    waits = {thread_id: wait for thread_id, wait in waiting.items() if active.get(thread_id) == 'waiting'}
+    long_ago = datetime.now(UTC) - timedelta(seconds=resources.settings.remind_after_seconds)
     return JSONResponse(
         [
             {
@@ -286,7 +290,8 @@ async def list_threads(request: Request, user: User) -> Response:
                 'status': active.get(t.id),
                 'outcome': outcomes.get(t.id),
                 'updated_at': at.isoformat() if (at := last_active.get(t.id)) else None,
-                'waiting_for': waiting.get(t.id) if active.get(t.id) == 'waiting' else None,
+                'waiting_for': waits[t.id][0] if t.id in waits else None,
+                'waiting_long': t.id in waits and waits[t.id][1] <= long_ago,
             }
             for t in threads
         ]

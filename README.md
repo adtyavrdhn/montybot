@@ -115,6 +115,10 @@ layer reports in, in **one connected trace**.
   opens spreadsheets with real CPython, and hands files back with `share_file`.
 - **Memory, schedules and notifications.** Per-user memories, cron schedules in your own time zone, watches, and web
   push plus email when Sammy needs you or finishes.
+- **Nothing left hanging.** A run still waiting on you after 4 hours sends **one** reminder per question, approval
+  or hand-off (`REMIND_AFTER_SECONDS`), and the chat list marks it "Still needs you". After a day
+  (`ASK_TIMEOUT_SECONDS`) it stops by itself, frees its browser and says in the chat what it waited for, so the chat
+  takes new messages again (`sammy/reminders.py`).
 - **Everywhere you are.** A framework-free web app that works on phones, and a native SwiftUI **Mac app** with a
   menu bar, a command palette and an animated 3D squirrel. 🐿️
 
@@ -216,8 +220,8 @@ On desktop, chats stay in a persistent sidebar; on a phone, the Chats button ope
 
 Create an account or sign in, then describe a task in a new chat. Example prompts fill the message box for you to
 review before sending. Watch Sammy's browser while it works, take over when it asks you to sign in, and answer
-questions or approve actions in the chat. Saved sign-ins and schedules are available in the sidebar, alongside
-notification opt-in. Motion respects your device's reduced-motion preference.
+questions or approve actions in the chat. A chat left waiting on you long enough for a reminder says "Still needs
+you" in the list. Saved sign-ins and schedules are available in the sidebar, alongside notification opt-in. Motion respects your device's reduced-motion preference.
 
 ## Mac app
 

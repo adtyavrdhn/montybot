@@ -150,16 +150,17 @@ async def latest_outcomes(connection: Connection, user_id: str) -> dict[str, Run
     return {str(row['thread_id']): row['status'] for row in await cursor.fetchall() if row['status'] in FINISHED}
 
 
-async def waiting_for(connection: Connection, user_id: str) -> dict[str, str]:
-    """What each of the user's waiting threads waits for (`question`, `approval` or `handoff`): the latest open ask
-    of its waiting run, by thread id, so the chat list can say "Approval" rather than just "needs you"."""
+async def waiting_for(connection: Connection, user_id: str) -> dict[str, tuple[str, datetime]]:
+    """What each of the user's waiting threads waits for (`question`, `approval` or `handoff`) and since when: the
+    latest open ask of its waiting run, by thread id, so the chat list can say "Approval" rather than just "needs
+    you", and mark the chats left waiting long."""
     cursor = await connection.execute(
-        'SELECT DISTINCT ON (r.thread_id) r.thread_id, a.kind FROM sammy.runs r '
+        'SELECT DISTINCT ON (r.thread_id) r.thread_id, a.kind, a.created_at FROM sammy.runs r '
         'JOIN sammy.asks a ON a.run_id = r.id AND a.answer IS NULL '
         "WHERE r.user_id = %s AND r.status = 'waiting' ORDER BY r.thread_id, a.occurrence DESC",
         (user_id,),
     )
-    return {str(row['thread_id']): row['kind'] for row in await cursor.fetchall()}
+    return {str(row['thread_id']): (row['kind'], row['created_at']) for row in await cursor.fetchall()}
 
 
 async def last_active(connection: Connection, user_id: str) -> dict[str, datetime]:

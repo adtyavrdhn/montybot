@@ -16,7 +16,7 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from sammy import api, approvals, tunnel_api, workflows
+from sammy import api, approvals, reminders, tunnel_api, workflows
 from sammy.live import live_app
 from sammy.observability import ClientTraceContext
 from sammy.resources import Resources, open_resources
@@ -33,6 +33,7 @@ def create_app(settings: Settings) -> ASGIApp:
         async with open_resources(settings) as resources:
             await approvals.redeliver_answers(resources)
             await workflows.start_queued(resources)
+            await reminders.schedule(settings)
             yield {'resources': resources}
 
     app = Starlette(

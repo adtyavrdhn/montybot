@@ -10,7 +10,7 @@ workflow (sammy.workflows.run_thread)              web app (sammy.api.answer)
                                                      store.answer_ask (first answer wins)
                                                      DBOS.send(run_id, answer, 'ask-<n>')
     step: status running
-  <- the answer
+  <- the answer, or Unanswered after `ask_timeout_seconds`: the run stops (sammy.workflows)
 ```
 
 `DBOS.recv` must be called from workflow code, not from inside a step. Pydantic AI runs plain function tools and
@@ -36,6 +36,14 @@ from sammy.notifications import notify
 from sammy.resources import Resources
 
 
+class Unanswered(Exception):
+    """Nobody answered an ask in time. It ends the agent's run, and the workflow stops the run (`run.expire`)."""
+
+    def __init__(self, kind: AskKind) -> None:
+        super().__init__(kind)
+        self.kind: AskKind = kind
+
+
 def ask_id(run_id: str, occurrence: int) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f'sammy:ask:{run_id}:{occurrence}'))
 
@@ -46,8 +54,8 @@ def topic(occurrence: int) -> str:
 
 async def ask(
     ctx: RunContext[RunDeps], kind: AskKind, prompt: str, details: dict[str, Any] | None = None
-) -> dict[str, Any] | None:
-    """Ask the run's user and wait for the answer. None if nobody answered in time."""
+) -> dict[str, Any]:
+    """Ask the run's user and wait for the answer. Raises `Unanswered` if nobody answered in time."""
     deps = ctx.deps
     occurrence = deps.asked.next()
     the_id = ask_id(deps.run_id, occurrence)
@@ -70,7 +78,11 @@ async def ask(
     late = await DBOS.run_step_async(
         {'name': f'ask.close.{occurrence}'}, close_ask, deps.resources, the_id, deps.run_id, answer is None
     )
-    return answer if answer is not None else late
+    if answer is not None:
+        return answer
+    if late is None:
+        raise Unanswered(kind)
+    return late
 
 
 async def save_browser(resources: Resources, run_id: str, user_id: str) -> None:
@@ -185,9 +197,7 @@ async def handle_approvals(ctx: RunContext[RunDeps], requests: DeferredToolReque
         args = call.args_as_dict()
         what = describe(call.tool_name, args)
         reply = await ask(ctx, 'approval', what, {'tool': call.tool_name, 'target': str(args.get('target', ''))})
-        if reply is None:
-            verdicts[call.tool_call_id] = ToolDenied('The user did not answer in time, so this was not done.')
-        elif reply.get('approved'):
+        if reply.get('approved'):
             verdicts[call.tool_call_id] = True
         else:
             reason = str(reply.get('reason') or 'no reason given')

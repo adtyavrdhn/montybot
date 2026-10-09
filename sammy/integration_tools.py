@@ -193,8 +193,6 @@ async def connect_integration(ctx: RunContext[RunDeps], service: str, reason: st
         )
     reply = await approvals.ask(ctx, 'connect', reason, {'integration': offer})
     deps.connected.text = None  # what is connected may have changed: look again
-    if reply is None:
-        return f'The user did not connect {offer["name"]} in time.'
     if not reply.get('connected'):
         return f'The user chose not to connect {offer["name"]} now. Do what you can without it, and say what you could not.'
     after = await DBOS.run_step_async({'name': 'integrations.find'}, find)

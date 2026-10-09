@@ -97,7 +97,12 @@ class Settings(BaseSettings):
     prefix: Sammy never lists, uses or removes a connection outside it."""
 
     ask_timeout_seconds: float = 24 * 60 * 60
-    """How long a run waits for the user to answer a question, an approval or a hand-off."""
+    """How long a run waits for the user to answer a question, an approval or a hand-off. Then it stops, frees its
+    browser and says in the chat what it waited for."""
+    remind_after_seconds: float = 4 * 60 * 60
+    """How long a run waits on the user before they get one reminder, by push and email (`sammy/reminders.py`)."""
+    reminder_cron: str = '*/5 * * * *'
+    """How often Sammy looks for runs to remind the user about: a DBOS cron, with seconds first if it has six fields."""
     history_limit: int = 40
 
     @field_validator('composio_api_key', mode='before')

@@ -1,7 +1,8 @@
 """Telling the user the bot needs them: a web push to each browser or phone they turned it on in, and an email.
 
-Sent when a run asks something (`sammy.approvals.open_ask`), when a scheduled task finishes, and when a watch finds
-what the user waits for (`sammy.schedules`). The message says only which of these it is and links to the chat,
+Sent when a run asks something (`sammy.approvals.open_ask`), once more if the ask is left waiting (`sammy.reminders`),
+when a scheduled task finishes, and when a watch finds what the user waits for (`sammy.schedules`). The message says
+only which of these it is and links to the chat,
 which needs signing in: no prompt, no page, no hand-off link. Either channel is off until it is
 configured (`VAPID_*` for push, `SMTP_URL` for email). A failure to notify is logged by type and never fails the run.
 """
@@ -23,7 +24,7 @@ from psycopg.types.json import Jsonb
 from pywebpush import WebPushException, webpush  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 
 from sammy.db import Connection
-from sammy.models import NoticeKind
+from sammy.models import AskKind, NoticeKind
 from sammy.resources import Resources
 from sammy.settings import Settings
 
@@ -41,6 +42,13 @@ SUBJECT = {
     'failed': 'Sammy could not finish a task',
     'found': 'Sammy found something',
 }
+STILL: dict[AskKind, str] = {
+    'question': 'Sammy is still waiting for you to answer its question.',
+    'approval': 'Sammy is still waiting for your approval before it goes on.',
+    'handoff': 'Sammy is still waiting for you to take over its browser.',
+    'connect': 'Sammy is still waiting for you to connect an app.',
+}
+"""What a reminder says, by what the run waits for."""
 
 
 def new_vapid_keys() -> tuple[str, str]:
@@ -92,13 +100,24 @@ async def remove_subscription(connection: Connection, user_id: str, endpoint: st
 
 async def notify(resources: Resources, *, user_id: str, thread_id: str, kind: NoticeKind, tag: str) -> None:
     """Push and email that the bot needs the user. Never raises: a failure is logged by type only."""
+    subject = SUBJECT.get(kind, 'Sammy needs you')
+    await _send(resources, user_id=user_id, thread_id=thread_id, tag=tag, body=WHAT[kind], subject=subject)
+
+
+async def remind(resources: Resources, *, user_id: str, thread_id: str, kind: AskKind, tag: str) -> None:
+    """Push and email that a run still waits for the user. Never raises, as `notify`."""
+    subject = 'Sammy is still waiting for you'
+    await _send(resources, user_id=user_id, thread_id=thread_id, tag=tag, body=STILL[kind], subject=subject)
+
+
+async def _send(resources: Resources, *, user_id: str, thread_id: str, tag: str, body: str, subject: str) -> None:
     try:
-        await _notify(resources, user_id=user_id, thread_id=thread_id, kind=kind, tag=tag)
+        await _notify(resources, user_id=user_id, thread_id=thread_id, tag=tag, body=body, subject=subject)
     except Exception as error:  # noqa: BLE001  a notification must never fail the run
         logfire.warn('A notification was not sent: {error_type}', error_type=type(error).__name__)
 
 
-async def _notify(resources: Resources, *, user_id: str, thread_id: str, kind: NoticeKind, tag: str) -> None:
+async def _notify(resources: Resources, *, user_id: str, thread_id: str, tag: str, body: str, subject: str) -> None:
     settings = resources.settings
     async with resources.pool.connection() as connection:
         cursor = await connection.execute('SELECT email FROM sammy.users WHERE id = %s', (user_id,))
@@ -109,7 +128,6 @@ async def _notify(resources: Resources, *, user_id: str, thread_id: str, kind: N
         )
         subscriptions = await cursor.fetchall()
     url = f'{settings.public_url}/#/t/{thread_id}'
-    body = WHAT[kind]
     gone: list[str] = []
     if settings.vapid_private_key is not None and subscriptions:
         payload = json.dumps({'title': 'Sammy', 'body': body, 'url': url, 'tag': tag})
@@ -119,7 +137,7 @@ async def _notify(resources: Resources, *, user_id: str, thread_id: str, kind: N
         async with resources.pool.connection() as connection:
             await connection.execute('DELETE FROM sammy.push_subscriptions WHERE endpoint = ANY(%s)', (gone,))
     if settings.smtp_url and row is not None:
-        await asyncio.to_thread(_email, settings, row['email'], SUBJECT.get(kind, 'Sammy needs you'), body, url)
+        await asyncio.to_thread(_email, settings, row['email'], subject, body, url)
 
 
 def _push(settings: Settings, subscription: dict[str, Any], payload: str) -> bool:

@@ -312,7 +312,10 @@ async function loadThreads({ refresh = false } = {}) {
     open.dataset.id = thread.id;
     open.title = thread.title || 'Untitled';
     open.append(element('span', thread.title || 'Untitled', 'thread-title'));
-    if (badges[thread.status]) open.append(element('span', badges[thread.status], `badge ${thread.status}`));
+    // A chat left waiting long (the user was reminded about it) stands out, so it is easy to find.
+    const long = thread.status === 'waiting' && thread.waiting_long;
+    if (long) open.append(element('span', 'Still needs you', 'badge waiting long'));
+    else if (badges[thread.status]) open.append(element('span', badges[thread.status], `badge ${thread.status}`));
     if (thread.id === currentId) open.setAttribute('aria-current', 'page');
     open.addEventListener('click', () => {
       if (location.hash === `#/t/${thread.id}`) report(route());  // the same chat: load it again

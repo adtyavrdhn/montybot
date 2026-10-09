@@ -12,7 +12,8 @@ DBOS scheduler, at each time the cron names
                           else store.create_run(trigger='schedule') in the schedule's thread
     run_thread(run_id)    the usual run (sammy.workflows), as a child workflow with the run's id
     step schedule.notify  a recurring task tells the user it finished (or failed); a watch tells them itself when it
-                          finds something (notify_user, which also pauses it), and otherwise only if it failed
+                          finds something (notify_user, which also pauses it), and otherwise only if it failed;
+                          neither when the run stopped (the user stopped it, or nobody answered it in time)
 ```
 
 A run reuses the user's saved sign-ins like any other and hands off only when a site asks to sign in again; the user
@@ -172,6 +173,8 @@ async def run_schedule(scheduled_at: datetime, context: dict[str, str]) -> None:
     run_id, schedule = started
     handle = await workflows.start(run_id)
     outcome = await handle.get_result()
+    if outcome == 'stopped':
+        return  # the user stopped it, or it stopped waiting for them: its chat says which
     if not schedule.watch or outcome == 'failed':
         await DBOS.run_step_async(
             {**workflows.RETRIED, 'name': 'schedule.notify'}, notify_ended, resources, schedule, run_id, outcome

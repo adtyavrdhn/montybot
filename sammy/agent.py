@@ -59,8 +59,6 @@ user_tools: FunctionToolset[RunDeps] = FunctionToolset(id='user')
 async def ask_user(ctx: RunContext[RunDeps], question: str) -> str:
     """Ask the user a question and wait for the answer. Only when you cannot reasonably go on without it."""
     reply = await approvals.ask(ctx, 'question', question)
-    if reply is None:
-        return 'The user did not answer in time.'
     return str(reply.get('text', ''))
 
 

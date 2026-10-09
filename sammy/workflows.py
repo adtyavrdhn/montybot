@@ -8,6 +8,7 @@ run_thread(run_id)                                   @DBOS.workflow
   step run.start        status running, load the run and the thread's history, the message's files into /work/uploads
   agent.run(...)        model requests are steps (DBOSDurability); browser and memory calls are our own steps;
                         ask_user, approvals and hand-offs wait in DBOS.recv (sammy.approvals)
+  step run.expire       nobody answered in time (Unanswered): close the browser, say what it waited for, stopped
   step run.finish       append the new messages (files as notes: sammy.attachments), status done (or failed)
   step run.close        the browser service saves the user's sign-ins and closes the run's browser
 ```
@@ -35,10 +36,11 @@ from pydantic_ai.messages import (
 )
 
 from sammy import attachments, store, streaming
+from sammy.approvals import Unanswered
 from sammy.browser.contract import BrowserError
 from sammy.browser.service import UnknownRun
 from sammy.deps import RunDeps
-from sammy.models import FINISHED, Attachment, Run, RunStatus, Schedule
+from sammy.models import FINISHED, AskKind, Attachment, Run, RunStatus, Schedule
 from sammy.observability import timed, timing
 from sammy.resources import Resources, current
 
@@ -61,6 +63,15 @@ logging.getLogger('dbos').addFilter(HideStoppedRuns())
 
 FAILURE_NOTICE = 'Something went wrong while working on this, and I could not finish. Please try again.'
 STOPPED_NOTICE = 'You stopped this.'
+_PICK_UP = 'Send me a message here to pick it up again.'
+EXPIRED_NOTICES: dict[AskKind, str] = {
+    'question': f'I stopped: I asked you a question and got no answer in time. {_PICK_UP}',
+    'approval': f'I stopped without doing it: I needed your approval, and it did not come in time. {_PICK_UP}',
+    'handoff': f'I stopped: I needed you to take over my browser, and nobody did in time. {_PICK_UP}',
+    'connect': f'I stopped: I needed you to connect an app, and it was not connected in time. {_PICK_UP}',
+}
+"""What the chat says when a run stops because nobody answered its ask, by the ask's kind. The chat shows the ask
+itself just above ("Not answered in time: ...", `api.ask_messages`)."""
 
 # Why a task failed, in words the user can act on, by the error's type (its text stays private: it can quote the
 # user's content). A type not listed gets FAILURE_NOTICE.
@@ -130,6 +141,11 @@ async def run_thread(run_id: str) -> str:
             try:
                 with timing('run.agent'):
                     result = await resources.agent.run(prompt, deps=deps, message_history=history)
+            except Unanswered as unanswered:
+                logfire.info('Run {run_id} stopped: its {kind} was not answered', run_id=run_id, kind=unanswered.kind)
+                notice = EXPIRED_NOTICES[unanswered.kind]
+                await DBOS.run_step_async({**RETRIED, 'name': 'run.expire'}, expire_run, resources, run, notice)
+                return 'stopped'
             except Exception as error:
                 logfire.error('Run {run_id} failed: {error_type}', run_id=run_id, error_type=type(error).__qualname__)
                 # Also in this process's own log, for running without Logfire. The type only: an error's text can
@@ -205,6 +221,13 @@ async def fail_run(resources: Resources, run: Run, error_type: str, notice: str 
     await close_browser(resources, run)
     with timing('run.fail'):
         await end_run(resources, run, 'failed', notice, error=error_type)
+
+
+async def expire_run(resources: Resources, run: Run, notice: str) -> None:
+    """Nobody answered the run's ask in time: free its browser, and end it with `notice` as its reply."""
+    await close_browser(resources, run)
+    with timing('run.expire'):
+        await end_run(resources, run, 'stopped', notice, error='Unanswered')
 
 
 async def stop(resources: Resources, run: Run) -> bool:

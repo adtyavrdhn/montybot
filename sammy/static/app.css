@@ -86,6 +86,7 @@ h1, h2 { letter-spacing: -.045em; font-weight: 600; line-height: 1.15; }
 .thread-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .badge { flex-shrink: 0; font-size: .7rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: #613451; color: #fff; }
 .badge.waiting { background: var(--pink); color: var(--deep-purple); }
+.badge.waiting.long { background: #fff0f4; color: var(--bad); }
 .thread-empty { color: #d8bdd7; font-size: .8rem; padding: 12px; }
 .drawer-tools { border-top: 1px solid #704762; padding-top: 16px; }
 .drawer-tools button { width: 100%; font-size: .84rem; color: #eee0ee; padding: 12px; }

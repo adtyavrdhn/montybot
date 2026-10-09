@@ -30,6 +30,7 @@ class MockAPI:
     uploads: dict[str, dict[str, object]] = field(default_factory=dict)  # by id, as `POST /api/attachments` made them
     upload_status: int = 201
     thread_status: str | None = None
+    waiting_long: bool = False
     telemetry: bool = False  # whether the server sends telemetry to Logfire
     include_content: bool = False
     calls: list[tuple[str, str, object]] = field(default_factory=list)
@@ -84,7 +85,12 @@ class MockAPI:
             running = (
                 self.run['status'] if self.run and self.run['status'] in ('queued', 'running', 'waiting') else None
             )
-            listed = {'id': THREAD, 'title': 'Compare flights to Lisbon', 'status': self.thread_status or running}
+            listed = {
+                'id': THREAD,
+                'title': 'Compare flights to Lisbon',
+                'status': self.thread_status or running,
+                'waiting_long': self.waiting_long,
+            }
             result = [listed] if self.messages else []
         elif path == '/api/threads' and method == 'POST':
             assert isinstance(body, dict)
@@ -770,8 +776,11 @@ def test_chat_list_shows_which_chats_need_you(frontend: tuple[Page, MockAPI]) ->
     mock.thread_status = 'waiting'
     workspace(page, mock)
     expect(page.locator('#threads .badge')).to_have_text('Needs you')
-    mock.thread_status = None
+    mock.waiting_long = True  # waited long enough for a reminder
     page.click('#open-schedules')  # any navigation reloads the list
+    expect(page.locator('#threads .badge.long')).to_have_text('Still needs you')
+    mock.thread_status = None
+    page.click('#open-signins')
     expect(page.locator('#threads .badge')).to_have_count(0)
 
 
