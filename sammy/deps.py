@@ -42,6 +42,14 @@ class Connected:
     text: str | None = None
 
 
+@dataclass
+class SkillIndex:
+    """The user's saved skills, in words, as this run looked them up (`sammy.skills`); None until it has. Set in
+    workflow code from a step's recorded result, so a replay sees the same."""
+
+    text: str | None = None
+
+
 @dataclass(frozen=True)
 class RunDeps:
     resources: Resources
@@ -56,6 +64,7 @@ class RunDeps:
     code: CodeState = field(default_factory=CodeState)
     notified: Notified = field(default_factory=Notified)
     connected: Connected = field(default_factory=Connected)
+    skills: SkillIndex = field(default_factory=SkillIndex)
 
     @property
     def user_id(self) -> str:

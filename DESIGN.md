@@ -211,6 +211,28 @@ Considered:
   the user returns, launch a fresh Chromium from the cookie jar for them to drive.
 - **Return control:** the agent resumes with a short summary of what the user did, not screenshots.
 
+## Skills
+
+Each run used to work a site out from scratch, and what the user had shown it lived on only as loose memories.
+Skills (#128) are per-user playbooks in Postgres: name, when to use it, inputs, steps, how to check it worked, what to
+return, approval boundaries and failure handling.
+
+- **Small prompt.** The instructions list only each saved skill's name and when to use it, read once per run in a DBOS
+  step, so they stay byte-stable and cached. `load_skill(name)` brings in one whole skill when a request fits it.
+- **The agent proposes, the user decides.** `save_skill` is a tool that needs approval, like `schedule_task`, and is
+  offered only when the user is there (not in scheduled runs). A replayed call saves the same row (its id comes from
+  the run and the tool call).
+- **Teach by showing.** A lesson is recorded in the live view, which already sees every input the user sends. Before
+  each input reaches the browser, the recorder reads the page's outline (the screen reader's, `outline.js`) to say
+  what was clicked or which field has the focus. Text typed into a field counts only when the field is known to be an
+  ordinary text field: a password, a field the page marks for a password, one-time code or card details, a field named
+  like a secret, or one the engine cannot read is "typed a secret", with no text. Keys pressed without a modifier go
+  through the same rule. The lesson is words, never frames, and lives only in its connection until the user stops; a
+  model then drafts a skill from it, outside any run. Drafts are invisible to the agent until the user saves them.
+- **Why not harness `Skills`?** It reads `SKILL.md` folders once per process, as deferred capabilities. Sammy's skills
+  are per user, change between runs and live in Postgres, and DBOS needs the agent's capabilities fixed when it is
+  built, so a plain toolset and a dynamic instruction fit better.
+
 ## Data
 
 - **Cookie jar:** envelope-encrypted with a key per tenant (KMS). Saved after every run and every hand-off. One writer

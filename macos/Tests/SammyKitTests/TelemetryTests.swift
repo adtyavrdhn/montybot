@@ -18,6 +18,7 @@ import Testing
         #expect(Telemetry.route("/api/asks/\(thread)") == "/api/asks/{ask_id}")
         #expect(Telemetry.route("/api/schedules/\(thread)/pause") == "/api/schedules/{schedule_id}/pause")
         #expect(Telemetry.route("/api/memories/\(thread)") == "/api/memories/{memory_id}")
+        #expect(Telemetry.route("/api/skills/\(thread)") == "/api/skills/{skill_id}")
         #expect(Telemetry.route("/api/attachments") == "/api/attachments")
         #expect(Telemetry.route("/api/attachments/\(thread)") == "/api/attachments/{attachment_id}")
         #expect(Telemetry.route("/api/sign-ins/shop.example.com") == "/api/sign-ins/{site}")

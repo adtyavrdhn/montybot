@@ -9,6 +9,7 @@
   <link rel="manifest" href="/static/manifest.json">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/markdown.js" defer></script>
+  <script src="/static/skills.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -64,6 +65,7 @@
           <button id="open-signins" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="4"/><path d="m11 12 8 8 3-3-3-3-2 2"/></svg> Saved browser data</button>
           <button id="open-integrations" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v4m6-4v4M7 7h10v4a5 5 0 0 1-10 0Zm5 9v5"/></svg> Integrations</button>
           <button id="open-schedules" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16m-12 4h3"/></svg> Schedules</button>
+          <button id="open-skills" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3Zm0 13a3 3 0 0 1 3-3h11M9 8h6"/></svg> Skills</button>
           <button id="enable-notifications" class="link" hidden><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9Zm4 12h4"/></svg> <span id="notifications-label">Notify me when Sammy needs me</span></button>
           <button id="signout" class="link">Sign out</button>
         </div>
@@ -164,6 +166,14 @@
           <div class="page-heading"><span class="page-symbol" aria-hidden="true">◷</span><h2 id="schedules-title" tabindex="-1">Schedules</h2></div>
           <p class="muted">Tasks Sammy runs on your schedule. Pause a task without deleting it, or resume it when you're ready.</p>
           <ul id="schedule-list" aria-label="Scheduled tasks"></ul>
+        </div>
+      </section>
+      <section id="skills" class="page" aria-labelledby="skills-title" hidden>
+        <div class="page-content">
+          <button class="secondary back">Back to chat</button>
+          <div class="page-heading"><span class="page-symbol" aria-hidden="true">❏</span><h2 id="skills-title" tabindex="-1">Skills</h2></div>
+          <p class="muted">Playbooks for tasks you showed or told Sammy, so it does them faster next time. Review a draft from Teach Sammy before Sammy uses it.</p>
+          <ul id="skill-list" aria-label="Skills"></ul>
         </div>
       </section>
     </section>

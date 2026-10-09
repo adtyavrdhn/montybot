@@ -7,6 +7,7 @@ browser: /live/handoff/<id>            Mike's page and WebSocket, mounted in thi
   DbHandoffs.find(id)                  the hand-off ask that carries this id
   "Give back to the bot"               the browser service ends the hand-off and saves the sign-ins, then
   DbHandoffs.given_back(...)           answers the ask: the run wakes from DBOS.recv with a summary in words
+  "Teach Sammy"                        DbTeacher (sammy.teach) makes the user's lesson a draft skill
 ```
 """
 
@@ -24,6 +25,7 @@ from sammy.browsing import refused_url
 from sammy.liveview.app import live_view_app
 from sammy.liveview.handoffs import GiveBack
 from sammy.resources import Resources
+from sammy.teach import DbTeacher
 
 
 class LiveAuth:
@@ -70,4 +72,5 @@ def live_app(resources: Resources) -> Starlette:
         allowed_origins=frozenset({f'{public.scheme}://{public.netloc}'}),
         # The agent's rule for addresses (only public web ones) holds for the user's address bar too.
         refuse_url=partial(refused_url, allow_private=resources.settings.allow_private_networks),
+        teacher=DbTeacher(resources),
     )

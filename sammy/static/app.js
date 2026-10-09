@@ -340,7 +340,7 @@ function syncDrawer() {
   $('drawer').inert = !desktop.matches && !open;
   $('drawer-backdrop').hidden = !open;
   $('menu-button').setAttribute('aria-expanded', String(open));
-  for (const id of ['layout', 'signins', 'integrations', 'schedules', 'browser-button']) $(id).inert = open;
+  for (const id of ['layout', 'signins', 'integrations', 'schedules', 'skills', 'browser-button']) $(id).inert = open;
 }
 function closeDrawer(restoreFocus = false) {
   const focusInside = $('drawer').contains(document.activeElement);
@@ -1486,6 +1486,7 @@ async function openSchedules() {
 
 $('open-signins').addEventListener('click', () => { location.hash = '#/sign-ins'; closeDrawer(); });
 $('open-schedules').addEventListener('click', () => { location.hash = '#/schedules'; closeDrawer(); });
+$('open-skills').addEventListener('click', () => { location.hash = '#/skills'; closeDrawer(); });  // skills.js
 $('open-integrations').addEventListener('click', () => { location.hash = '#/integrations'; closeDrawer(); });
 for (const back of document.querySelectorAll('.page .back')) {
   back.addEventListener('click', () => { location.hash = state.threadId ? `#/t/${state.threadId}` : '#/new'; });
@@ -1553,8 +1554,10 @@ $('enable-notifications').addEventListener('click', () => (
 // --- routing ---
 
 const PAGES = { '#/sign-ins': ['signins', 'Saved browser data', openSignins],
-  '#/integrations': ['integrations', 'Integrations', openIntegrations], '#/schedules': ['schedules', 'Schedules', openSchedules] };
-const PAGE_BUTTONS = { '#/sign-ins': 'open-signins', '#/integrations': 'open-integrations', '#/schedules': 'open-schedules' };
+  '#/integrations': ['integrations', 'Integrations', openIntegrations], '#/schedules': ['schedules', 'Schedules', openSchedules],
+  '#/skills': ['skills', 'Skills', openSkills] };
+const PAGE_BUTTONS = { '#/sign-ins': 'open-signins', '#/integrations': 'open-integrations', '#/schedules': 'open-schedules',
+  '#/skills': 'open-skills' };
 
 async function route() {
   const hash = location.hash;

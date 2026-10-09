@@ -4,6 +4,7 @@
 - The cart lives on the server, per account, as on real shops. Adding an item that is already in the cart does not
   add it twice, so the tests can see whether a step was repeated through the order, not the cart.
 - Checkout places an order. `orders` records every order placed, for tests to count.
+- "Reorder" on an order puts its items back in the cart (#128's taught skill).
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ class Shop(Site):
         self.route('GET', '/cart')(self.cart)
         self.route('POST', '/checkout')(self.checkout)
         self.route('GET', '/orders')(self.order_list)
+        self.route('POST', '/orders/reorder')(self.reorder)
 
     def user(self, request: Request) -> str | None:
         return self.sessions.get(request.cookies.get('sid', ''))
@@ -131,6 +133,20 @@ class Shop(Site):
         if isinstance(user, Response):
             return user
         mine = [o for o in self.orders if o.user == user]
-        rows = ''.join(f'<li>Order #{o.number}: {", ".join(o.items)}, ${o.total:.2f}</li>' for o in reversed(mine))
+        rows = ''.join(
+            f'<li>Order #{o.number}: {", ".join(o.items)}, ${o.total:.2f} <form method="post" action="/orders/reorder">'
+            f'<input type="hidden" name="number" value="{o.number}"><button id="reorder-{o.number}">Reorder</button>'
+            '</form></li>'
+            for o in reversed(mine)
+        )
         body = f'<ul>{rows}</ul>' if mine else '<p>No orders yet.</p>'
         return page('Your orders', f'<h1>Your orders</h1>{body}<p><a id="shop" href="/">Shop</a></p>')
+
+    def reorder(self, request: Request) -> Response:
+        user = self.signed_in(request)
+        if isinstance(user, Response):
+            return user
+        order = next((o for o in self.orders if o.user == user and str(o.number) == request.form.get('number')), None)
+        cart = self.carts.setdefault(user, [])
+        cart.extend(item for item in (order.items if order else []) if item not in cart)
+        return redirect('/cart')

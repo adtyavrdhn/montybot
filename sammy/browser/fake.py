@@ -54,6 +54,7 @@ from sammy.browser.contract import (
     Type,
     features_of,
 )
+from sammy.browser.live import Outline, OutlineItem
 from sammy.browser.state import BLANK_URL, BrowserState, Cookie, origin_of
 
 ENGINE = 'fake'
@@ -261,6 +262,29 @@ class FakeBrowser:
             page.on_action(self, action)
         if href is not None and self.page is page:
             self.load(href)
+
+    async def outline(self) -> Outline:
+        """`OutlineBackend`: the page's text lines, then its elements, with which has the focus. A password's value
+        is only its length, as `outline.js` gives it. The fake has no layout, so every box is empty."""
+        self._check_open()
+        lines = [
+            OutlineItem(role='text', name=line, x=0, y=0, width=0, height=0) for line in self.page.text.splitlines()
+        ]
+        elements = [
+            OutlineItem(
+                role=element.role,
+                name=element.name,
+                x=0,
+                y=0,
+                width=0,
+                height=0,
+                value=f'{len(element.value)} characters' if element.secret and element.value else element.value,
+                focused=element is self.focused,
+                secure=element.secret,
+            )
+            for element in self.page.elements
+        ]
+        return Outline(title=self.page.title, items=(*lines, *elements))
 
     async def screenshot(self) -> Screenshot:
         self._check_open()

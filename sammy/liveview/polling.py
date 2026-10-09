@@ -11,7 +11,7 @@ import time
 from collections.abc import AsyncIterator
 
 from sammy.browser.contract import ActionFailed, BrowserBackend, BrowserError, NotSupported
-from sammy.browser.live import Frame, LiveInput, Tab, Tabs, Viewport
+from sammy.browser.live import Frame, LiveInput, Outline, OutlineBackend, Tab, Tabs, Viewport
 from sammy.liveview.latest import Latest
 
 TAB_ID = 'tab'
@@ -47,6 +47,13 @@ class PollingFrameSource:
         async with self._lock:
             await self._backend.act(action)
         await self._refresh_tab()
+
+    async def outline(self) -> Outline:
+        """`OutlineSource`: the backend's, if it can say what is on its page."""
+        if not isinstance(self._backend, OutlineBackend):
+            return Outline(available=False)
+        async with self._lock:
+            return await self._backend.outline()
 
     async def switch_tab(self, tab_id: str) -> None:
         if tab_id != TAB_ID:

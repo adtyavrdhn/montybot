@@ -9,6 +9,7 @@ public enum Route: Hashable, Sendable {
     case signIns
     case integrations
     case memory
+    case skills
 
     /// The route as kept in settings, to come back to it at the next launch.
     var stored: String {
@@ -18,6 +19,7 @@ public enum Route: Hashable, Sendable {
         case .signIns: "signIns"
         case .integrations: "integrations"
         case .memory: "memory"
+        case .skills: "skills"
         }
     }
 
@@ -28,6 +30,7 @@ public enum Route: Hashable, Sendable {
         case "signIns": self = .signIns
         case "integrations": self = .integrations
         case "memory": self = .memory
+        case "skills": self = .skills
         default:
             guard stored.hasPrefix("chat:") else { return nil }
             let id = String(stored.dropFirst(5))
@@ -83,6 +86,7 @@ public final class AppModel {
     public private(set) var schedules: [Schedule]?
     public private(set) var savedSites: [SavedSite]?
     public private(set) var memories: [Memory]?
+    public internal(set) var skills: [Skill]?
     public private(set) var integrations: Integrations?
     /// What the Integrations page lists (featured by kind, then every other app), once read: it changes rarely.
     public private(set) var apps: [CatalogApp]?
@@ -459,6 +463,7 @@ public final class AppModel {
         schedules = nil
         savedSites = nil
         memories = nil
+        skills = nil
         integrations = nil
         apps = nil
         serverNote = nil
@@ -531,6 +536,7 @@ public final class AppModel {
         case .signIns: Task { await telemetry.action("open saved sign-ins") { _ in await loadSavedSites() } }
         case .integrations: Task { await telemetry.action("open integrations") { _ in await loadIntegrations() } }
         case .memory: Task { await telemetry.action("open memory") { _ in await loadMemories() } }
+        case .skills: Task { await telemetry.action("open skills") { _ in await loadSkills() } }
         }
     }
 
@@ -617,6 +623,7 @@ public final class AppModel {
         case .signIns: Task { await loadSavedSites() }
         case .integrations: Task { await loadIntegrations() }
         case .memory: Task { await loadMemories() }
+        case .skills: Task { await loadSkills() }
         }
     }
 
@@ -1109,7 +1116,7 @@ public final class AppModel {
         return nil
     }
 
-    private func library<T>(_ call: () async throws -> T) async -> T? {
+    func library<T>(_ call: () async throws -> T) async -> T? {
         do {
             let result = try await call()
             libraryError = nil

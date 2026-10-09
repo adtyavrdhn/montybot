@@ -282,7 +282,7 @@ public final class Telemetry: @unchecked Sendable {
 
     static let placeholders = [
         "threads": "{thread_id}", "runs": "{run_id}", "asks": "{ask_id}", "schedules": "{schedule_id}",
-        "memories": "{memory_id}", "attachments": "{attachment_id}",
+        "memories": "{memory_id}", "skills": "{skill_id}", "attachments": "{attachment_id}",
     ]
     /// Under /api/integrations/: the app after `apps` (but not the word `accounts`), and the ids after `accounts` and
     /// `servers`. Composio's account ids look like words (`ca_OmfoGFIzpmEu`), so they are named, not guessed at.

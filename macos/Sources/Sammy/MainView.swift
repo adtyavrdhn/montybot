@@ -78,6 +78,7 @@ struct MainView: View {
                 case .signIns: SavedSitesView()
                 case .integrations: IntegrationsView()
                 case .memory: MemoryView()
+                case .skills: SkillsView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -186,6 +187,7 @@ struct Sidebar: View {
                     LibraryLink(title: "Saved sign-ins", icon: "key", route: .signIns)
                     LibraryLink(title: "Integrations", icon: "puzzlepiece.extension", route: .integrations)
                     LibraryLink(title: "Memory", icon: "brain", route: .memory)
+                    LibraryLink(title: "Skills", icon: "book", route: .skills)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)

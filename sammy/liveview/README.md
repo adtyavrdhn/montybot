@@ -21,6 +21,7 @@ user's browser                     live view app (this package)              bro
 | `auth.py` | `Authenticator`, and `StubAuthenticator` standing in for the web app's sign-in (#8) |
 | `handoffs.py` | `Handoffs` (find a hand-off, report the give-back), and `InMemoryHandoffs` standing in for #4 and the run |
 | `activity.py` | The give-back summary: counts of what the user did, never what they typed |
+| `recording.py` | `Lesson`: "Teach Sammy", what the user does in words, never what they type into a sensitive field; `Teacher` drafts a skill from it |
 | `client.py`, `scripted_user.py` | A WebSocket client, and the scripted user that signs in to the poc demo shop or holds a check |
 | `conformance.py` | `HandoffRulesConformance`: the hand-off rules any `BrowserService` must keep, `live_view` included |
 
@@ -58,6 +59,11 @@ user's browser                     live view app (this package)              bro
   backend works in it; it never follows popups), so the user always has at least one tab; closing the active tab
   shows the one after it, else the one before. Each tab says whether it is `closable` and, for the active one, whether
   it is `loading` and `can_go_back` and `can_go_forward` (left out when the engine cannot tell: Servo).
+- **Teach Sammy** (with a `teacher`; `hello {teach}` says so): `teach {goal}` starts a lesson on the page the user is
+  on, `teach_stop` ends it and answers `taught` once the teacher has a draft skill. Before each input reaches the
+  browser the lesson reads the outline to say what was clicked or has the focus; text typed into a password or other
+  sensitive field, or a field it cannot read, is recorded as "typed a secret" with no text. A lesson belongs to its
+  connection: giving the browser back, or the connection closing, drops it.
 
 ## The WebSocket
 
@@ -68,7 +74,9 @@ JSON header (`seq`, `width`, `height` in CSS pixels, `mime`), then the image. Se
 page -> server   mouse_down {x, y, button}  mouse_move {x, y}  mouse_up {x, y, button}  click {x, y}
                  type {text}  press {key, modifiers}  scroll {delta_x, delta_y, x?, y?}  switch_tab {tab_id}  navigate {url}
                  viewport {width, height}  give_back  back  forward  reload  stop  new_tab  close_tab {tab_id}
-server -> page   hello {handoff_id, reason, controls}  tabs {tabs}  error {message}  ended {given_back}  + binary frames
+                 teach {goal}  teach_stop
+server -> page   hello {handoff_id, reason, controls, teach}  tabs {tabs}  error {message}  ended {given_back}
+                 teaching {goal}  taught {skill_id, name}  + binary frames
 ```
 
 The web app (#8) can embed `/handoff/{id}` in an iframe (set `frame_ancestors`) or talk to the WebSocket itself.
