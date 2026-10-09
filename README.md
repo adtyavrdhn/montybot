@@ -162,7 +162,8 @@ these decisions directly. Experimental Jev helpers remain available in the sourc
 - **Remembered approvals** (`sammy/approval_rules.py`). The card's "Always allow this" approves the call and keeps a
   rule for that one action: `commit` on a site for one control (`add to cart` on `walmart.com`, as the page names it,
   prices left out) or one tool of one integration (`linear: LINEAR_CREATE_LINEAR_ISSUE`). The next time the same
-  action comes up, in any chat, it goes through. Rules are listed and removed on the Approvals page. An action that
+  action comes up, in any chat, it goes through. Rules are listed and removed on the web app's Approvals page and in
+  the Mac app's Settings › Approvals. An action that
   spends money, sends something as the user or deletes data (judged by the words in the control's or tool's name) is
   remembered only if the user confirms that for the rule (`allow_risky`).
 - **The automatic reviewer** (`sammy/reviewer.py`), off unless the server sets `APPROVAL_REVIEWER_MODEL` (a small, fast

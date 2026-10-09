@@ -91,7 +91,10 @@ Decisions from review:
 
 - While Sammy works or waits, Send becomes Stop, as in other chat apps; ⌘. stops too. A stopped or failed task can
   be tried again as it was asked (⌘R), or put back in the message box to change first. Approving has no keyboard
-  shortcut: going ahead with something that costs money takes a click.
+  shortcut: going ahead with something that costs money takes a click. "Always allow" approves and remembers that
+  one action (one control on one site, or one tool of one app); one that spends money, sends as you or deletes asks
+  once more first. Settings › Approvals lists what is always allowed, to remove, and turns on the automatic reviewer
+  where the server has one.
 - What Sammy asks (a question, an approval, a hand-off) takes the message box's place, as in T3 Code: the user
   answers where they type, with Stop at hand. Typed answers survive the question closing, switching chats, and being
   answered elsewhere; a question can also be answered from its notification.

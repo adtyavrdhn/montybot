@@ -653,7 +653,8 @@ public final class ChatModel {
 
     public func answer(_ body: AnswerBody) async {
         guard let ask, !answering, !closed else { return }
-        let name = body.approved == true ? "approve" : body.approved == false ? "deny" : body.done == true ? "hand back"
+        let name = body.remember == true ? "always allow" : body.approved == true ? "approve" : body.approved == false ? "deny"
+            : body.done == true ? "hand back"
             : body.connected == true ? "connected" : body.connected == false ? "not now" : "answer question"
         await telemetry.action(name, ids.merging(["sammy.ask.kind": .string(ask.kind.rawValue)]) { $1 }) { span in
             span.content("sammy.answer", body.text)
