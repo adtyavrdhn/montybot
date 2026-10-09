@@ -177,8 +177,8 @@ and removed on the Integrations page of the web and Mac apps.
 
 People can message Sammy from chat apps as well as the web and Mac apps, through one shared layer
 (`sammy/channels/`, see [`DESIGN.md`](DESIGN.md#chat-apps)). Each platform is a thin adapter, on only when all its
-credentials are set; the platforms themselves come in their own changes (#139 Slack, #140 Telegram, #141 WhatsApp,
-#142 Discord). Webhooks arrive at `POST /api/channels/<name>/webhook`.
+credentials are set: Telegram is here (below); the other platforms come in their own changes (#139 Slack,
+#141 WhatsApp, #142 Discord). Webhooks arrive at `POST /api/channels/<name>/webhook`.
 
 - **Linking.** Message the bot directly and it sends a link (`/#/link/<code>`) to open in the web app, signed in;
   the web app then shows a code to send back from that chat, which finishes it. Or open **Chat apps** in the web
@@ -197,6 +197,31 @@ credentials are set; the platforms themselves come in their own changes (#139 Sl
 
 `CHANNEL_BACKENDS` adds platforms by `module:function` (comma-separated); the tests add a fake one this way
 (`tests/fake_channel.py`), whose `PlatformServer` a platform's own tests can reuse to stand in for its API.
+
+### Telegram
+
+A bot on the Bot API's webhook (`sammy/channels/telegram.py`, plain httpx). It needs no scopes, only two settings:
+
+1. Message [@BotFather](https://t.me/BotFather), send `/newbot`, and put the token it gives you in
+   `TELEGRAM_BOT_TOKEN`.
+2. Put a random secret in `TELEGRAM_WEBHOOK_SECRET` (1 to 256 of `A-Z a-z 0-9 _ -`, for example
+   `python -c "import secrets; print(secrets.token_urlsafe(32))"`). Telegram sends it back in the
+   `X-Telegram-Bot-Api-Secret-Token` header of every update, and anything without it is refused.
+3. With `PUBLIC_URL` set to the https address Telegram can reach, restart Sammy and run `uv run sammy telegram-webhook`.
+   That is `setWebhook` with the secret, the same as:
+
+   ```sh
+   curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+     -d url="$PUBLIC_URL/api/channels/telegram/webhook" -d secret_token="$TELEGRAM_WEBHOOK_SECRET" \
+     -d allowed_updates='["message","callback_query"]'
+   ```
+
+Then message the bot: it sends a link to finish linking, or send it `/start <code>` with a code from the Chat apps
+page. A private chat is one Sammy thread. In a group, Sammy only reads messages that mention the bot or reply to one
+of its messages (if it misses mentions, turn privacy mode off with BotFather's `/setprivacy`; everything else is still
+ignored). Approvals come with Approve and Decline buttons. Files come in up to 20 MB (the Bot API's download limit);
+images Sammy shares arrive as photos, anything else as a document (up to 50 MB). Replies are sent as MarkdownV2,
+split at 4096 characters. The token is part of every Bot API URL, so these calls are never traced.
 
 ## Observability
 
