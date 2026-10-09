@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -96,14 +97,25 @@ class Settings(BaseSettings):
     """Each user is `<prefix><user id>` in Composio. A Composio project shared with other apps must give each its own
     prefix: Sammy never lists, uses or removes a connection outside it."""
 
+    voice_provider: Literal['openai', 'elevenlabs'] | None = None
+    """Turns recorded speech into text, for browsers without speech recognition of their own, and reads replies aloud
+    in the provider's voice (`sammy/voice.py`). Unset: the apps use the device's own speech recognition and voices."""
+    voice_api_key: SecretStr | None = None
+    voice_name: str | None = None
+    """The voice replies are read in: OpenAI's `alloy`, `nova`...; an ElevenLabs voice id. Unset: one picked here."""
+    voice_base_url: str | None = None
+    """The provider's API at another address, such as a proxy. Unset: the provider's own."""
+
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
     history_limit: int = 40
 
-    @field_validator('composio_api_key', mode='before')
+    @field_validator(
+        'composio_api_key', 'voice_provider', 'voice_api_key', 'voice_name', 'voice_base_url', mode='before'
+    )
     @classmethod
     def blank_is_unset(cls, value: object) -> object:
-        """`COMPOSIO_API_KEY=` (as in `.env.example`) means no Composio, not a key that is empty."""
+        """`COMPOSIO_API_KEY=` (as in `.env.example`) means no Composio, not a key that is empty; the same for voice."""
         return None if isinstance(value, str) and not value.strip() else value
 
     @field_validator('public_url')

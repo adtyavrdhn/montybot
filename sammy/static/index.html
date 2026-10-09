@@ -9,6 +9,7 @@
   <link rel="manifest" href="/static/manifest.json">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/markdown.js" defer></script>
+  <script src="/static/voice.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -64,6 +65,7 @@
           <button id="open-signins" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="4"/><path d="m11 12 8 8 3-3-3-3-2 2"/></svg> Saved browser data</button>
           <button id="open-integrations" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v4m6-4v4M7 7h10v4a5 5 0 0 1-10 0Zm5 9v5"/></svg> Integrations</button>
           <button id="open-schedules" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16m-12 4h3"/></svg> Schedules</button>
+          <button id="auto-read" class="link" aria-pressed="false" hidden><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg> <span id="auto-read-label">Read replies aloud</span></button>
           <button id="enable-notifications" class="link" hidden><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9Zm4 12h4"/></svg> <span id="notifications-label">Notify me when Sammy needs me</span></button>
           <button id="signout" class="link">Sign out</button>
         </div>
@@ -82,6 +84,7 @@
                 <input id="file-input" type="file" multiple hidden>
                 <label for="message" class="sr-only">Message Sammy</label>
                 <textarea id="message" rows="2" maxlength="20000" placeholder="What would you like Sammy to do?" aria-describedby="composer-hint"></textarea>
+                <button type="button" id="dictate" class="icon" aria-label="Dictate" aria-pressed="false" title="Dictate a message" hidden><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
                 <button type="submit" id="send">Send <span aria-hidden="true">↑</span></button>
                 <button type="button" id="stop" class="bad" hidden>Stop</button>
               </div>

@@ -275,6 +275,10 @@ Each deploy bakes its commit into the image; Logfire shows it as `service.versio
 deploys. `ENVIRONMENT` (default `production`) and `LOGFIRE_INCLUDE_CONTENT` (default `true`: messages, the agent's
 code and page snapshots are exported; see the README's Observability section) can be set in the VM's `.env`.
 
+Voice (dictation for browsers without speech recognition, and replies in the provider's voice) is off until
+`VOICE_PROVIDER` (`openai` or `elevenlabs`) and `VOICE_API_KEY` are set in the VM's `.env`; `VOICE_NAME` picks the
+voice. See the README's Voice section.
+
 Jev advice is disabled in production. Setting `TYPESAFE_API_KEY` does not add tools or make Jev requests.
 The experimental helpers and their tests remain in the repository for later evaluation. Existing credentials
 and Jev settings can remain stored, but normal agent runs ignore them.
