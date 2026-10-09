@@ -1,0 +1,30 @@
+{
+  "update_id": 512340001,
+  "message": {
+    "message_id": 11,
+    "from": {
+      "id": 7001001,
+      "is_bot": false,
+      "first_name": "Pat",
+      "last_name": "Doe",
+      "username": "pat_doe",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": 7001001,
+      "first_name": "Pat",
+      "last_name": "Doe",
+      "username": "pat_doe",
+      "type": "private"
+    },
+    "date": 1767225600,
+    "text": "/start ABCDEFGHIJ",
+    "entities": [
+      {
+        "offset": 0,
+        "length": 6,
+        "type": "bot_command"
+      }
+    ]
+  }
+}

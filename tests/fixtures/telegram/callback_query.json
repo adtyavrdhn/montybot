@@ -1,0 +1,48 @@
+{
+  "update_id": 512340006,
+  "callback_query": {
+    "id": "4382bfdwdsb323b2d9",
+    "from": {
+      "id": 7001001,
+      "is_bot": false,
+      "first_name": "Pat",
+      "last_name": "Doe",
+      "username": "pat_doe",
+      "language_code": "en"
+    },
+    "message": {
+      "message_id": 13,
+      "from": {
+        "id": 123456789,
+        "is_bot": true,
+        "first_name": "Sammy",
+        "username": "sammy_test_bot"
+      },
+      "chat": {
+        "id": 7001001,
+        "first_name": "Pat",
+        "last_name": "Doe",
+        "username": "pat_doe",
+        "type": "private"
+      },
+      "date": 1767225900,
+      "text": "Sammy needs your approval:",
+      "reply_markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Approve",
+              "callback_data": "0b4a0e1c-1f7e-5d0e-9f3a-0c4d2b9e7a11:approve"
+            },
+            {
+              "text": "Decline",
+              "callback_data": "0b4a0e1c-1f7e-5d0e-9f3a-0c4d2b9e7a11:decline"
+            }
+          ]
+        ]
+      }
+    },
+    "chat_instance": "-5383049290842354361",
+    "data": "0b4a0e1c-1f7e-5d0e-9f3a-0c4d2b9e7a11:approve"
+  }
+}

@@ -217,6 +217,8 @@ Considered:
 `sammy/channels/` is the layer every chat platform shares, so a platform only implements the `Channel` protocol
 (`base.py`): check a webhook's signature, read it into `Inbound` messages, and send, edit, upload and download
 through its API. It registers with one line in `registry.BUILT_IN`, and is on only when all its credentials are set.
+Telegram (`telegram.py`) is the first: a webhook checked by its secret header, inline keyboards for approvals, and
+MarkdownV2 (`telegram_markdown.py`).
 
 - **Linking.** An unknown sender who messages the bot directly gets a one-time link to `/#/link/<code>`, which they
   open in the web app signed in; or a signed-in user gets a code on the Chat apps page and sends it to the bot.

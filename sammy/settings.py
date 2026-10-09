@@ -100,12 +100,16 @@ class Settings(BaseSettings):
     channel_backends: Annotated[list[str], NoDecode] = Field(default_factory=list[str])
     """Extra chat platforms (`sammy.channels.registry`), comma-separated `module:function` factories that take the
     settings and return a `Channel`, or None when not configured. Tests add a fake platform this way."""
+    telegram_bot_token: SecretStr | None = None
+    """Telegram (`sammy.channels.telegram`): the bot's token from @BotFather. On only with the webhook secret too."""
+    telegram_webhook_secret: SecretStr | None = None
+    """What Telegram sends back on every update (`X-Telegram-Bot-Api-Secret-Token`): 1 to 256 of `A-Z a-z 0-9 _ -`."""
 
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
     history_limit: int = 40
 
-    @field_validator('composio_api_key', mode='before')
+    @field_validator('composio_api_key', 'telegram_bot_token', 'telegram_webhook_secret', mode='before')
     @classmethod
     def blank_is_unset(cls, value: object) -> object:
         """`COMPOSIO_API_KEY=` (as in `.env.example`) means no Composio, not a key that is empty."""

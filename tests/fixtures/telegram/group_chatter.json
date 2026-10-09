@@ -1,0 +1,28 @@
+{
+  "update_id": 512340003,
+  "message": {
+    "message_id": 401,
+    "from": {
+      "id": 7001001,
+      "is_bot": false,
+      "first_name": "Pat",
+      "last_name": "Doe",
+      "username": "pat_doe",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": -1001234567890,
+      "title": "Family",
+      "type": "supergroup"
+    },
+    "date": 1767225720,
+    "text": "Who is bringing the cake? @someone_else",
+    "entities": [
+      {
+        "offset": 26,
+        "length": 13,
+        "type": "mention"
+      }
+    ]
+  }
+}
