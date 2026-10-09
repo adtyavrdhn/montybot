@@ -318,4 +318,5 @@ jobs:
           LOGFIRE_TOKEN: ${{ secrets.LOGFIRE_TOKEN }}
           MONTY_EXECUTION_KEY: ${{ secrets.MONTY_EXECUTION_KEY }}
           COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
+          VOICE_API_KEY: ${{ secrets.VOICE_API_KEY }}
         run: SSH_KEY="$HOME/.ssh/vm" sh deploy/deploy.sh "${{ vars.VM_USER }}@${{ vars.VM_HOST }}"
