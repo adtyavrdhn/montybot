@@ -59,6 +59,18 @@ mode, a narrow window) as a new person, and saves each as `NN-name.png` and `NN-
 there, with every element's frame, so a review can check wording, labels, alignment and clipping without clicking
 through. `ALL.txt` has every screen in one file.
 
+## Voice
+
+The microphone in the message box dictates: tap it, talk, tap it again, and the words land in the box after what is
+there, for you to read and send. It uses Apple's speech recognition on this Mac when it can run here (live, as you
+talk); otherwise, if the server has a speech provider (`GET /api/voice`), it records AAC to a temporary `.m4a`, sends
+it to `/api/voice/transcriptions` and deletes it at once; the server keeps no audio either. Without either, there is
+no microphone. Each reply has Read aloud (on hover, in its menu, and as a VoiceOver action): the server's voice
+(`/api/voice/speech`, MP3) when it has one, otherwise the Mac's; one reply at a time, as plain words, not Markdown.
+Settings > General > Read replies aloud (or ⌘K) reads the reply of a task you are watching when it is done, never
+ones in chats you open later. Provider keys stay on the server. `Voice.swift` and `VoiceViews.swift` have it all;
+`build-app.sh` adds the microphone and speech recognition descriptions, and the microphone entitlement.
+
 ## Telemetry
 
 Once signed in, the app asks the server (`GET /api/telemetry`) whether to send traces; with `LOGFIRE_TOKEN` set
@@ -75,8 +87,9 @@ Otherwise, and when signed out, nothing is sent and spans are no-ops. `Telemetry
 - Never sent: passwords (account, site login, anything typed while taking over), cookies, `Authorization`,
   live-view links and hand-off ids (`/live/*`), push subscriptions, file names and paths, request and response
   bodies. URLs are route templates (no query); ids are the random UUIDs the server uses.
-- What the user wrote and Sammy said (messages, replies, questions, answers, reasons, error messages) only when the
-  server's `include_content` is on; otherwise their lengths and kinds.
+- What the user wrote and Sammy said (messages, replies, questions, answers, reasons, error messages, dictated text
+  and replies read aloud) only when the server's `include_content` is on; otherwise their lengths and kinds. Audio
+  is never sent to telemetry: dictation and reading aloud are spans with their engine (device or server) and sizes.
 
 ## Design
 

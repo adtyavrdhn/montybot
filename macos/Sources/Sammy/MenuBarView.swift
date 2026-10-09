@@ -128,6 +128,7 @@ struct GeneralSettings: View {
                     .foregroundStyle(.secondary)
             }
             browsing
+            voice
         }
         .formStyle(.grouped)
         .task { await refresh() }
@@ -144,6 +145,17 @@ struct GeneralSettings: View {
             Text(app.tunnelStatus.replaced
                 ? "Another of your Macs is browsing for \(app.sammyName) now. Turn this off and on again to take it back."
                 : "While \(app.sammyName) is open, the browser of each task you start visits sites from this Mac, so they see your own internet connection, not a server's. It reaches only public websites, never your network. Scheduled tasks always browse from the server.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var voice: some View {
+        @Bindable var voice = app.voice
+        return Section {
+            Toggle("Read replies aloud", isOn: $voice.readRepliesAloud)
+        } footer: {
+            Text("When a task you're watching is done, \(app.sammyName) reads its reply aloud. Any reply can also be read with its Read aloud button, and the microphone in the message box dictates what you want.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
         }

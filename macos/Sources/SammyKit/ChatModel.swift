@@ -250,6 +250,10 @@ public final class ChatModel {
 
     /// The run went from one status to another (or a new run started) while the chat was open.
     private func runChanged(from old: Run?) {
+        if let run, let old, old.id == run.id, old.status.isActive, run.status == .done, !closed,
+           let reply = run.output ?? messages.last(where: { $0.role == .assistant })?.text {
+            app?.replyFinished(in: self, reply)  // seen finishing, not opened finished: it may be read aloud
+        }
         guard let run, let old, old.id != run.id || old.status != run.status, telemetry.isEnabled else { return }
         telemetry.log("run status changed", [
             "sammy.thread_id": .string(run.threadId), "sammy.run_id": .string(run.id),
@@ -851,5 +855,6 @@ public final class ChatModel {
         stopFollowing()
         stopWatching()
         live?.close()
+        app?.voice.cancel()  // no dictating into, or reading from, a chat that is not on screen
     }
 }

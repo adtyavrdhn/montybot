@@ -22,6 +22,7 @@ struct ChatView: View {
             }
         }
         .modifier(DropFiles(chat: chat))
+        .modifier(VoiceNotices(chat: chat))
         .navigationTitle(chat.title.isEmpty ? "New task" : chat.title.readableTitle)
         .navigationSubtitle(subtitle)
         .toolbar {
@@ -325,30 +326,41 @@ struct MessageView: View {
                 }
                 if !draft {
                     // Under each reply, as in other chat apps: shown on hover, so replies stay calm to read.
-                    Button {
-                        copy(message.text)
-                        copied = true
-                    } label: {
-                        Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 11))
-                    }
-                    .buttonStyle(.sammy(.ghost, small: true))
-                    .opacity(hovering || copied ? 1 : 0)
-                    .help("Copy this reply")
-                    .accessibilityHidden(true)  // the reply's own Copy action does this for VoiceOver
-                    .task(id: copied) {
-                        guard copied else { return }
-                        try? await Task.sleep(for: .seconds(1.5))
-                        copied = false
+                    HStack(spacing: 2) {
+                        Button {
+                            copy(message.text)
+                            copied = true
+                        } label: {
+                            Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                                .font(.system(size: 11))
+                        }
+                        .buttonStyle(.sammy(.ghost, small: true))
+                        .opacity(hovering || copied ? 1 : 0)
+                        .help("Copy this reply")
+                        .accessibilityHidden(true)  // the reply's own Copy action does this for VoiceOver
+                        .task(id: copied) {
+                            guard copied else { return }
+                            try? await Task.sleep(for: .seconds(1.5))
+                            copied = false
+                        }
+                        ReadAloudButton(text: message.text, visible: hovering)
                     }
                 }
             }
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
-            .contextMenu { if !draft { Button("Copy") { copy(message.text) } } }
+            .contextMenu {
+                if !draft {
+                    Button("Copy") { copy(message.text) }
+                    Button(app.voice.reading == message.text ? "Stop Reading" : "Read Aloud") { app.voice.toggleReading(message.text) }
+                }
+            }
             .accessibilityElement(children: .contain)
             .accessibilityLabel(draft ? "\(app.sammyName) is writing" : "\(app.sammyName) said")
             .accessibilityAction(named: "Copy") { copy(message.text) }
+            .accessibilityAction(named: app.voice.reading == message.text ? "Stop reading" : "Read aloud") {
+                if !draft { app.voice.toggleReading(message.text) }
+            }
         case .event:
             // What happened along the way (an approval, a takeover): a quiet line, not a message.
             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -763,6 +775,7 @@ struct Composer: View {
                             return .handled
                         }
                         .disabled(chat.ask != nil && chat.draft.isEmpty)  // text kept here stays reachable
+                    if chat.ask == nil || !chat.draft.isEmpty { DictateButton(chat: chat) }
                     if chat.isActive {
                         // While Sammy works (or waits for an answer), Send is Stop, as in other chat apps.
                         Button { Task { await chat.stop() } } label: {
