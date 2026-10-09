@@ -565,6 +565,17 @@ public struct Usage: Codable, Equatable, Sendable {
         case dailyCap = "daily_cap"
         case monthlyCap = "monthly_cap"
     }
+
+    /// "$7.50", or "$7.50 of $20.00" against a limit.
+    public static func spent(_ amount: Double, of cap: Double?) -> String {
+        guard let cap else { return dollars(amount) }
+        return "\(dollars(amount)) of \(dollars(cap))"
+    }
+
+    /// Cents, as the web app shows them: a little that would round to $0.00 is "under $0.01".
+    public static func dollars(_ amount: Double) -> String {
+        amount > 0 && amount < 0.005 ? "under $0.01" : String(format: "$%.2f", amount)
+    }
 }
 
 extension String {

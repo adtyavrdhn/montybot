@@ -177,8 +177,8 @@ struct UsageSettings: View {
         Form {
             if let usage {
                 Section {
-                    LabeledContent("Today", value: Self.spent(usage.today, of: usage.dailyCap))
-                    LabeledContent("This month", value: Self.spent(usage.month, of: usage.monthlyCap))
+                    LabeledContent("Today", value: Usage.spent(usage.today, of: usage.dailyCap))
+                    LabeledContent("This month", value: Usage.spent(usage.month, of: usage.monthlyCap))
                 } footer: {
                     Text("What Sammy's AI model has cost you, estimated from its published prices. Days and months are in your time zone.")
                         .font(.system(size: 12))
@@ -202,7 +202,7 @@ struct UsageSettings: View {
             Text(empty).foregroundStyle(.secondary)
         }
         ForEach(spenders) { spender in
-            LabeledContent(spender.id == nil ? "Deleted chats" : spender.name ?? "", value: Self.dollars(spender.cost))
+            LabeledContent(spender.id == nil ? "Deleted chats" : spender.name ?? "", value: Usage.dollars(spender.cost))
         }
     }
 
@@ -215,14 +215,6 @@ struct UsageSettings: View {
         }
     }
 
-    static func spent(_ amount: Double, of cap: Double?) -> String {
-        guard let cap else { return dollars(amount) }
-        return "\(dollars(amount)) of \(dollars(cap))"
-    }
-
-    static func dollars(_ amount: Double) -> String {
-        amount > 0 && amount < 0.005 ? "under $0.01" : String(format: "$%.2f", amount)
-    }
 }
 
 struct AccountSettings: View {

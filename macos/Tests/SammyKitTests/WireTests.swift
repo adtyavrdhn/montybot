@@ -258,6 +258,22 @@ import Testing
         #expect(try JSONDecoder().decode(Schedule.self, from: Data(old.utf8)).nextRun == nil)  // an older server
     }
 
+    @Test func usageReadsAsTheServerSendsIt() throws {
+        // `api.read_usage`: floats from Decimals, a null cap when unset, a null id and name for chats since deleted.
+        let json = #"""
+        {"today": 0.0036, "month": 7.5, "daily_cap": null, "monthly_cap": 20.0,
+         "tokens": {"input": 4000, "output": 200, "cache_read": 3000},
+         "threads": [{"id": "t", "name": "Weekly groceries", "cost": 6.0}, {"id": null, "name": null, "cost": 1.5}],
+         "schedules": [{"id": "s", "name": "Weekly groceries", "cost": 5.25}]}
+        """#
+        let usage = try JSONDecoder().decode(Usage.self, from: Data(json.utf8))
+        #expect(usage.dailyCap == nil && usage.monthlyCap == 20)
+        #expect(usage.threads.map(\.id) == ["t", nil] && usage.schedules.map(\.cost) == [5.25])
+        #expect(Usage.spent(usage.today, of: usage.dailyCap) == "under $0.01")
+        #expect(Usage.spent(usage.month, of: usage.monthlyCap) == "$7.50 of $20.00")
+        #expect(Usage.dollars(0) == "$0.00")
+    }
+
     @Test func whatAWaitingChatWaitsFor() throws {
         let json = #"[{"id": "a", "title": "Eggs", "status": "waiting", "waiting_for": "approval"}, {"id": "b", "title": "Hi", "status": "waiting", "waiting_for": "something-new"}]"#
         let threads = try JSONDecoder().decode([ThreadSummary].self, from: Data(json.utf8))
