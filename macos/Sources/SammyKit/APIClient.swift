@@ -74,6 +74,7 @@ public final class APIClient: Sendable {
     let siteLogin: String?
     /// The app's traces for this server: off until `startTelemetry`, and when the server takes none.
     public let telemetry = Telemetry()
+    public let modelSelection = ModelPreferencesModel()
 
     /// `cookies` keeps the session: the app's shared storage outlives restarts; tests pass their own, one per user.
     /// `siteLogin` is a private server's login, from `basicAuthorization`.
@@ -137,8 +138,17 @@ public final class APIClient: Sendable {
     }
 
     public func signOut() async throws {
+        await modelSelection.reset()
         let _: Ok = try await send("POST", "/api/signout", body: [String: String]())
         clearSession()
+    }
+
+    public func modelPreferences() async throws -> ModelPreferences {
+        try await send("GET", "/api/model-preferences")
+    }
+
+    public func setModelPreferences(_ update: ModelPreferencesUpdate) async throws -> ModelPreferences {
+        try await send("PUT", "/api/model-preferences", body: update)
     }
 
     public func me() async throws -> User { try await send("GET", "/api/me") }
@@ -171,11 +181,13 @@ public final class APIClient: Sendable {
     /// user gave their squirrel, which the bot answers to (empty forgets it; nil leaves it as it is). `attachments` are
     /// the ids of files uploaded for it (`upload`); with some, `text` may be empty.
     public func startThread(_ text: String, attachments: [String] = [], squirrelName: String? = nil) async throws -> Created {
-        try await send("POST", "/api/threads", body: MessageBody(text, attachments, squirrelName))
+        try await modelSelection.waitForSave()
+        return try await send("POST", "/api/threads", body: MessageBody(text, attachments, squirrelName))
     }
 
     public func send(_ text: String, to thread: String, attachments: [String] = [], squirrelName: String? = nil) async throws -> Created {
-        try await send("POST", "/api/threads/\(thread)/messages", body: MessageBody(text, attachments, squirrelName))
+        try await modelSelection.waitForSave()
+        return try await send("POST", "/api/threads/\(thread)/messages", body: MessageBody(text, attachments, squirrelName))
     }
 
     struct MessageBody: Encodable {
@@ -506,10 +518,11 @@ public final class APIClient: Sendable {
     }
 
     private func error(_ status: Int, _ data: Data, signingIn: Bool = false) -> APIError {
-        let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"]
+        struct ErrorBody: Decodable { let detail: String? }
+        let detail = (try? JSONDecoder().decode(ErrorBody.self, from: data))?.detail
         if status == 401, !signingIn { return .signedOut }
         // A validation error's detail is a list of problems; show the server's text only when it is a sentence.
-        return .server(status: status, detail: detail as? String)
+        return .server(status: status, detail: detail)
     }
 
     static let decoder = JSONDecoder()

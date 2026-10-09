@@ -18,6 +18,7 @@ step returns its recorded result instead of running again.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -34,10 +35,11 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from sammy import attachments, store, streaming
+from sammy import attachments, model_preferences_store, store, streaming
 from sammy.browser.contract import BrowserError
 from sammy.browser.service import UnknownRun
 from sammy.deps import RunDeps
+from sammy.model_preferences import RunModel
 from sammy.models import FINISHED, Attachment, Run, RunStatus, Schedule
 from sammy.observability import timed, timing
 from sammy.resources import Resources, current
@@ -115,9 +117,14 @@ async def run_thread(run_id: str) -> str:
         local_time = started[3] if len(started) > 3 else ''
         squirrel_name = started[4] if len(started) > 4 else ''  # and before the squirrel's name, a 4-tuple
         files: list[Attachment] = started[5] if len(started) > 5 else []  # and before files, a 5-tuple
+        selection: RunModel | None = started[6] if len(started) > 6 else None
         if run.status in FINISHED:
             return run.status  # stopped before its workflow started
         lifecycle.set_attributes({'thread_id': run.thread_id, 'user_id': run.user_id, 'trigger': run.trigger})
+        if selection is not None:
+            lifecycle.set_attributes(
+                {'model': selection.model, 'model_settings': json.dumps(selection.settings, sort_keys=True)}
+            )
         history = recent(ModelMessagesTypeAdapter.validate_json(history_json), resources.settings.history_limit)
         # The files go in outside a step, so DBOS records no file's bytes: a replay reads the same rows again.
         asked = ModelRequest(parts=[UserPromptPart(content=attachments.prompt(run.prompt, files))])
@@ -129,7 +136,18 @@ async def run_thread(run_id: str) -> str:
         try:
             try:
                 with timing('run.agent'):
-                    result = await resources.agent.run(prompt, deps=deps, message_history=history)
+                    if selection is None:
+                        # Old recorded starts keep their original default-agent path and DBOS step order.
+                        result = await resources.agent.run(prompt, deps=deps, message_history=history)
+                    else:
+                        # Run settings merge over the agent's own (`CACHE`), so prompt caching stays as it was.
+                        result = await resources.agent.run(
+                            prompt,
+                            deps=deps,
+                            message_history=history,
+                            model=selection.model,
+                            model_settings=selection.model_settings(),
+                        )
             except Exception as error:
                 logfire.error('Run {run_id} failed: {error_type}', run_id=run_id, error_type=type(error).__qualname__)
                 # Also in this process's own log, for running without Logfire. The type only: an error's text can
@@ -168,10 +186,11 @@ async def start(run_id: str) -> WorkflowHandleAsync[str]:
 
 async def start_run(
     resources: Resources, run_id: str
-) -> tuple[Run, bytes, Schedule | None, str, str, list[Attachment]]:
+) -> tuple[Run, bytes, Schedule | None, str, str, list[Attachment], RunModel]:
     with timing('run.start'):
         async with resources.pool.connection() as connection, connection.transaction():
             run = await store.load_run(connection, run_id)
+            selection = await model_preferences_store.snapshot(connection, run, resources.settings)
             await store.set_run_status(connection, run_id, 'running')
             history = await store.load_history(connection, run.thread_id)
             schedule = await store.schedule_of_thread(connection, run.thread_id) if run.trigger == 'schedule' else None
@@ -180,7 +199,7 @@ async def start_run(
         squirrel_name = user.squirrel_name if user is not None else ''
         files = await attachments.into_workspace(resources, run.user_id, run.id)
         history_json = ModelMessagesTypeAdapter.dump_json(history)
-        return run, history_json, schedule, local_time_in(timezone), squirrel_name, files
+        return run, history_json, schedule, local_time_in(timezone), squirrel_name, files, selection
 
 
 def local_time_in(timezone: str) -> str:

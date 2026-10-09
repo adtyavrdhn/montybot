@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 from pydantic_ai import Agent, FunctionToolset, RunContext
-from pydantic_ai.capabilities import HandleDeferredToolCalls
+from pydantic_ai.capabilities import HandleDeferredToolCalls, ResolveModelId
 from pydantic_ai.durable_exec.dbos import DBOSDurability
-from pydantic_ai.models import Model
+from pydantic_ai.models import Model, ModelResolutionContext
 from pydantic_ai.models.anthropic import AnthropicModelSettings
 from pydantic_ai.models.function import FunctionModel
 
@@ -23,6 +23,7 @@ from sammy.deps import RunDeps
 from sammy.integration_tools import INSTRUCTIONS as INTEGRATION_INSTRUCTIONS
 from sammy.integration_tools import connected_integrations, integration_tools
 from sammy.memory import memory_tools, recall
+from sammy.resources import load_model
 from sammy.schedule_tools import INSTRUCTIONS as SCHEDULE_INSTRUCTIONS
 from sammy.schedule_tools import schedule_tools, scheduled_run
 
@@ -96,6 +97,15 @@ CACHE = AnthropicModelSettings(
 definitions and the conversation so far (page snapshots included). Other providers ignore these keys."""
 
 
+def resolve_model(ctx: ModelResolutionContext[RunDeps], model_id: str) -> Model | None:
+    """DBOS records the selected ID and resolves custom providers inside model steps.
+
+    Do not recheck the current allowlist here: an existing run retains its approved snapshot.
+    """
+    model = load_model(model_id)
+    return model if isinstance(model, Model) else None
+
+
 def build_agent(model: Model | str) -> Agent[RunDeps, str]:
     """Tools run one at a time: they number their DBOS steps as they go, and an ask must be the run's only one."""
     return Agent[RunDeps, str](
@@ -126,6 +136,7 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
             integration_tools,
         ],
         capabilities=[
+            ResolveModelId(resolve_model),
             HandleDeferredToolCalls(handler=approvals.handle_approvals),
             DBOSDurability(
                 # The name runs' model steps were recorded under, from when there was a streaming and a

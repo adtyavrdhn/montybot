@@ -154,6 +154,33 @@ tool, and they appear on its reply.
 Jev intent and navigation advice is disabled for now, even when `TYPESAFE_API_KEY` is set. The main agent handles
 these decisions directly. Experimental Jev helpers remain available in the source for later evaluation.
 
+## Model picker
+
+The web and Mac apps offer a model picker in settings and a quick switcher beside the composer. Pick a model and
+its Thinking level for the next run. Advanced controls show only options supported by that model. Choices are
+saved per user in Postgres, not just on the device.
+
+Operators control the picker with `ALLOWED_MODELS`; `MODEL` remains the deployment default. With no allowlist,
+only the deployment default is offered. Set a JSON list of full model identifiers, including `MODEL`, for example:
+
+```dotenv
+MODEL=anthropic:claude-sonnet-4-6
+ALLOWED_MODELS=["anthropic:claude-sonnet-4-6","openai:gpt-5.2"]
+```
+
+Configure credentials for every listed provider on the server. The authenticated API rejects models outside the
+allowlist and unsupported settings, including arbitrary request parameters.
+
+Defaults come from the vendored clai2 model code, so nobody has to tune anything: reasoning on with medium effort
+and low verbosity for GPT, and thinking `medium` on Claude models that support it. Scheduled runs and watches think
+`low`, as they are routine, unless the user picked a level. Prompt caching stays Sammy's own (`CACHE` in
+`sammy/agent.py`) for every model. A user's saved settings are only what they changed, so better defaults reach
+everyone else. The model and its resolved settings are stored on the run when it starts, so changing a preference
+does not change a running task or its DBOS replay. `run.lifecycle` records the model and its settings.
+
+The vendored source and adaptations are documented in [`sammy/vendor/README.md`](sammy/vendor/README.md).
+Once clai2 and Sammy both use it, it should move into Pydantic AI or its harness, and this copy go.
+
 ## Integrations
 
 Users connect the services they use, and Sammy works in them through three agent tools that never change
@@ -182,7 +209,8 @@ and removed on the Integrations page of the web and Mac apps.
   (so Logfire shows cost) and the conversation's shape; database, run,
   browser and Monty timings; the site a browser step opens (host only); outgoing HTTP calls made with httpx, such as
   model provider requests (method, URL and status, never headers or bodies); `run_id` on every span of a run and
-  `thread_id`/`user_id` on `run.lifecycle`; exception types; the commit (`service.version`) and `ENVIRONMENT`;
+  `thread_id`/`user_id`, the selected model and validated model settings on `run.lifecycle`; exception types;
+  the commit (`service.version`) and `ENVIRONMENT`;
   token and system (CPU, memory) metrics.
 - **With `LOGFIRE_INCLUDE_CONTENT` (default on, for the demo):** messages, replies, instructions (with the user's
   memories), the agent's code, page snapshots, and exception messages and tracebacks. Turn it off before real users'
