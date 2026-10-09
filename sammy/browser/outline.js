@@ -69,8 +69,17 @@
     return text(el) || (el.getAttribute('title') || '').trim();
   }
 
+  // A password, or a field the page marks for a password, a one-time code or card details: its value is never read,
+  // and a lesson in the live view records no text typed there (sammy/liveview/recording.py).
+  function secure(el) {
+    if (el.tagName === 'INPUT' && (el.type || '').toLowerCase() === 'password') return true;
+    if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') return false;
+    const auto = (el.getAttribute('autocomplete') || '').toLowerCase();
+    return /(^|\s)(current-password|new-password|one-time-code|cc-[a-z-]+)(\s|$)/.test(auto);
+  }
+
   function valueOf(el, role) {
-    if (el.tagName === 'INPUT' && (el.type || '').toLowerCase() === 'password') {
+    if (secure(el)) {
       return el.value ? `${el.value.length} characters` : '';
     }
     if (el.tagName === 'SELECT') return Array.from(el.selectedOptions).map((o) => o.label || o.text).join(', ');
@@ -116,7 +125,7 @@
       if (role === 'checkbox' || role === 'radio' || role === 'switch') {
         extra.checked = el.checked === true || el.getAttribute('aria-checked') === 'true';
       }
-      if (el.tagName === 'INPUT' && (el.type || '').toLowerCase() === 'password') extra.secure = true;
+      if (secure(el)) extra.secure = true;
       push(el, role, nameOf(el, role), extra);
       if (role === 'link' || role === 'button') return;  // their text is their name
     }

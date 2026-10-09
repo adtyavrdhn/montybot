@@ -201,6 +201,13 @@ class OutlineSource(Protocol):
     async def outline(self) -> Outline: ...
 
 
+@runtime_checkable
+class OutlineBackend(Protocol):
+    """A `BrowserBackend` that can say what is on its page, so the polled live view can too (`FakeBrowser`)."""
+
+    async def outline(self) -> Outline: ...
+
+
 PageCommand = Literal['back', 'forward', 'reload', 'stop']
 """A browser's own buttons for the active tab."""
 

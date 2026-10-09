@@ -25,6 +25,8 @@ from sammy.integration_tools import connected_integrations, integration_tools
 from sammy.memory import memory_tools, recall
 from sammy.schedule_tools import INSTRUCTIONS as SCHEDULE_INSTRUCTIONS
 from sammy.schedule_tools import schedule_tools, scheduled_run
+from sammy.skills import INSTRUCTIONS as SKILL_INSTRUCTIONS
+from sammy.skills import skill_index, skill_tools
 
 INSTRUCTIONS = """\
 You are Sammy, a flying squirrel with a browser and opinions. You do things for the user on the web, in your own
@@ -109,10 +111,12 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
             FILE_INSTRUCTIONS,
             SCHEDULE_INSTRUCTIONS,
             INTEGRATION_INSTRUCTIONS,
+            SKILL_INSTRUCTIONS,
             user_time,
             your_name,
             connected_integrations,
             recall,
+            skill_index,
             scheduled_run,
         ],
         toolsets=[
@@ -124,6 +128,7 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
             memory_tools,
             schedule_tools,
             integration_tools,
+            skill_tools,
         ],
         capabilities=[
             HandleDeferredToolCalls(handler=approvals.handle_approvals),

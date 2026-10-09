@@ -8,7 +8,9 @@ JSON header of that length (`seq`, `width`, `height`, `mime`), then the image.
                      type {text}   press {key, modifiers}   scroll {delta_x, delta_y, x?, y?}   navigate {url}
                      switch_tab {tab_id}   viewport {width, height}   give_back {}   outline {}
                      back {}   forward {}   reload {}   stop {}   new_tab {}   close_tab {tab_id}
-    server -> page   hello {handoff_id, reason, controls}   error {message}   ended {given_back}
+                     teach {goal}   teach_stop {}
+    server -> page   hello {handoff_id, reason, controls, teach}   error {message}   ended {given_back}
+                     teaching {goal}   taught {skill_id, name}
                      tabs {tabs: [{tab_id, url, title, active, closable, loading, can_go_back?, can_go_forward?}]}
                      outline {title, available, items: [{role, name, x, y, width, height, ...}]}
                      and binary frames
@@ -19,6 +21,10 @@ JSON header of that length (`seq`, `width`, `height`, `mime`), then the image.
 
 `outline` is for a user who drives with a screen reader: what is on the page, in reading order, with where each item
 is (`sammy.browser.live.Outline`). The page asks for it; the server answers once per request.
+
+`teach` starts a lesson ("Teach Sammy", `sammy.liveview.recording`): what the user does next is recorded, never what
+they type into a password or other sensitive field. `teach_stop` ends it, and the server answers `taught` once the
+lesson is a draft skill for the user to review. `hello`'s `teach` says whether this server takes lessons.
 """
 
 from __future__ import annotations
@@ -49,6 +55,8 @@ MAX_MESSAGE = 64 * 1024
 _MIMES = ('image/jpeg', 'image/png')
 _SIZES = (100, 10_000)
 """The smallest and largest `viewport` width and height, in CSS pixels."""
+MAX_GOAL = 200
+"""The longest goal a lesson may have, in characters."""
 
 
 class WireError(ValueError):
@@ -104,7 +112,33 @@ class GiveBackRequest:
     kind: Literal['give_back'] = 'give_back'
 
 
-ClientMessage = LiveInput | SwitchTab | ViewportSize | GiveBackRequest | OutlineRequest | Command | NewTab | CloseTab
+@dataclass(frozen=True, kw_only=True)
+class TeachRequest:
+    """The user pressed "Teach Sammy": record what they do next, to show Sammy how `goal` is done."""
+
+    goal: str
+    kind: Literal['teach'] = 'teach'
+
+
+@dataclass(frozen=True, kw_only=True)
+class TeachStop:
+    """The lesson is over: turn it into a draft skill."""
+
+    kind: Literal['teach_stop'] = 'teach_stop'
+
+
+ClientMessage = (
+    LiveInput
+    | SwitchTab
+    | ViewportSize
+    | GiveBackRequest
+    | OutlineRequest
+    | Command
+    | NewTab
+    | CloseTab
+    | TeachRequest
+    | TeachStop
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -113,7 +147,26 @@ class Hello:
     reason: str
     controls: bool = False
     """The browser takes `Command`, `NewTab` and `CloseTab`."""
+    teach: bool = False
+    """The server takes lessons (`TeachRequest`)."""
     kind: Literal['hello'] = 'hello'
+
+
+@dataclass(frozen=True, kw_only=True)
+class Teaching:
+    """The lesson has started: what the user does now is recorded."""
+
+    goal: str
+    kind: Literal['teaching'] = 'teaching'
+
+
+@dataclass(frozen=True, kw_only=True)
+class Taught:
+    """The lesson is a draft skill now, waiting for the user's review in Skills."""
+
+    skill_id: str
+    name: str
+    kind: Literal['taught'] = 'taught'
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -132,7 +185,7 @@ class Ended:
     kind: Literal['ended'] = 'ended'
 
 
-ServerMessage = Hello | Tabs | ErrorMessage | Ended | Outline
+ServerMessage = Hello | Tabs | ErrorMessage | Ended | Outline | Teaching | Taught
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -184,6 +237,13 @@ def decode_client(text: str) -> ClientMessage:
             return NewTab()
         case 'close_tab':
             return CloseTab(tab_id=_str(data, 'tab_id'))
+        case 'teach':
+            goal = _str(data, 'goal').strip()
+            if not 0 < len(goal) <= MAX_GOAL:
+                raise WireError(f'goal must be 1 to {MAX_GOAL} characters')
+            return TeachRequest(goal=goal)
+        case 'teach_stop':
+            return TeachStop()
         case _:
             raise WireError('unknown kind')
 
@@ -215,7 +275,9 @@ def encode_client(message: ClientMessage) -> str:
             data = {'kind': message.kind, 'url': url}
         case ViewportSize(width=width, height=height):
             data = {'kind': message.kind, 'width': width, 'height': height}
-        case GiveBackRequest() | OutlineRequest() | Command() | NewTab():
+        case TeachRequest(goal=goal):
+            data = {'kind': message.kind, 'goal': goal}
+        case GiveBackRequest() | OutlineRequest() | Command() | NewTab() | TeachStop():
             data = {'kind': message.kind}
     return json.dumps(data)
 
@@ -226,8 +288,14 @@ def encode_client(message: ClientMessage) -> str:
 def encode_server(message: ServerMessage) -> str:
     data: dict[str, object]
     match message:
-        case Hello(handoff_id=handoff_id, reason=reason, controls=controls):
-            data = {'kind': message.kind, 'handoff_id': handoff_id, 'reason': reason, 'controls': controls}
+        case Hello(handoff_id=handoff_id, reason=reason, controls=controls, teach=teach):
+            data = {
+                'kind': message.kind,
+                'handoff_id': handoff_id,
+                'reason': reason,
+                'controls': controls,
+                'teach': teach,
+            }
         case Tabs(tabs=tabs):
             data = {'kind': 'tabs', 'tabs': [_tab_json(t) for t in tabs]}
         case ErrorMessage(message=text):
@@ -236,6 +304,10 @@ def encode_server(message: ServerMessage) -> str:
             data = {'kind': message.kind, 'given_back': given_back}
         case Outline():
             data = {'kind': 'outline'} | message.to_json()
+        case Teaching(goal=goal):
+            data = {'kind': message.kind, 'goal': goal}
+        case Taught(skill_id=skill_id, name=name):
+            data = {'kind': message.kind, 'skill_id': skill_id, 'name': name}
     return json.dumps(data)
 
 
@@ -244,7 +316,10 @@ def decode_server(text: str) -> ServerMessage:
     match data.get('kind'):
         case 'hello':
             return Hello(
-                handoff_id=_str(data, 'handoff_id'), reason=_str(data, 'reason'), controls=data.get('controls') is True
+                handoff_id=_str(data, 'handoff_id'),
+                reason=_str(data, 'reason'),
+                controls=data.get('controls') is True,
+                teach=data.get('teach') is True,
             )
         case 'tabs':
             tabs = data.get('tabs')
@@ -258,6 +333,10 @@ def decode_server(text: str) -> ServerMessage:
         case 'outline':
             outline = Outline.from_walker(data)
             return Outline(title=outline.title, items=outline.items, available=data.get('available') is not False)
+        case 'teaching':
+            return Teaching(goal=_str(data, 'goal'))
+        case 'taught':
+            return Taught(skill_id=_str(data, 'skill_id'), name=_str(data, 'name'))
         case _:
             raise WireError('unknown kind')
 

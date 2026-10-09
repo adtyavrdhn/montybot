@@ -22,6 +22,10 @@ from sammy.liveview.wire import (
     Hello,
     OutlineRequest,
     SwitchTab,
+    Taught,
+    Teaching,
+    TeachRequest,
+    TeachStop,
     decode_frame,
     decode_server,
     encode_client,
@@ -64,6 +68,8 @@ class LiveViewClient:
         self.outline: Outline | None = None
         self._outlines = 0
         self.ended: Ended | None = None
+        self.teaching: Teaching | None = None
+        self.taught: Taught | None = None
         self.closed = False
 
     @classmethod
@@ -109,6 +115,20 @@ class LiveViewClient:
         await self.wait_until(lambda: self.ended is not None, timeout=timeout)
         assert self.ended is not None
         return self.ended
+
+    async def teach(self, goal: str, *, timeout: float = 10) -> None:
+        """Press "Teach Sammy" and name the goal; returns once the lesson is recording."""
+        self.teaching = None
+        await self.send(TeachRequest(goal=goal))
+        await self.wait_until(lambda: self.teaching is not None, timeout=timeout)
+
+    async def stop_teaching(self, *, timeout: float = 60) -> Taught:
+        """End the lesson and wait for its draft skill."""
+        self.taught = None
+        await self.send(TeachStop())
+        await self.wait_until(lambda: self.taught is not None, timeout=timeout)
+        assert self.taught is not None
+        return self.taught
 
     async def read_outline(self, *, timeout: float = 10) -> Outline:
         """Ask what is on the page, as a screen reader would, and wait for the answer."""
@@ -159,6 +179,10 @@ class LiveViewClient:
                         case Outline() as outline:
                             self.outline = outline
                             self._outlines += 1
+                        case Teaching() as teaching:
+                            self.teaching = teaching
+                        case Taught() as taught:
+                            self.taught = taught
                 async with self._changed:
                     self._changed.notify_all()
         except ConnectionClosed:

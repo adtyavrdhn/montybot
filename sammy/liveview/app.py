@@ -12,6 +12,10 @@ the hand-off is active.
 The app reaches the browser only through `BrowserService.live_view` and `end_handoff`, with the hand-off's id, so the
 service's lease decides what is allowed. Frames go to the socket and nowhere else: they are not logged, stored or
 given to the run. The run gets a `GiveBack` with a summary in words.
+
+With a `teacher`, the user can teach Sammy a task while they drive ("Teach Sammy"): the connection records a
+`Lesson` (`recording.py`) until they stop, and the teacher makes it a draft skill. A lesson belongs to its connection:
+giving the browser back, or the connection closing, drops one not yet stopped.
 """
 
 from __future__ import annotations
@@ -30,11 +34,12 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from sammy.browser.contract import BrowserError, Navigate, NotSupported
-from sammy.browser.live import ControlsSource, Frame, FrameSource, Outline, OutlineSource, Viewport
+from sammy.browser.live import ControlsSource, Frame, FrameSource, Outline, OutlineSource, Tabs, Viewport
 from sammy.browser.service import Handoff, HandoffEnded, HandoffId, HandoffNotActive, RunId, UnknownRun, UserId
 from sammy.liveview.activity import Activity
 from sammy.liveview.auth import Authenticator
 from sammy.liveview.handoffs import GiveBack, Handoffs
+from sammy.liveview.recording import Lesson, Teacher, TeachingFailed
 from sammy.liveview.wire import (
     CloseTab,
     Command,
@@ -46,6 +51,10 @@ from sammy.liveview.wire import (
     OutlineRequest,
     ServerMessage,
     SwitchTab,
+    Taught,
+    Teaching,
+    TeachRequest,
+    TeachStop,
     ViewportSize,
     WireError,
     decode_client,
@@ -100,12 +109,19 @@ def live_view_app(
     allowed_origins: frozenset[str] = frozenset(),
     frame_ancestors: str = "'self'",
     refuse_url: RefuseUrl = web_only,
+    teacher: Teacher | None = None,
 ) -> Starlette:
     """The app. `allowed_origins` lists page origins, such as `https://app.example`, that may open the WebSocket
     besides the app's own host; `frame_ancestors` is the CSP list of sites that may embed the page. `refuse_url` checks
-    each address the user types into the address bar before the browser opens it."""
+    each address the user types into the address bar before the browser opens it. `teacher` makes lessons into draft
+    skills; without one, the page offers no "Teach Sammy"."""
     live = _LiveView(
-        service=service, handoffs=handoffs, auth=auth, allowed_origins=allowed_origins, refuse_url=refuse_url
+        service=service,
+        handoffs=handoffs,
+        auth=auth,
+        allowed_origins=allowed_origins,
+        refuse_url=refuse_url,
+        teacher=teacher,
     )
     headers = {
         'Content-Security-Policy': (
@@ -155,12 +171,14 @@ class _LiveView:
         auth: Authenticator,
         allowed_origins: frozenset[str],
         refuse_url: RefuseUrl,
+        teacher: Teacher | None,
     ) -> None:
         self._service = service
         self._handoffs = handoffs
         self._auth = auth
         self._allowed_origins = allowed_origins
         self._refuse_url = refuse_url
+        self._teacher = teacher
         self._slots: dict[HandoffId, _Slot] = {}
         self._activity: dict[HandoffId, Activity] = {}
 
@@ -204,6 +222,7 @@ class _LiveView:
                 service=self._service,
                 handoffs=self._handoffs,
                 refuse_url=self._refuse_url,
+                teacher=self._teacher,
             )
             try:
                 await connection.run()
@@ -250,8 +269,12 @@ class _Connection:
         service: LiveViewService,
         handoffs: Handoffs,
         refuse_url: RefuseUrl,
+        teacher: Teacher | None,
     ) -> None:
         self._websocket = websocket
+        self._teacher = teacher
+        self._lesson: Lesson | None = None
+        self._tabs: Tabs | None = None
         self._refuse_url = refuse_url
         self._source = source
         self._handoff = handoff
@@ -267,7 +290,9 @@ class _Connection:
 
     async def run(self) -> None:
         controls = isinstance(self._source, ControlsSource)
-        await self._send(Hello(handoff_id=self._handoff.handoff_id, reason=self._handoff.reason, controls=controls))
+        handoff = self._handoff
+        teach = self._teacher is not None
+        await self._send(Hello(handoff_id=handoff.handoff_id, reason=handoff.reason, controls=controls, teach=teach))
         pump = asyncio.create_task(self._pump())
         read = asyncio.create_task(self._read())
         replaced = asyncio.create_task(self._slot.replaced.wait())
@@ -303,6 +328,9 @@ class _Connection:
                     return
             else:
                 self._activity.saw(update)
+                self._tabs = update
+                if self._lesson is not None:
+                    await self._lesson.saw(update)
                 if not await self._send(update):
                     return
 
@@ -336,10 +364,16 @@ class _Connection:
                         )
                     case Command() | NewTab() | CloseTab():
                         await self._control(decoded)
+                    case TeachRequest(goal=goal):
+                        await self._teach(goal)
+                    case TeachStop():
+                        await self._taught()
                     case Navigate(url=url) if (refused := await self._refuse_url(url)) is not None:
                         await self._send(ErrorMessage(message=refused.removeprefix('Error: ')))
                     case _:
                         self._activity.record(decoded)
+                        if self._lesson is not None:
+                            await self._lesson.before(decoded)
                         await self._source.send(decoded)
             except HandoffNotActive:
                 self.over = True
@@ -361,6 +395,42 @@ class _Connection:
                 await source.new_tab()
             case CloseTab(tab_id=tab_id):
                 await source.close_tab(tab_id)
+
+    async def _teach(self, goal: str) -> None:
+        """Start a lesson, on the page the user is on. A second start begins it again."""
+        if self._teacher is None:
+            await self._send(ErrorMessage(message='Teaching Sammy is not available here.'))
+            return
+        self._lesson = Lesson(goal, self._outline)
+        await self._lesson.start(self._tabs)
+        await self._send(Teaching(goal=goal))
+
+    async def _taught(self) -> None:
+        """End the lesson and have it drafted as a skill. Input waits meanwhile, which is a few seconds."""
+        lesson, self._lesson = self._lesson, None
+        if lesson is None or self._teacher is None:
+            await self._send(ErrorMessage(message='There is no lesson to stop. Press Teach Sammy first.'))
+            return
+        if not lesson.did_something:
+            await self._send(ErrorMessage(message='Nothing was recorded. Press Teach Sammy, then do the task.'))
+            return
+        try:
+            drafted = await self._teacher.draft(user_id=self._handoff.user_id, goal=lesson.goal, lesson=lesson.text())
+        except TeachingFailed as error:
+            await self._send(ErrorMessage(message=str(error)))
+            return
+        await self._send(Taught(skill_id=drafted.skill_id, name=drafted.name))
+
+    async def _outline(self) -> Outline | None:
+        """What is on the active tab, for a lesson; None when the engine cannot tell."""
+        source = self._source
+        if not isinstance(source, OutlineSource):
+            return None
+        try:
+            outline = await source.outline()
+        except BrowserError:
+            return None
+        return outline if outline.available else None
 
     async def _fit(self, size: ViewportSize) -> None:
         """Lay the browser out for a phone, or give it its own size back. The source restores the size when it

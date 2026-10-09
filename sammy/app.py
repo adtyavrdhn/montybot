@@ -16,7 +16,7 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from sammy import api, approvals, tunnel_api, workflows
+from sammy import api, approvals, skill_api, tunnel_api, workflows
 from sammy.live import live_app
 from sammy.observability import ClientTraceContext
 from sammy.resources import Resources, open_resources
@@ -84,6 +84,9 @@ def create_app(settings: Settings) -> ASGIApp:
             Route('/integrations/mcp/callback', api.mcp_callback),
             Route('/api/memories', api.read_memories),
             Route('/api/memories/{memory_id:uuid}', api.remove_memory, methods=['DELETE']),
+            Route('/api/skills', skill_api.read_skills),
+            Route('/api/skills/{skill_id:uuid}', skill_api.change_skill, methods=['PUT']),
+            Route('/api/skills/{skill_id:uuid}', skill_api.remove_skill, methods=['DELETE']),
             Route('/api/telemetry', api.telemetry_settings),
             Route('/api/telemetry/{path:path}', api.forward_telemetry, methods=['POST']),
         ],

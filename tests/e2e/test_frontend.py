@@ -27,6 +27,7 @@ class MockAPI:
     run: dict[str, object] | None = None
     sites: list[dict[str, str]] = field(default_factory=list)
     schedules: list[dict[str, object]] = field(default_factory=list)
+    skills: list[dict[str, object]] = field(default_factory=list)
     uploads: dict[str, dict[str, object]] = field(default_factory=dict)  # by id, as `POST /api/attachments` made them
     upload_status: int = 201
     thread_status: str | None = None
@@ -111,6 +112,16 @@ class MockAPI:
                 self.schedules = []
             else:
                 self.schedules[0]['paused'] = path.endswith('/pause')
+        elif path == '/api/skills':
+            result = self.skills
+        elif path.startswith('/api/skills/'):
+            skill_id = path.rsplit('/', 1)[1]
+            if method == 'DELETE':
+                self.skills = [s for s in self.skills if s['id'] != skill_id]
+            else:
+                assert isinstance(body, dict)
+                self.skills = [{**s, **body} if s['id'] == skill_id else s for s in self.skills]
+                result = next(s for s in self.skills if s['id'] == skill_id)
         elif path.startswith('/api/asks/'):
             self.run = None
         elif path.endswith('/stop'):
@@ -315,6 +326,38 @@ def test_saved_signins_and_schedules(frontend: tuple[Page, MockAPI]) -> None:
     assert ('POST', '/api/schedules/task/pause', {}) in mock.calls
     assert ('POST', '/api/schedules/task/resume', {}) in mock.calls
     assert ('DELETE', '/api/schedules/task', None) in mock.calls
+
+
+def test_skills_are_reviewed_edited_and_deleted(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    draft: dict[str, object] = {
+        'id': 'skill',
+        'name': 'Buy again',
+        'when_to_use': 'When the user wants their last order again.',
+        'inputs': '',
+        'steps': '1. Your orders.',
+        'verify': '',
+        'returns': '',
+        'approvals': '',
+        'failures': '',
+        'draft': True,
+    }
+    mock.skills = [draft]
+    workspace(page, mock)
+    page.click('#open-skills')
+    expect(page.locator('#skills-title')).to_be_focused()
+    expect(page.locator('#skill-list')).to_contain_text('When the user wants their last order again.')
+    expect(page.locator('#skill-list .badge')).to_have_text('Draft')
+    page.get_by_role('button', name='Edit Buy again').click()
+    page.get_by_label('Steps').fill('1. Open Your orders.\n2. Press Buy again.')
+    page.get_by_role('button', name='Save skill').click()
+    expect(page.locator('#skill-list .badge')).to_have_count(0)  # saved: Sammy uses it now
+    saved = {k: v for k, v in draft.items() if k != 'id'} | {'steps': '1. Open Your orders.\n2. Press Buy again.'}
+    assert ('PUT', '/api/skills/skill', saved | {'draft': False}) in mock.calls
+    page.once('dialog', lambda dialog: dialog.accept())  # "Delete ...? Sammy will no longer use it."
+    page.get_by_role('button', name='Delete', exact=True).click()
+    expect(page.locator('#skill-list')).to_contain_text('No skills yet')
+    assert ('DELETE', '/api/skills/skill', None) in mock.calls
 
 
 @pytest.mark.parametrize('kind', ['question', 'approval', 'handoff'])

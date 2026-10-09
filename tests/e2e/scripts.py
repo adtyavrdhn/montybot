@@ -369,6 +369,83 @@ def my_gmail(turn: Turn) -> ModelResponse:
     return say(turn.result_of('connect_integration'))
 
 
+# --- skills (#128) ---
+
+CLICK_LABEL = """
+async def click_label(label):
+    page = await read_page()
+    for line in page.splitlines():
+        if ('button ' in line or 'link ' in line) and '"' + label + '"' in line:
+            return await click(line.split(']')[0].split('[')[1])
+    raise RuntimeError('No control called ' + label + ' on the page')
+"""
+
+
+def show_me(turn: Turn) -> ModelResponse:
+    """ "Show me how to ...": open the site and hand the browser over, for the user to teach a skill."""
+    if not turn.returns:
+        return run(f'print(await goto({turn.url + "/orders"!r}))')
+    if not turn.called('hand_off'):
+        return call('hand_off', reason='Show me: press Teach Sammy, do it once, then give me the browser back.')
+    return say('Thanks for showing me. Your draft skill is in Skills for you to check.')
+
+
+def draft_from_lesson(turn: Turn) -> ModelResponse:
+    """The drafter (`sammy.teach`): the lesson's steps as the skill's, in its own words."""
+    goal = re.search(r'^Goal: (.+)$', turn.prompt, re.MULTILINE)
+    assert goal, turn.prompt
+    steps = turn.prompt.split('What the user did, in order:\n', 1)[1]
+    return call(
+        'final_result',
+        name=goal.group(1),
+        when_to_use=f'When the user asks to {goal.group(1).lower()}.',
+        steps=steps,
+        verify="The cart shows the order's items.",
+    )
+
+
+def following(skill: str) -> str:
+    """Code that does a skill's steps in one go: each control it clicked, on the page it clicked it on."""
+    code: list[str] = []
+    page = ''
+    for line in skill.splitlines():
+        if reached := re.search(r'(?:Started on|Reached) page .*? at (\S+?)(?:;|$)', line):
+            page = reached.group(1)
+        elif clicked := re.search(r'(?:Clicked|Pressed Enter on) (?:button|link) "([^"]+)"', line):
+            if page:
+                code.append(f'await goto({page!r})')
+                page = ''
+            code.append(f'page = await click_label({clicked.group(1)!r})')
+    return CLICK_LABEL + '\n'.join(code) + '\nprint(page)'
+
+
+def reorder(turn: Turn) -> ModelResponse:
+    """ "Reorder my last order at ...": with a skill for it, load it and do its steps in one snippet; without one,
+    find the way a page at a time, as a model does on a site it does not know."""
+    listed = re.search(r"The user's skills.*\n- ([^:\n]+):", turn.instructions)
+    if listed and not turn.called('load_skill'):
+        return call('load_skill', name=listed.group(1))
+    if turn.called('load_skill') and not turn.called('run_code'):
+        return run(following(turn.result_of('load_skill')))
+    if not listed and turn.called('run_code') < 3:
+        steps = [f'print(await goto({turn.url + "/"!r}))', "print(await click_label('Your orders'))"]
+        steps.append("print(await click_label('Reorder'))")
+        return run(CLICK_LABEL + steps[turn.called('run_code')])
+    return say(line_with(turn.last, 'In cart:') or f'I could not do it. {turn.last}')
+
+
+def save_a_skill(turn: Turn) -> ModelResponse:
+    """Offer to save a skill; the user approves it first."""
+    if not turn.called('save_skill'):
+        return call(
+            'save_skill',
+            name='Check my cart',
+            when_to_use='When the user asks what is in their cart.',
+            steps='1. Open the shop.\n2. Open Cart and read the items.',
+        )
+    return say(turn.result_of('save_skill'))
+
+
 def acme_wiki(turn: Turn) -> ModelResponse:
     """A service no app is offered for: the chat offers to add an MCP server for it."""
     if not turn.called('connect_integration'):
@@ -377,6 +454,10 @@ def acme_wiki(turn: Turn) -> ModelResponse:
 
 
 SCRIPTS: dict[str, Script] = {
+    'Show me how to reorder my last order at': show_me,
+    'Write a skill from this lesson.': draft_from_lesson,
+    'Reorder my last order at': reorder,
+    'Save a skill for checking my cart': save_a_skill,
     "yo what's on my linear": my_linear,
     'Search my Acme Wiki': acme_wiki,
     'Check my Gmail': my_gmail,

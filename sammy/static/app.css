@@ -194,6 +194,9 @@ h1, h2 { letter-spacing: -.045em; font-weight: 600; line-height: 1.15; }
 .page li .list-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .page li button { font-size: .85rem; }
 .list-detail { display: block; margin-top: 4px; color: var(--muted); font-size: .85rem; }
+.page li.skill { flex-wrap: wrap; }
+.skill-form { flex: 1 1 100%; max-width: 640px; }
+.skill-form button[type="submit"] { margin-top: 8px; }
 .page-note { padding: 20px 24px; background: var(--lavender); border-radius: 8px; font-size: .9rem; color: var(--muted); }
 .page-note strong { display: block; color: var(--text); margin-bottom: 4px; }
 

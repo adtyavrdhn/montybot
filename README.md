@@ -115,6 +115,9 @@ layer reports in, in **one connected trace**.
   opens spreadsheets with real CPython, and hands files back with `share_file`.
 - **Memory, schedules and notifications.** Per-user memories, cron schedules in your own time zone, watches, and web
   push plus email when Sammy needs you or finishes.
+- **Skills: show it once.** Press **Teach Sammy** in the live view and do a task; Sammy turns what you did into a
+  playbook you review, and the next run on that site goes straight there (see [Skills](#skills)). Passwords and card
+  details are never recorded.
 - **Everywhere you are.** A framework-free web app that works on phones, and a native SwiftUI **Mac app** with a
   menu bar, a command palette and an animated 3D squirrel. 🐿️
 
@@ -173,6 +176,30 @@ and removed on the Integrations page of the web and Mac apps.
   with the user's data key. Requests go to public addresses only, checked as each connection opens
   (`sammy/integrations/egress.py`), and are never traced, as a server's URL can hold a key.
 
+## Skills
+
+A skill is a playbook for a task on a site the user uses (#128): its name, when to use it, what it needs, its steps,
+how to check it worked, what to give back, what to ask first, and what to do when a step fails. Each user's skills are
+rows in `sammy.skills` (`sammy/skills.py`).
+
+- **The agent** sees only a short index (each saved skill's name and when to use it) in its instructions, looked up
+  once per run, so the prompt stays small and cached. It loads a whole skill with `load_skill(name)` when a request
+  fits one. After a task of several steps that no skill covered, it may offer to save one with `save_skill`, which asks
+  the user first (an approval) and is not offered in scheduled runs.
+- **Teach Sammy.** In the live view the user presses Teach Sammy, names the goal, and does the task in Sammy's browser.
+  The live view records a lesson in words (`sammy/liveview/recording.py`): what they clicked or pressed Enter on (by
+  its role and name on the page), other keys, scrolls, the pages they reached (title, address without its query,
+  headings and controls), and what they typed into ordinary fields. Anything typed into a password field or another
+  sensitive one (card number, security or one-time code, anything a page marks for a password or card details, and any
+  field it cannot read) is recorded as "typed a secret", with no text. On Stop, a model turns the lesson into a draft
+  skill (`sammy/teach.py`). To teach from scratch, ask Sammy to let you show it: it opens the site and hands over.
+- **The apps** list skills, edit them, save a draft (only then does the agent see it) and delete them: the Skills page
+  of the web app and the Mac app, over `/api/skills` (`sammy/skill_api.py`).
+
+`tests/e2e/test_skills.py` teaches the shop's "Reorder" through the live view and checks that the next run on the
+site takes fewer model calls, and that no password reaches the draft, the database or the logs;
+`tests/liveview/test_recording.py` holds the recording rules.
+
 ## Observability
 
 `LOGFIRE_TOKEN` is optional: without it, no telemetry is sent to Logfire. What is exported is decided per field in
@@ -185,7 +212,9 @@ and removed on the Integrations page of the web and Mac apps.
   `thread_id`/`user_id` on `run.lifecycle`; exception types; the commit (`service.version`) and `ENVIRONMENT`;
   token and system (CPU, memory) metrics.
 - **With `LOGFIRE_INCLUDE_CONTENT` (default on, for the demo):** messages, replies, instructions (with the user's
-  memories), the agent's code, page snapshots, and exception messages and tracebacks. Turn it off before real users'
+  memories and skill names), loaded skills, the lessons a user teaches (never what they typed into a sensitive
+  field: that is never recorded) and the drafts made from them, the agent's code, page snapshots, and exception
+  messages and tracebacks. Turn it off before real users'
   data flows through.
 - **Never:** cookies and browser state, saved sign-ins, integration credentials and MCP server URLs, passwords typed
   in live view, session cookies, app secrets,
@@ -216,8 +245,8 @@ On desktop, chats stay in a persistent sidebar; on a phone, the Chats button ope
 
 Create an account or sign in, then describe a task in a new chat. Example prompts fill the message box for you to
 review before sending. Watch Sammy's browser while it works, take over when it asks you to sign in, and answer
-questions or approve actions in the chat. Saved sign-ins and schedules are available in the sidebar, alongside
-notification opt-in. Motion respects your device's reduced-motion preference.
+questions or approve actions in the chat. Saved sign-ins, schedules and skills are available in the sidebar,
+alongside notification opt-in. Motion respects your device's reduced-motion preference.
 
 ## Mac app
 

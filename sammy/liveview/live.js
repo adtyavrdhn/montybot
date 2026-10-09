@@ -13,6 +13,9 @@ const url = document.getElementById('url');
 const status = document.getElementById('status');
 const useHere = document.getElementById('use-here');
 const back = document.getElementById('back');
+const teach = document.getElementById('teach');
+const teachForm = document.getElementById('teach-form');
+const goal = document.getElementById('goal');
 
 const BUTTONS = ['left', 'middle', 'right'];
 const MODIFIERS = ['Alt', 'Control', 'Meta', 'Shift'];
@@ -29,6 +32,7 @@ let finished = false;
 let pendingMove = null;
 let resizeTimer = 0;
 let sentRoom = null;
+let lesson = 'off';  // 'off', 'recording' or 'drafting': "Teach Sammy" (recording.py on the server)
 
 function socketUrl() {
   const address = new URL(location.href);
@@ -61,8 +65,16 @@ function onMessage(message) {
   if (message.kind === 'hello') {
     reason.textContent = 'Sammy needs you: ' + message.reason;
     giveBack.disabled = false;
+    teach.hidden = !message.teach;
+    setLesson('off');  // a lesson belongs to its connection
     sentRoom = null;  // a new connection: the server has not heard the size yet
     sendViewport();  // now, with the reason shown, the bars have their final height
+  } else if (message.kind === 'teaching') {
+    setLesson('recording');
+    status.textContent = `Recording: ${message.goal}. Passwords and card details are never recorded.`;
+  } else if (message.kind === 'taught') {
+    setLesson('off');
+    status.textContent = `Draft skill "${message.name}" saved. Review it in Skills before Sammy uses it.`;
   } else if (message.kind === 'tabs') {
     tabs.replaceChildren(...message.tabs.map((tab) => new Option(tab.title || tab.url, tab.tab_id, false, tab.active)));
     tabs.hidden = message.tabs.length < 2;
@@ -71,6 +83,7 @@ function onMessage(message) {
   } else if (message.kind === 'error') {
     status.textContent = message.message;
     if (!finished) giveBack.disabled = false;  // a failed give-back can be tried again
+    if (lesson === 'drafting') setLesson('off');  // the draft failed: teach again
   } else if (message.kind === 'ended') {
     finish(message.given_back ? 'Thanks. Sammy has its browser back.'
                               : 'Sammy has its browser back. Nothing more to do here.');
@@ -112,8 +125,36 @@ function finish(text) {
   finished = true;
   status.textContent = text;
   giveBack.disabled = true;
+  teach.hidden = true;
+  teachForm.hidden = true;
   if (socket) socket.close();
 }
+
+// --- teaching ---
+
+function setLesson(next) {
+  lesson = next;
+  teach.classList.toggle('recording', next === 'recording');
+  teach.disabled = next === 'drafting';
+  teach.textContent = { off: 'Teach Sammy', recording: '\u25CF Stop and save', drafting: 'Writing a draft\u2026' }[next];
+}
+
+teach.addEventListener('click', () => {
+  if (lesson === 'off') {
+    teachForm.hidden = false;
+    goal.focus();
+  } else if (lesson === 'recording') {
+    setLesson('drafting');
+    send({ kind: 'teach_stop' });
+  }
+});
+teachForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  teachForm.hidden = true;
+  send({ kind: 'teach', goal: goal.value.trim() });
+  keys.focus({ preventScroll: true });
+});
+document.getElementById('teach-cancel').addEventListener('click', () => { teachForm.hidden = true; });
 
 // --- size ---
 
