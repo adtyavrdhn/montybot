@@ -190,7 +190,7 @@ async def start_run(
     with timing('run.start'):
         async with resources.pool.connection() as connection, connection.transaction():
             run = await store.load_run(connection, run_id)
-            selection = await model_preferences_store.snapshot(connection, run, resources.settings)
+            selection = await model_preferences_store.snapshot(connection, run, resources.providers)
             await store.set_run_status(connection, run_id, 'running')
             history = await store.load_history(connection, run.thread_id)
             schedule = await store.schedule_of_thread(connection, run.thread_id) if run.trigger == 'schedule' else None

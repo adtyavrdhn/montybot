@@ -11,7 +11,7 @@ from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.anthropic import AnthropicModelSettings
 
 from sammy.agent import CACHE
-from sammy.resources import load_model
+from sammy.model_providers import load_model
 from sammy.settings import Settings
 from sammy.vendor.claude_code import ClaudeCodeModel
 

@@ -6,8 +6,35 @@ import tempfile
 from pathlib import Path
 from typing import Self
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from sammy.vendor.clai2_models.vllm import api_url
+
+RESERVED_PREFIXES = frozenset({'script', 'claude-code'})
+"""Model name prefixes Sammy resolves itself, so no endpoint may take them."""
+
+
+class Endpoint(BaseModel):
+    """An OpenAI-compatible server the operator runs or trusts: vLLM, Ollama, LM Studio, an internal proxy.
+
+    Only the operator sets these, in settings. They may be private addresses, so they skip the public-only egress
+    check that users' own MCP servers get (`sammy/integrations/egress.py`); never build one from a user's input.
+    """
+
+    model_config = ConfigDict(extra='forbid', frozen=True)
+    name: str = Field(pattern=r'^[a-z0-9][a-z0-9_-]*$')
+    """Its models are `<name>:<model>` in the picker, `MODEL` and `ALLOWED_MODELS`."""
+    base_url: str
+    """The server's root or its `/v1` root."""
+    api_key: SecretStr | None = None
+    models: list[str] | None = None
+    """Offer only these of its models, for a proxy that serves many. Unset: every model it lists."""
+
+    @field_validator('base_url')
+    @classmethod
+    def valid_base_url(cls, value: str) -> str:
+        return api_url(value)
 
 
 class Settings(BaseSettings):
@@ -49,19 +76,36 @@ class Settings(BaseSettings):
     `sammy claude-code-login`); or `script:module:attribute` for a `Model` object, which is how tests script the
     model."""
     allowed_models: list[str] = Field(default_factory=list)
-    """JSON list of selectable model IDs. Empty means only MODEL; MODEL must be included otherwise."""
+    """JSON list of selectable model IDs. Empty means only MODEL; MODEL must be included otherwise. Models the
+    operator's OpenAI-compatible servers serve are added to these when the app starts."""
+    pydantic_ai_gateway_api_key: SecretStr | None = None
+    """Pydantic AI Gateway: one key for every `gateway/<provider>:<model>` model."""
+    vllm_url: str | None = None
+    """A vLLM server, whose models are `vllm:<model>`. Shorthand for an `OPENAI_COMPATIBLE` entry named `vllm`."""
+    vllm_api_key: SecretStr | None = None
+    openai_compatible: list[Endpoint] = Field(default_factory=list[Endpoint])
+    """JSON list of OpenAI-compatible servers: `[{"name": "ollama", "base_url": "http://ollama:11434"}]`, with
+    optional `api_key` and `models`."""
 
     @model_validator(mode='after')
-    def check_allowed_models(self) -> Self:
+    def check_models(self) -> Self:
         if self.allowed_models and self.model not in self.allowed_models:
             raise ValueError('ALLOWED_MODELS must include MODEL')
         if any(not name.strip() or name != name.strip() or ':' not in name for name in self.model_choices):
             raise ValueError('Model IDs must be nonempty provider:model names without surrounding spaces')
+        names = [endpoint.name for endpoint in self.endpoints]
+        if len(names) != len(set(names)) or RESERVED_PREFIXES.intersection(names):
+            raise ValueError('OpenAI-compatible servers need unique names, and not `script` or `claude-code`')
         return self
 
     @property
     def model_choices(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(self.allowed_models or [self.model]))
+
+    @property
+    def endpoints(self) -> list[Endpoint]:
+        vllm = Endpoint(name='vllm', base_url=self.vllm_url, api_key=self.vllm_api_key) if self.vllm_url else None
+        return [*([vllm] if vllm else []), *self.openai_compatible]
 
     browser_backend: str = 'sammy.browser.fake:FakeBrowser'
     """`module:attribute` of a callable that makes a closed `BrowserBackend` for one run."""
@@ -116,10 +160,10 @@ class Settings(BaseSettings):
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
     history_limit: int = 40
 
-    @field_validator('composio_api_key', mode='before')
+    @field_validator('composio_api_key', 'pydantic_ai_gateway_api_key', 'vllm_url', 'vllm_api_key', mode='before')
     @classmethod
     def blank_is_unset(cls, value: object) -> object:
-        """`COMPOSIO_API_KEY=` (as in `.env.example`) means no Composio, not a key that is empty."""
+        """A blank value, such as `COMPOSIO_API_KEY=` in `.env.example`, means unset, not a key that is empty."""
         return None if isinstance(value, str) and not value.strip() else value
 
     @field_validator('public_url')

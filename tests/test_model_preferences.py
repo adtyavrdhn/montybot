@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
@@ -29,6 +30,7 @@ from sammy.model_preferences import (
     thinking_levels,
     validate,
 )
+from sammy.model_providers import Providers
 from sammy.models import Run, Trigger
 from sammy.resources import Resources, open_resources
 from sammy.settings import Settings
@@ -80,7 +82,7 @@ def settings_for(database_url: str = 'postgresql://unused/test', workspaces: Pat
 
 @pytest.mark.parametrize('model', [GPT, CLAUDE, 'claude-code:claude-opus-4-6'])
 def test_generic_thinking_defaults_and_scheduled_low(model: str) -> None:
-    settings = settings_for().model_copy(update={'model': model, 'allowed_models': [model]})
+    settings = Providers(settings_for().model_copy(update={'model': model, 'allowed_models': [model]}))
     assert thinking_levels(model) == ['low', 'medium', 'high']
     assert defaults(model)['thinking'] == 'medium'
     untouched = validate(Preference(model=model, settings={}), settings)
@@ -102,7 +104,7 @@ def test_generic_thinking_defaults_and_scheduled_low(model: str) -> None:
 
 
 def test_plain_model_has_no_thinking_and_envelope_is_safe() -> None:
-    settings = settings_for()
+    settings = Providers(settings_for())
     preference = validate(Preference(model=PLAIN, settings={}), settings)
     assert thinking_levels(PLAIN) == []
     assert 'thinking' not in resolve(preference, scheduled=True).resolved
@@ -110,7 +112,7 @@ def test_plain_model_has_no_thinking_and_envelope_is_safe() -> None:
     assert set(result) == {'model', 'settings', 'models'}
     models = result['models']
     assert isinstance(models, list)
-    assert [entry['id'] for entry in models] == list(settings.model_choices)
+    assert [entry['id'] for entry in models] == list(settings.choices)
     for entry in models:
         assert set(entry) == {'id', 'name', 'thinking', 'options', 'defaults'}
         assert entry['name']
@@ -125,7 +127,7 @@ def test_plain_model_has_no_thinking_and_envelope_is_safe() -> None:
 @pytest.mark.parametrize('field', sorted(PRIVATE_FIELDS))
 def test_private_provider_overrides_are_rejected_even_when_null(field: str) -> None:
     with pytest.raises(ValueError, match='Unsupported settings'):
-        validate(Preference(model=GPT, settings={field: None}), settings_for())
+        validate(Preference(model=GPT, settings={field: None}), Providers(settings_for()))
 
 
 @pytest.mark.parametrize(
@@ -151,12 +153,12 @@ def test_private_provider_overrides_are_rejected_even_when_null(field: str) -> N
 )
 def test_invalid_or_model_incompatible_settings(model: str, values: dict[str, JsonValue]) -> None:
     with pytest.raises(ValueError):
-        validate(Preference(model=model, settings=values), settings_for())
+        validate(Preference(model=model, settings=values), Providers(settings_for()))
 
 
 def test_disallowed_models_and_extra_envelope_fields_are_rejected() -> None:
     with pytest.raises(ValueError, match='not allowed'):
-        validate(Preference(model='openai:not-allowed', settings={}), settings_for())
+        validate(Preference(model='openai:not-allowed', settings={}), Providers(settings_for()))
     with pytest.raises(ValidationError):
         Preference.model_validate({'model': GPT, 'settings': {}, 'resolved': {'thinking': 'high'}})
     with pytest.raises(ValidationError):
@@ -170,16 +172,23 @@ async def resources(database_url: str, tmp_path: Path) -> AsyncIterator[Resource
         yield resources
 
 
-@pytest.fixture
-async def client(resources: Resources) -> AsyncIterator[httpx.AsyncClient]:
+@asynccontextmanager
+async def client_for(resources: Resources) -> AsyncIterator[httpx.AsyncClient]:
+    """The app's API on `resources`, which the caller owns, DBOS included."""
     app = create_app(resources.settings)
 
     async def with_resources(scope: Scope, receive: Receive, send: Send) -> None:
-        # ASGITransport does not run lifespan. The fixture owns real resources, including DBOS.
+        # ASGITransport does not run lifespan.
         scope['state'] = {'resources': resources}
         await app(scope, receive, send)
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=with_resources), base_url='http://test') as client:
+        yield client
+
+
+@pytest.fixture
+async def client(resources: Resources) -> AsyncIterator[httpx.AsyncClient]:
+    async with client_for(resources) as client:
         yield client
 
 
@@ -220,7 +229,7 @@ async def test_api_auth_per_user_persistence_and_reset(client: httpx.AsyncClient
     initial = await client.get(PATH)
     assert initial.status_code == 200
     assert initial.headers['cache-control'] == 'no-store'
-    assert initial.json() == envelope(Preference(model=FIRST, settings={}), resources.settings)
+    assert initial.json() == envelope(Preference(model=FIRST, settings={}), resources.providers)
     saved = await save(client, GPT, {'thinking': 'high', 'max_tokens': 321})
     assert saved.settings == {'thinking': 'high', 'max_tokens': 321}
     client.cookies.clear()
@@ -234,8 +243,8 @@ async def test_api_auth_per_user_persistence_and_reset(client: httpx.AsyncClient
     assert (await client.get(PATH)).json()['settings'] == saved.settings
     # A separate pool connection verifies committed storage, not request-local state.
     async with resources.pool.connection() as connection:
-        assert await preferences_store.read(connection, alice, resources.settings) == saved
-        assert await preferences_store.read(connection, bob, resources.settings) == bob_saved
+        assert await preferences_store.read(connection, alice, resources.providers) == saved
+        assert await preferences_store.read(connection, bob, resources.providers) == bob_saved
     reset = await save(client, GPT, {})
     assert reset.settings == {}
     client.cookies.set('sammy_session', 'tampered')
@@ -333,7 +342,7 @@ async def test_stored_overrides_a_model_no_longer_accepts_fall_back_to_its_defau
     alice = await signup(client, 'alice@example.test')
     async with resources.pool.connection() as connection:
         await preferences_store.save(connection, alice, Preference(model=PLAIN, settings={'thinking': 'high'}))
-        assert await preferences_store.read(connection, alice, resources.settings) == Preference(
+        assert await preferences_store.read(connection, alice, resources.providers) == Preference(
             model=PLAIN, settings={}
         )
 
