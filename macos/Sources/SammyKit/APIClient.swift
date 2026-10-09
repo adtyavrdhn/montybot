@@ -327,7 +327,7 @@ public final class APIClient: Sendable {
         }
     }
 
-    // MARK: schedules, memories, sign-ins
+    // MARK: schedules, memories, skills, sign-ins
 
     public func schedules() async throws -> [Schedule] { try await send("GET", "/api/schedules") }
 
@@ -343,6 +343,17 @@ public final class APIClient: Sendable {
 
     public func deleteMemory(_ memory: String) async throws {
         let _: Ok = try await send("DELETE", "/api/memories/\(memory)")
+    }
+
+    public func skills() async throws -> [Skill] { try await send("GET", "/api/skills") }
+
+    /// Saves the skill as it is; a draft is saved for good with `draft` false.
+    public func updateSkill(_ skill: Skill) async throws -> Skill {
+        try await send("PUT", "/api/skills/\(skill.id)", body: SkillBody(skill: skill))
+    }
+
+    public func deleteSkill(_ skill: String) async throws {
+        let _: Ok = try await send("DELETE", "/api/skills/\(skill)")
     }
 
     public func savedSites() async throws -> [SavedSite] { try await send("GET", "/api/sign-ins") }
@@ -432,6 +443,24 @@ public final class APIClient: Sendable {
     // MARK: plumbing
 
     private struct Ok: Decodable {}
+
+    /// A skill as `PUT /api/skills/{id}` takes it: everything but the id, which is in the path.
+    struct SkillBody: Encodable {
+        let skill: Skill
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: Skill.CodingKeys.self)
+            try container.encode(skill.name, forKey: .name)
+            try container.encode(skill.whenToUse, forKey: .whenToUse)
+            try container.encode(skill.inputs, forKey: .inputs)
+            try container.encode(skill.steps, forKey: .steps)
+            try container.encode(skill.verify, forKey: .verify)
+            try container.encode(skill.returns, forKey: .returns)
+            try container.encode(skill.approvals, forKey: .approvals)
+            try container.encode(skill.failures, forKey: .failures)
+            try container.encode(skill.draft, forKey: .draft)
+        }
+    }
 
     func request(_ method: String, _ path: String, accept: String = "application/json", timeout: TimeInterval = 30) -> URLRequest {
         var request = URLRequest(url: baseURL.appending(path: path), timeoutInterval: timeout)

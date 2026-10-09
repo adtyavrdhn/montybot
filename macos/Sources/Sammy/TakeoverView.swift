@@ -16,6 +16,10 @@ struct TakeoverView: View {
         VStack(spacing: 0) {
             bar
             Divider().overlay(Palette.outline)
+            if live.teaching != .idle {
+                TeachingBar(chat: chat, live: live)
+                Divider().overlay(Palette.outline)
+            }
             if !live.tabs.isEmpty {
                 TabStrip(live: live, newTab: newTab)
                 Divider().overlay(Palette.outline)
@@ -49,7 +53,11 @@ struct TakeoverView: View {
         .onChange(of: live.state) { _, state in
             if live.signedOut { chat.liveSignedOut(); return }
             guard case .ended(let givenBack) = state else { return }
-            if givenBack { chat.notice = .info("Thanks. \(app.sammyName) has the browser again and is carrying on.") }
+            if givenBack {
+                var text = "Thanks. \(app.sammyName) has the browser again and is carrying on."
+                if case .taught(let name, _) = live.teaching { text += " Your draft skill “\(name)” is in Skills." }
+                chat.notice = .info(text)
+            }
             Task { await chat.liveViewEnded() }
         }
     }
@@ -69,6 +77,9 @@ struct TakeoverView: View {
                 }
             }
             Spacer(minLength: 12)
+            if live.canTeach, !live.teaching.isBusy {
+                TeachButton(live: live).layoutPriority(1)
+            }
             Button("Not now") { chat.leaveLiveView() }
                 .buttonStyle(.sammy(.outline, small: true))
                 .keyboardShortcut("t", modifiers: [.command, .shift])

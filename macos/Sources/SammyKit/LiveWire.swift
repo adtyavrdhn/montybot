@@ -28,6 +28,10 @@ public enum LiveInput: Equatable, Sendable {
     case giveBack
     /// Asks what is on the page, for a screen reader (answered with an outline).
     case outline
+    /// Starts recording what the user shows Sammy, to become a draft skill; `goal` is what they will show.
+    case teach(String)
+    /// Stops recording; the server writes the draft skill from it.
+    case teachStop
 
     public var json: String {
         var object: [String: Any]
@@ -46,6 +50,8 @@ public enum LiveInput: Equatable, Sendable {
         case .closeTab(let tab): object = ["kind": "close_tab", "tab_id": tab]
         case .giveBack: object = ["kind": "give_back"]
         case .outline: object = ["kind": "outline"]
+        case .teach(let goal): object = ["kind": "teach", "goal": goal]
+        case .teachStop: object = ["kind": "teach_stop"]
         }
         let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
         return String(decoding: data, as: UTF8.self)
@@ -146,21 +152,27 @@ public struct PageOutline: Equatable, Sendable {
 }
 
 public enum LiveServerMessage: Equatable, Sendable {
-    /// `controls`: the browser has back, forward, reload, stop and opening and closing tabs.
-    case hello(handoffId: String, reason: String, controls: Bool = false)
+    /// `controls`: the browser has back, forward, reload, stop and opening and closing tabs. `teach`: this server can
+    /// record a lesson ("Teach Sammy").
+    case hello(handoffId: String, reason: String, controls: Bool = false, teach: Bool = false)
     case tabs([LiveTab])
     /// An input failed; safe to show (never contains typed text).
     case error(String)
     /// The hand-off is over; `givenBack` when this connection gave it back.
     case ended(givenBack: Bool)
     case outline(PageOutline)
+    /// Recording what the user shows started.
+    case teaching(goal: String)
+    /// The lesson became a draft skill, for the user to review on the Skills page.
+    case taught(skillId: String, name: String)
 
     public init?(json text: String) {
         guard let object = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] else { return nil }
         switch object["kind"] as? String {
         case "hello":
             guard let id = object["handoff_id"] as? String, let reason = object["reason"] as? String else { return nil }
-            self = .hello(handoffId: id, reason: reason, controls: object["controls"] as? Bool == true)
+            self = .hello(handoffId: id, reason: reason, controls: object["controls"] as? Bool == true,
+                          teach: object["teach"] as? Bool == true)
         case "tabs":
             guard let tabs = object["tabs"] as? [[String: Any]] else { return nil }
             self = .tabs(tabs.compactMap { tab in
@@ -178,6 +190,11 @@ public enum LiveServerMessage: Equatable, Sendable {
         case "outline":
             let items = (object["items"] as? [[String: Any]] ?? []).compactMap(OutlineItem.init(json:))
             self = .outline(PageOutline(title: object["title"] as? String ?? "", items: items, available: object["available"] as? Bool != false))
+        case "teaching":
+            self = .teaching(goal: object["goal"] as? String ?? "")
+        case "taught":
+            guard let id = object["skill_id"] as? String, let name = object["name"] as? String else { return nil }
+            self = .taught(skillId: id, name: name)
         default:
             return nil
         }

@@ -27,6 +27,38 @@ import Testing
         #expect(object(.page(.stop)) == ["kind": "stop"])
         #expect(object(.newTab) == ["kind": "new_tab"])
         #expect(object(.closeTab("t2")) == ["kind": "close_tab", "tab_id": "t2"])
+        #expect(object(.teach("Reorder my \"usual\" groceries")) == ["kind": "teach", "goal": "Reorder my \"usual\" groceries"])
+        #expect(object(.teachStop) == ["kind": "teach_stop"])
+    }
+
+    @Test func teachingMessages() {
+        #expect(LiveServerMessage(json: #"{"kind": "hello", "handoff_id": "h1", "reason": "Sign in", "controls": true, "teach": true}"#)
+            == .hello(handoffId: "h1", reason: "Sign in", controls: true, teach: true))
+        #expect(LiveServerMessage(json: #"{"kind": "hello", "handoff_id": "h1", "reason": "Sign in"}"#)
+            == .hello(handoffId: "h1", reason: "Sign in", controls: false, teach: false))  // an older server
+        #expect(LiveServerMessage(json: #"{"kind": "teaching", "goal": "Reorder groceries"}"#) == .teaching(goal: "Reorder groceries"))
+        #expect(LiveServerMessage(json: #"{"kind": "taught", "skill_id": "s1", "name": "Reorder groceries"}"#)
+            == .taught(skillId: "s1", name: "Reorder groceries"))
+        #expect(LiveServerMessage(json: #"{"kind": "taught", "name": "No id"}"#) == nil)
+    }
+
+    @MainActor @Test func teachingGoesFromRecordingToADraft() {
+        let live = LiveSession(request: URLRequest(url: URL(string: "ws://127.0.0.1:9/ws")!), reason: "Sign in", session: .shared)
+        #expect(!live.canTeach && live.teaching == .idle)
+        live.handle(.hello(handoffId: "h1", reason: "Sign in", teach: true))
+        #expect(live.canTeach)
+        live.handle(.teaching(goal: "Reorder groceries"))
+        #expect(live.teaching == .recording(goal: "Reorder groceries") && live.teaching.isBusy)
+        live.handle(.error("Unknown key"))  // about something else: still recording
+        #expect(live.teaching == .recording(goal: "Reorder groceries"))
+        live.handle(.hello(handoffId: "h1", reason: "Sign in", teach: true))  // reconnected: the lesson is gone
+        #expect(live.teaching == .idle)
+        live.handle(.teaching(goal: "Reorder groceries"))
+        live.handle(.taught(skillId: "s1", name: "Reorder groceries"))
+        #expect(live.teaching == .taught(name: "Reorder groceries", skillId: "s1") && !live.teaching.isBusy)
+        live.handle(.hello(handoffId: "h1", reason: "Sign in"))  // a server that can't teach
+        #expect(!live.canTeach && live.teaching == .idle)
+        live.close()
     }
 
     @Test func theBrowsersButtonsComeFromHelloAndTabs() {
@@ -210,6 +242,18 @@ import Testing
         #expect(current.plainWhen == "every 30 minutes" && current.timeZone == "America/Toronto")  // as the server says it now
     }
 
+    @Test func skillsDecodeAndListDraftsFirst() throws {
+        let json = #"[{"id": "b", "name": "Pay rent", "when_to_use": "On the 1st", "inputs": "", "steps": "1. Open the bank", "verify": "", "returns": "", "approvals": "Paying", "failures": "", "draft": false}, {"id": "a", "name": "Reorder groceries", "when_to_use": "When I ask", "inputs": "The shop", "steps": "1. Open the cart", "verify": "The order page", "returns": "The total", "approvals": "Placing the order", "failures": "Ask me", "draft": true}]"#
+        let skills = try JSONDecoder().decode([Skill].self, from: Data(json.utf8))
+        #expect(skills[1] == Skill(id: "a", name: "Reorder groceries", whenToUse: "When I ask", inputs: "The shop", steps: "1. Open the cart",
+                                   verify: "The order page", returns: "The total", approvals: "Placing the order", failures: "Ask me", draft: true))
+        #expect(skills[0].approvals == "Paying" && !skills[0].draft)
+        #expect(Skill.listed(skills).map(\.id) == ["a", "b"])
+        let body = try JSONSerialization.jsonObject(with: JSONEncoder().encode(APIClient.SkillBody(skill: skills[0]))) as? [String: AnyHashable]
+        #expect(body == ["name": "Pay rent", "when_to_use": "On the 1st", "inputs": "", "steps": "1. Open the bank", "verify": "",
+                         "returns": "", "approvals": "Paying", "failures": "", "draft": false])  // no id: it is in the path
+    }
+
     @Test func threadListStatus() throws {
         let json = #"[{"id": "a", "title": "Eggs", "status": "waiting"}, {"id": "b", "title": "Hi", "status": null}]"#
         let threads = try JSONDecoder().decode([ThreadSummary].self, from: Data(json.utf8))
@@ -359,7 +403,7 @@ import Testing
 
     @Test func theFilesPageIsGoneAndOpensANewTaskInstead() {
         #expect(Route(stored: "files") == nil)  // kept from before: the app falls back to a new task
-        for route in [Route.chat(nil), .chat("t"), .schedules, .signIns, .integrations, .memory] {
+        for route in [Route.chat(nil), .chat("t"), .schedules, .signIns, .integrations, .memory, .skills] {
             #expect(Route(stored: route.stored) == route)
         }
     }

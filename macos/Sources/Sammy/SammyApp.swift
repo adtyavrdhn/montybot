@@ -305,6 +305,7 @@ struct SammyCommands: Commands {
                 Button("Saved Sign-ins") { show(.signIns) }.keyboardShortcut("2", modifiers: [.command, .shift])
                 Button("Memory") { show(.memory) }.keyboardShortcut("3", modifiers: [.command, .shift])
                 Button("Integrations") { show(.integrations) }.keyboardShortcut("4", modifiers: [.command, .shift])
+                Button("Skills") { show(.skills) }.keyboardShortcut("5", modifiers: [.command, .shift])
             }
             .disabled(app.user == nil || app.isTakingOver)
             Divider()

@@ -23,6 +23,24 @@ public final class LiveSession {
         }
     }
 
+    /// Teaching Sammy: recording what the user does in the browser, to become a draft skill they review.
+    public enum Teaching: Equatable, Sendable {
+        case idle
+        case recording(goal: String)
+        /// Recording stopped; the server is writing the draft skill (a few seconds).
+        case drafting
+        /// The draft skill was saved, for the user to review on the Skills page.
+        case taught(name: String, skillId: String)
+
+        /// Recording, or writing the draft: not ready to teach again.
+        public var isBusy: Bool {
+            switch self {
+            case .recording, .drafting: return true
+            case .idle, .taught: return false
+            }
+        }
+    }
+
     public private(set) var state: State = .connecting {
         didSet { if state.isOver, !oldValue.isOver { finish() } }
     }
@@ -42,6 +60,10 @@ public final class LiveSession {
     public private(set) var givingBack = false
     /// The browser has back, forward, reload, stop and opening and closing tabs; without them those buttons are off.
     public private(set) var controls = false
+    /// This server can record a lesson ("Teach").
+    public private(set) var canTeach = false
+    public private(set) var teaching: Teaching = .idle
+    public static let teachGoalLimit = 200
 
     public var activeTab: LiveTab? { tabs.first(where: \.active) }
     /// The user can drive now: connected, and not handing the browser back.
@@ -70,6 +92,8 @@ public final class LiveSession {
     @ObservationIgnored private var elsewhere = 0
     /// How it ended, in a word, for the span.
     @ObservationIgnored private var outcome: String?
+    /// The server said it is recording: an error after that is about something else.
+    @ObservationIgnored private var teachingConfirmed = false
 
     public init(request: URLRequest, reason: String, session: URLSession, span: TraceSpan = .none) {
         self.request = request
@@ -118,6 +142,7 @@ public final class LiveSession {
         guard state == .driving, !givingBack else { return }
         flush()
         givingBack = true  // from here on the page is Sammy's again: no more input from the user
+        if case .recording = teaching { teaching = .idle }  // the server stops recording, and drafts nothing
         handingBack = span.child("hand back")
         send(.giveBack)
         givingBackTimeout = Task { [weak self] in
@@ -132,6 +157,25 @@ public final class LiveSession {
     }
 
     public func switchTab(_ tab: LiveTab) { send(.switchTab(tab.id)) }
+
+    /// Starts recording what the user shows Sammy; `goal` says what, trimmed to `teachGoalLimit` characters.
+    public func teach(_ goal: String) {
+        let goal = String(goal.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.teachGoalLimit))
+        guard canTeach, canDrive, !goal.isEmpty, !teaching.isBusy else { return }
+        flush()
+        teachingConfirmed = false
+        teaching = .recording(goal: goal)
+        span.event("teaching")
+        send(.teach(goal))
+    }
+
+    /// Stops recording; the server writes a draft skill from what the user did.
+    public func stopTeaching() {
+        guard case .recording = teaching, canDrive else { return }
+        flush()
+        teaching = .drafting
+        send(.teachStop)
+    }
 
     public func command(_ command: PageCommand) { input(.page(command)) }
 
@@ -278,11 +322,14 @@ public final class LiveSession {
         }
     }
 
-    private func handle(_ message: LiveServerMessage) {
+    func handle(_ message: LiveServerMessage) {
         switch message {
-        case .hello(_, let reason, let controls):
+        case .hello(_, let reason, let controls, let teach):
             self.reason = reason
             self.controls = controls
+            canTeach = teach
+            // A lesson belongs to its connection: a new one records nothing until the user teaches again.
+            if !teach || teaching.isBusy { teaching = .idle }
             frame = nil  // a new connection numbers its frames from 1
             refreshOutline(after: 0)
         case .tabs(let tabs):
@@ -292,7 +339,17 @@ public final class LiveSession {
             self.outline = outline
         case .error(let text):
             show(text)
+            // Writing the draft failed, or recording never started.
+            if teaching == .drafting { teaching = .idle }
+            if case .recording = teaching, !teachingConfirmed { teaching = .idle }
+        case .teaching(let goal):
+            teachingConfirmed = true
+            if !goal.isEmpty { teaching = .recording(goal: goal) }
+        case .taught(let id, let name):
+            span.event("taught")
+            teaching = .taught(name: name, skillId: id)
         case .ended(let givenBack):
+            if case .recording = teaching { teaching = .idle }
             outcome = givenBack ? "given back" : "ended"
             state = .ended(givenBack: givenBack)
             givingBack = false
