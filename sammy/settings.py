@@ -99,6 +99,9 @@ class Settings(BaseSettings):
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
     history_limit: int = 40
+    webhook_delivery_days: int = Field(default=30, ge=1)
+    """How long a webhook trigger remembers a delivery id, to refuse a replay; older ones are pruned once a day
+    (`sammy.webhooks.prune_deliveries`). A sender's retries and redeliveries come well within it."""
 
     @field_validator('composio_api_key', mode='before')
     @classmethod

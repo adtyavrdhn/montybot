@@ -231,7 +231,10 @@ curl -X POST "$URL" -H 'Content-Type: application/json' -H "X-Sammy-Delivery: $i
 ```
 
 A signed event starts exactly one run. Sammy remembers each delivery id (and each body for GitHub, which does not sign
-its ids), so a replay or a redelivery starts none. Bodies are capped at 1 MB. The answers: `202` started, `200`
+its ids) for `WEBHOOK_DELIVERY_DAYS` (30), so a replay or a redelivery starts none; a daily DBOS schedule forgets older
+ones. Senders retry within days, but a request captured and replayed after that window would be taken again, so give
+a trigger a new URL and secret if its secret may have leaked. When the run ends you get a push and an email that it
+finished (or could not), as for a scheduled task. Bodies are capped at 1 MB. The answers: `202` started, `200`
 already received (or GitHub's `ping`), `401` bad signature, `404` unknown URL, `409` paused, and `503` while the last
 event's run is still going (nothing is recorded, so send it again later). A webhook's run asks you before anything
 that cannot be undone, as a run from a message does. Its browser goes out through the server, never the Mac. The

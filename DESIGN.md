@@ -192,7 +192,9 @@ This script is a sketch. Library paths differ between distros, and Chromium may 
 URL (`/hooks/<token>`) in place of the cron, and needs no DBOS schedule. An inbound POST must carry a signature
 (GitHub's own, or an HMAC over the delivery id and the body), and its body is capped. Its delivery id is recorded in
 the same transaction as the run, so a replay starts nothing; a thread still busy rolls both back, and the sender
-retries. The body reaches the model as a file of the run, as untrusted data. Unlike a schedule's run, a trigger's run
+retries. Delivery ids are kept for a bounded window (`WEBHOOK_DELIVERY_DAYS`, 30) and pruned by a daily DBOS schedule
+the app applies at every start. Like a schedule's occurrence, the run is a child of a small workflow
+(`run_webhook`) that then tells the user, by push and email, that it finished or failed. The body reaches the model as a file of the run, as untrusted data. Unlike a schedule's run, a trigger's run
 still asks before anything irreversible: the user approved the prompt, not what a stranger may put in an event.
 
 Considered:

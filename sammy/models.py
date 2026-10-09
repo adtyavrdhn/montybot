@@ -8,8 +8,9 @@ from typing import Any, Literal
 RunStatus = Literal['queued', 'running', 'waiting', 'done', 'failed', 'stopped']
 Trigger = Literal['message', 'schedule', 'webhook']
 AskKind = Literal['question', 'approval', 'handoff', 'connect']
-NoticeKind = AskKind | Literal['finished', 'failed', 'found']
-"""What a notification tells the user: an ask, a scheduled task that ended, or a watch that found something."""
+NoticeKind = AskKind | Literal['finished', 'failed', 'found', 'event_finished', 'event_failed']
+"""What a notification tells the user: an ask, a scheduled task that ended, a watch that found something, or a task
+a webhook trigger started that ended."""
 ACTIVE: tuple[RunStatus, ...] = ('queued', 'running', 'waiting')
 FINISHED: tuple[RunStatus, ...] = ('done', 'failed', 'stopped')
 

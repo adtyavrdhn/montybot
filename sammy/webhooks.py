@@ -12,8 +12,21 @@ POST /hooks/<token>                         the service sends an event (the body
     store.create_run(trigger='webhook')        its thread is still busy: 503, and nothing is recorded, so the
                                                sender's retry starts it
     the body as the run's file (sammy.attachments): the model reads it as data, not as the user's words
-  workflows.start(run_id)                    the usual run (sammy.workflows)
+  run_webhook(run_id)                        @DBOS.workflow, id `sammy-webhook-<run id>`
+    run_thread(run_id)                       the usual run (sammy.workflows), as a child workflow with the run's id
+    step webhook.notify                      a push and an email that it finished (or failed), as a recurring
+                                             schedule's run gets; none for a run the user stopped
+DBOS scheduler, daily (PRUNE_SCHEDULE, applied at every start: `schedule_pruning`)
+  prune_deliveries                           @DBOS.workflow
+    step webhook.prune                       forget deliveries older than WEBHOOK_DELIVERY_DAYS
 ```
+
+If the app stops between recording a run and starting `run_webhook`, `workflows.start_queued` starts the run itself
+when the app comes back: it runs, but sends no notice.
+
+A delivery id is remembered for WEBHOOK_DELIVERY_DAYS (30 by default). Senders retry and redeliver within days, so
+that window refuses every replay of a delivery from them; a request captured and replayed after it would be taken
+again, so rotate a trigger whose secret may have leaked.
 
 Signatures, HMAC-SHA256 with the webhook's secret:
 - `github`: GitHub's own scheme. `X-Hub-Signature-256: sha256=<hex of the body's HMAC>`, the delivery id in
@@ -35,22 +48,28 @@ import secrets
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
 
+from dbos import DBOS, SetWorkflowID
 from pydantic_ai import RunContext
 
 from sammy import attachments, crypto, store, workflows
 from sammy.db import Connection, Pool
 from sammy.deps import RunDeps
-from sammy.models import Webhook, WebhookSource
+from sammy.models import NoticeKind, Webhook, WebhookSource
+from sammy.notifications import notify
 from sammy.observability import timing
-from sammy.resources import Resources
+from sammy.resources import Resources, current
 from sammy.signins import user_key
 
 MAX_BODY_BYTES = 1024 * 1024
 """GitHub's release, issue and form events are a few kilobytes; a large push stays well under this."""
 MAX_DELIVERY_ID = 200
 COLUMNS = 'id, user_id, thread_id, name, prompt, source, paused'
+PRUNE_SCHEDULE = 'sammy-webhook-deliveries-prune'
+PRUNE_CRON = '17 4 * * *'
+"""Daily, at a quiet hour (UTC)."""
 
 Outcome = Literal['started', 'seen', 'ping', 'unknown', 'unsigned', 'paused', 'busy']
 
@@ -208,7 +227,8 @@ async def receive(resources: Resources, token: str, headers: Mapping[str, str], 
         outcome, run_id = await record(resources, token, headers, body)
         span.set_attribute('webhook.outcome', outcome)
         if run_id is not None:
-            await workflows.start(run_id)
+            with SetWorkflowID(f'sammy-webhook-{run_id}'):
+                await DBOS.start_workflow_async(run_webhook, run_id)
     return outcome
 
 
@@ -263,6 +283,59 @@ async def record(
     except store.ThreadGone:
         return 'unknown', None  # deleted while this event came in
     return 'started', run_id
+
+
+@DBOS.workflow(name='sammy.run_webhook')
+async def run_webhook(run_id: str) -> None:
+    """An event's run, then a notice that it ended, as a recurring schedule's run gets (`sammy.schedules`)."""
+    handle = await workflows.start(run_id)
+    outcome = await handle.get_result()
+    if outcome != 'stopped':  # the user stopped it themselves
+        await DBOS.run_step_async(
+            {**workflows.RETRIED, 'name': 'webhook.notify'}, notify_ended, current(), run_id, outcome
+        )
+
+
+async def notify_ended(resources: Resources, run_id: str, outcome: str) -> None:
+    async with resources.pool.connection() as connection:
+        cursor = await connection.execute('SELECT user_id, thread_id FROM sammy.runs WHERE id = %s', (run_id,))
+        row = await cursor.fetchone()
+    if row is None:
+        return  # the chat was deleted meanwhile
+    kind: NoticeKind = 'event_failed' if outcome == 'failed' else 'event_finished'
+    await notify(resources, user_id=str(row['user_id']), thread_id=str(row['thread_id']), kind=kind, tag=run_id)
+
+
+# --- forgetting old deliveries ---
+
+
+async def schedule_pruning() -> None:
+    """Have DBOS fire `prune_deliveries` daily, on one replica. Applied at every start, which changes nothing."""
+    await DBOS.apply_schedules_async(
+        [{'schedule_name': PRUNE_SCHEDULE, 'workflow_fn': prune_deliveries, 'schedule': PRUNE_CRON}]
+    )
+
+
+@DBOS.workflow(name='sammy.prune_webhook_deliveries')
+async def prune_deliveries(scheduled_at: datetime, context: object) -> None:
+    resources = current()
+    await DBOS.run_step_async(
+        {**workflows.RETRIED, 'name': 'webhook.prune'},
+        forget_deliveries,
+        resources.pool,
+        resources.settings.webhook_delivery_days,
+    )
+
+
+async def forget_deliveries(pool: Pool, days: int) -> int:
+    """Forget the deliveries received more than `days` ago; how many there were."""
+    with timing('webhook.prune') as span:
+        async with pool.connection() as connection:
+            cursor = await connection.execute(
+                'DELETE FROM sammy.webhook_deliveries WHERE received_at < now() - make_interval(days => %s)', (days,)
+            )
+        span.set_attribute('webhook.forgotten', cursor.rowcount)
+        return cursor.rowcount
 
 
 def payload_name(source: WebhookSource, event: str, content_type: str) -> str:

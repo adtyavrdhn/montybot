@@ -18,6 +18,7 @@ CREATE INDEX webhooks_user_idx ON sammy.webhooks (user_id, created_at);
 
 -- Each event a webhook took, by the sender's delivery id, so a replay or a redelivery starts no second run.
 -- `digest` (the body's SHA-256) is kept for GitHub, which does not sign its delivery id; null for other senders.
+-- Rows older than WEBHOOK_DELIVERY_DAYS are pruned once a day (sammy.webhooks.prune_deliveries).
 CREATE TABLE sammy.webhook_deliveries (
     webhook_id uuid NOT NULL REFERENCES sammy.webhooks (id) ON DELETE CASCADE,
     delivery_id text NOT NULL,
@@ -27,6 +28,7 @@ CREATE TABLE sammy.webhook_deliveries (
     PRIMARY KEY (webhook_id, delivery_id),
     UNIQUE (webhook_id, digest)
 );
+CREATE INDEX webhook_deliveries_received_idx ON sammy.webhook_deliveries (received_at);
 
 ALTER TABLE sammy.runs DROP CONSTRAINT runs_trigger_check;
 ALTER TABLE sammy.runs ADD CONSTRAINT runs_trigger_check CHECK (trigger IN ('message', 'schedule', 'webhook'));
