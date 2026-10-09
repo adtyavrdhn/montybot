@@ -54,6 +54,12 @@ Vendored on 2026-10-09 from `/Users/mpfaffenberger/code/pydantic-ai`, commit
   with explicit inclusions and caller-supplied discovery entries taking precedence.
 - `profiles.py`: only `provider_of` and `base_model`, the two name helpers needed by the above modules.
 - `custom_params.py`: only `expand_params`, required for dotted-key validation and request conversion.
+- `vllm.py` (issue #144): `api_url`, `discover` and `model` for any OpenAI-compatible server, without the
+  terminal prompts, saved connections and key references. `discover` raises its own `DiscoveryError` instead of
+  `UserError`, `api_url` raises `ValueError` so settings can validate with it, and `model` uses `OpenAIProvider`
+  (as for any OpenAI-compatible server) instead of `VLLMProvider`.
+- `key_profiles.py` (issue #144): only the `gateway/` branch of `build_provider`, plus `gateway_model`, which
+  builds a gateway model with it as clai2's key profiles do.
 
 ### Local adaptations
 

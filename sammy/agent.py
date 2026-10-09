@@ -23,7 +23,6 @@ from sammy.deps import RunDeps
 from sammy.integration_tools import INSTRUCTIONS as INTEGRATION_INSTRUCTIONS
 from sammy.integration_tools import connected_integrations, integration_tools
 from sammy.memory import memory_tools, recall
-from sammy.resources import load_model
 from sammy.schedule_tools import INSTRUCTIONS as SCHEDULE_INSTRUCTIONS
 from sammy.schedule_tools import schedule_tools, scheduled_run
 
@@ -102,7 +101,7 @@ def resolve_model(ctx: ModelResolutionContext[RunDeps], model_id: str) -> Model 
 
     Do not recheck the current allowlist here: an existing run retains its approved snapshot.
     """
-    model = load_model(model_id)
+    model = ctx.deps.resources.providers.model(model_id)
     return model if isinstance(model, Model) else None
 
 

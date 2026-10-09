@@ -178,6 +178,24 @@ and low verbosity for GPT, and thinking `medium` on Claude models that support i
 everyone else. The model and its resolved settings are stored on the run when it starts, so changing a preference
 does not change a running task or its DBOS replay. `run.lifecycle` records the model and its settings.
 
+### Model providers
+
+- **Pydantic AI Gateway**, the recommended setup: set `PYDANTIC_AI_GATEWAY_API_KEY` and use
+  `gateway/<provider>:<model>` names, such as `gateway/anthropic:claude-sonnet-4-6`. One key gives every gateway
+  model, with spend limits and observability on the gateway's side. Family defaults apply to gateway routes too.
+- **vLLM**: `VLLM_URL` (and `VLLM_API_KEY` if the server has one). Its models are `vllm:<model>`.
+- **Other OpenAI-compatible servers** (Ollama, LM Studio, an internal proxy): `OPENAI_COMPATIBLE`, a JSON list of
+  `{"name", "base_url"}` with optional `api_key` and `models` (to offer only some of a server's models). Their models
+  are `<name>:<model>`.
+- **OpenRouter** and every other Pydantic AI provider work by name, with the provider's own key in the environment:
+  `openrouter:<model>` with `OPENROUTER_API_KEY`.
+
+When the app starts, it asks each vLLM or OpenAI-compatible server for its models (`/v1/models`) and sends each one
+request with a tool. Models that accept it join the picker without being listed in `ALLOWED_MODELS`; models without
+tool calling are left out, as Sammy cannot work without tools. A server that cannot be reached offers nothing until
+the app restarts. These servers are set by the operator only, so they may be private addresses (vLLM on the LAN): they
+skip the public-only check users' MCP servers get. Their keys go to the servers only, never into traces.
+
 The vendored source and adaptations are documented in [`sammy/vendor/README.md`](sammy/vendor/README.md).
 Once clai2 and Sammy both use it, it should move into Pydantic AI or its harness, and this copy go.
 

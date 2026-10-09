@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from pydantic_ai.profiles.anthropic import ANTHROPIC_THINKING_BUDGET_MAP, anthropic_model_profile
 from pydantic_ai.settings import ModelSettings
 
-from sammy.settings import Settings
+from sammy.model_providers import Providers
 from sammy.vendor.clai2_models.model_catalog import catalog
 from sammy.vendor.clai2_models.model_options import model_options, validate_model_options
 from sammy.vendor.clai2_models.model_settings import ModelSettingsForm, model_defaults
@@ -96,9 +96,9 @@ def check(model: str, values: dict[str, JsonValue]) -> None:
         validate_model_options(model=model, form=ModelSettingsForm.model_validate(native))
 
 
-def validate(preference: Preference, settings: Settings) -> Preference:
+def validate(preference: Preference, providers: Providers) -> Preference:
     """The user's overrides, checked together with the model's defaults. Raises `ValueError`."""
-    if preference.model not in settings.model_choices:
+    if preference.model not in providers.choices:
         raise ValueError('This model is not allowed by this deployment.')
     forbidden = preference.settings.keys() & PRIVATE_FIELDS
     if forbidden:
@@ -119,11 +119,11 @@ def resolve(preference: Preference, *, scheduled: bool = False) -> RunModel:
     return RunModel(model=preference.model, settings=values, resolved=cast(dict[str, JsonValue], resolved))
 
 
-def envelope(preference: Preference, settings: Settings) -> dict[str, object]:
-    labels = {entry.name: entry.label for entry in catalog(include=settings.model_choices)}
+def envelope(preference: Preference, providers: Providers) -> dict[str, object]:
+    labels = {entry.name: entry.label for entry in catalog(include=providers.choices)}
     schema = ModelSettingsForm.model_json_schema()['properties']
     models: list[dict[str, object]] = []
-    for model in settings.model_choices:
+    for model in providers.choices:
         options: dict[str, list[str]] = {}
         for field, choices in model_options(model=model).items():
             if field in PRIVATE_FIELDS or field == 'thinking':

@@ -4,23 +4,23 @@ from psycopg.types.json import Jsonb
 
 from sammy.db import Connection
 from sammy.model_preferences import Preference, RunModel, resolve, validate
+from sammy.model_providers import Providers
 from sammy.models import Run
-from sammy.settings import Settings
 
 
-async def read(connection: Connection, user_id: str, settings: Settings) -> Preference:
+async def read(connection: Connection, user_id: str, providers: Providers) -> Preference:
     cursor = await connection.execute(
         'SELECT model, settings FROM sammy.model_preferences WHERE user_id = %s', (user_id,)
     )
     row = await cursor.fetchone()
-    if row is not None and row['model'] in settings.model_choices:
+    if row is not None and row['model'] in providers.choices:
         try:
-            return validate(Preference.model_validate(row), settings)
+            return validate(Preference.model_validate(row), providers)
         except ValueError:
             # Overrides the model no longer accepts (after an upgrade) fall back to its defaults.
             return Preference(model=row['model'], settings={})
     # Revoked models affect new runs, never already snapshotted runs.
-    return Preference(model=settings.model, settings={})
+    return Preference(model=providers.default, settings={})
 
 
 async def save(connection: Connection, user_id: str, preference: Preference) -> None:
@@ -31,14 +31,14 @@ async def save(connection: Connection, user_id: str, preference: Preference) -> 
     )
 
 
-async def snapshot(connection: Connection, run: Run, settings: Settings) -> RunModel:
+async def snapshot(connection: Connection, run: Run, providers: Providers) -> RunModel:
     """Call in run.start's transaction. Lock before reading preferences, including after a lost step result."""
     await connection.execute('SELECT id FROM sammy.runs WHERE id = %s FOR UPDATE', (run.id,))
     cursor = await connection.execute('SELECT selection FROM sammy.run_models WHERE run_id = %s', (run.id,))
     row = await cursor.fetchone()
     if row is not None:
         return RunModel.model_validate(row['selection'])
-    selection = resolve(await read(connection, run.user_id, settings), scheduled=run.trigger == 'schedule')
+    selection = resolve(await read(connection, run.user_id, providers), scheduled=run.trigger == 'schedule')
     await connection.execute(
         'INSERT INTO sammy.run_models (run_id, selection) VALUES (%s, %s)',
         (run.id, Jsonb(selection.model_dump())),

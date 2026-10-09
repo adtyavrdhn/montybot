@@ -27,6 +27,7 @@ from sammy.crypto import deployment_key
 from sammy.db import Pool, create_pool, migrate
 from sammy.imports import import_object
 from sammy.integrations import Integrations
+from sammy.model_providers import Providers
 from sammy.settings import Settings
 from sammy.signins import PostgresJar, PostgresLease
 from sammy.workspaces import Workspaces
@@ -43,6 +44,8 @@ class Resources:
     jar: PostgresJar
     lease: PostgresLease
     agent: Agent[Any, str]
+    providers: Providers
+    """The models users may pick, and how a run builds the one it uses."""
     monty: MontyRunner
     workspaces: Workspaces
     tunnels: Tunnels | None = None
@@ -58,22 +61,6 @@ _current: Resources | None = None
 def current() -> Resources:
     assert _current is not None, 'the app sets its resources before DBOS runs any workflow'
     return _current
-
-
-CLAUDE_CODE_PREFIX = 'claude-code:'
-
-
-def load_model(name: str) -> Model | str:
-    """A model name for Pydantic AI, `claude-code:NAME` for a Claude Code subscription model, or
-    `script:module:attribute` for a `Model` object (or a function making one)."""
-    if name.startswith(CLAUDE_CODE_PREFIX):
-        from sammy.vendor.claude_code import ClaudeCodeModel
-
-        return ClaudeCodeModel(name.removeprefix(CLAUDE_CODE_PREFIX))
-    if not name.startswith('script:'):
-        return name
-    obj = import_object(name.removeprefix('script:'))
-    return cast(Model, obj) if isinstance(obj, Model) else cast(Callable[[], Model], obj)()
 
 
 def backend_factory(name: str) -> Callable[[], BrowserBackend]:
@@ -153,8 +140,9 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
             enable_otlp=False,
         )
     )
-    model = load_model(settings.model)
-    agent = build_agent(model)
+    providers = Providers(settings)
+    await providers.discover()  # before DBOS recovers a run whose model is on one of the operator's servers
+    agent = build_agent(providers.model(settings.model))
     async with browser, open_monty(settings) as monty:
         _current = Resources(
             settings=settings,
@@ -163,6 +151,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
             jar=jar,
             lease=lease,
             agent=agent,
+            providers=providers,
             monty=monty,
             workspaces=Workspaces(settings.workspaces_dir),
             tunnels=tunnels,
