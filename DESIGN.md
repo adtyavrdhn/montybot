@@ -216,7 +216,11 @@ Considered:
 - **Cookie jar:** envelope-encrypted with a key per tenant (KMS). Saved after every run and every hand-off. One writer
   per user's jar at a time, through the same lease as the browser.
 - **Vector DB:** one namespace per user.
-- **Never** write `storageState`, cookies or live-view links into traces or logs.
+- **Secrets the agent uses but never sees** (#130): API tokens and webhook URLs the user types into a private field,
+  sealed with the user's data key, each bound to one host. Code names one (`{{secret:NAME}}`) in `http_request`, a
+  host function; the value goes in on the way out and is scrubbed from the response before Monty sees it, so it is
+  never a recorded step result, a DBOS message, model context or a span (`sammy/vault.py`).
+- **Never** write `storageState`, cookies, secrets or live-view links into traces or logs.
 
 ## Open questions
 

@@ -38,6 +38,7 @@ class MockAPI:
     connections: list[dict[str, str]] = field(default_factory=list)
     apps: list[dict[str, object]] = field(default_factory=list)
     server_sign_in: bool = False  # whether an added MCP server needs the user to sign in
+    secrets: list[dict[str, str]] = field(default_factory=list)
 
     def handle(self, route: Route) -> None:
         request = route.request
@@ -153,6 +154,10 @@ class MockAPI:
         elif path == '/mock-sign-in':
             route.fulfill(body='<html><body>Sign in to the app</body></html>', content_type='text/html')
             return
+        elif path == '/api/secrets':
+            result = self.secrets
+        elif path.startswith('/api/secrets/') and method == 'DELETE':
+            self.secrets = [s for s in self.secrets if not path.endswith(f'/{s["name"]}')]
         elif path == '/api/push/key':
             result = {'public_key': None}
         elif path == '/api/push/subscriptions':
@@ -1413,3 +1418,43 @@ def test_integration_addresses_are_route_templates_in_telemetry(frontend: tuple[
         '/api/integrations/apps/accounts/{account_id}',
         '/api/integrations/servers/{server_id}/sign-in',
     ]
+
+
+def test_a_chat_asks_for_a_secret_and_the_secrets_page_forgets_it(frontend: tuple[Page, MockAPI]) -> None:
+    """The value goes to the ask's answer and nowhere else: not left in the field, and not in telemetry, even with
+    content on."""
+    page, mock = frontend
+    mock.telemetry = True
+    mock.include_content = True
+    mock.signed_in = True
+    mock.messages = [{'role': 'user', 'text': 'Post my note'}]
+    mock.run = {
+        'id': RUN,
+        'thread_id': THREAD,
+        'status': 'waiting',
+        'activity': [],
+        'ask': {'id': ASK, 'kind': 'secret', 'prompt': 'Paste your Notes API token so I can post the note.',
+                'secret': {'name': 'notes_token', 'host': 'api.notes.test'}},
+    }  # fmt: skip
+    page.goto(f'http://sammy.test/#/t/{THREAD}')
+    expect(page.locator('#ask')).to_contain_text('Paste your Notes API token so I can post the note.')
+    expect(page.locator('#ask')).to_contain_text('Sammy sends it only to api.notes.test, and never sees it.')
+    field = page.get_by_label('notes_token for api.notes.test')
+    expect(field).to_have_attribute('type', 'password')
+    field.fill('ntk-typed-secret-123')
+    page.get_by_role('button', name='Save notes_token').click()
+    expect(page.locator('#ask')).to_be_hidden()
+    assert ('POST', f'/api/asks/{ASK}', {'secret': 'ntk-typed-secret-123'}) in mock.calls
+
+    mock.secrets = [{'name': 'notes_token', 'host': 'api.notes.test'}]
+    page.click('#open-secrets')
+    expect(page.locator('#secrets-title')).to_be_focused()
+    expect(page.locator('#secret-list')).to_contain_text('notes_tokenfor api.notes.test')
+    page.once('dialog', lambda dialog: dialog.accept())  # "Forget ...? Sammy will ask for it again ..."
+    page.get_by_role('button', name='Forget').click()
+    expect(page.locator('#secret-list')).to_contain_text('No secrets yet')
+    assert ('DELETE', '/api/secrets/notes_token', None) in mock.calls
+
+    exported = flush_telemetry(page, mock, 'save secret', 'forget secret', '/api/secrets/{secret_name}')
+    assert 'ntk-typed-secret-123' not in '\n'.join(body for _, body in mock.exported)
+    assert '/api/secrets/notes_token' not in exported

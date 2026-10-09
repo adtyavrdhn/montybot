@@ -32,6 +32,7 @@ WHAT = {
     'approval': 'Sammy needs your approval before it goes on.',
     'handoff': 'Sammy needs you to take over its browser for a moment.',
     'connect': 'Sammy needs you to connect an app to carry on.',
+    'secret': 'Sammy needs a key or token from you to carry on.',
     'finished': 'Sammy finished a scheduled task.',
     'failed': 'Sammy could not finish a scheduled task.',
     'found': 'Sammy found what you asked it to watch for.',

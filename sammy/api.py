@@ -23,11 +23,11 @@ from urllib.parse import quote, unquote, urlsplit
 from uuid import UUID
 
 import logfire
-from pydantic import AfterValidator, BaseModel, Field, StrictBool, StringConstraints, model_validator
+from pydantic import AfterValidator, BaseModel, Field, SecretStr, StrictBool, StringConstraints, model_validator
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
-from sammy import approvals, attachments, auth, schedules, store, streaming, workflows
+from sammy import approvals, attachments, auth, schedules, store, streaming, vault, workflows
 from sammy.browser.contract import (
     BrowserError,
 )
@@ -100,6 +100,10 @@ class Answer(BaseModel):
     note: str | None = Field(default=None, max_length=2_000)
     connected: StrictBool | None = None
     """For a connect ask: true once they have connected it (the run checks), false for not now."""
+    secret: SecretStr | None = Field(default=None, min_length=vault.MIN_VALUE, max_length=vault.MAX_VALUE)
+    """For a secret ask: the value, sealed into `sammy.vault` under the ask's name; never stored on the ask."""
+    saved: StrictBool | None = None
+    """For a secret ask: false for not now."""
 
 
 async def hashed(secret: str) -> str:
@@ -398,6 +402,10 @@ def ask_messages(ask: Ask) -> list[dict[str, str]]:
             name = ask.integration.get('name', 'it')
             verdict = f'You connected {name}' if answer.get('connected') else f'You chose not to connect {name}'
             return [{'role': 'event', 'text': verdict}]
+        case 'secret':
+            name = ask.details.get('name', 'a secret')
+            verdict = f'You saved the secret {name}' if answer.get('saved') else f'You chose not to give {name}'
+            return [{'role': 'event', 'text': verdict}]
 
 
 @auth.signed_in
@@ -519,6 +527,17 @@ async def answer_ask(request: Request, user: User) -> Response:
             if body.connected is None:
                 return JSONResponse({'detail': 'answer with connected: true or false'}, status_code=422)
             value = {'connected': body.connected}
+        case 'secret':
+            if body.secret is not None and ask.answer is None:
+                name, host = str(ask.details['name']), str(ask.details['host'])
+                await vault.keep(resources, user.id, name=name, host=host, value=body.secret.get_secret_value())
+                value = {'saved': True}
+            elif body.secret is None and body.saved is False:
+                value = {'saved': False}
+            elif body.secret is None:
+                return JSONResponse({'detail': 'answer with secret, or saved: false'}, status_code=422)
+            else:
+                return JSONResponse({'detail': 'That was answered already.'}, status_code=409)
     if not await approvals.answer(resources, user.id, ask.id, value):
         return JSONResponse({'detail': 'That was answered already.'}, status_code=409)
     return JSONResponse({'ok': True})
@@ -782,6 +801,22 @@ async def remove_memory(request: Request, user: User) -> Response:
     return JSONResponse({'ok': True}) if deleted else NOT_FOUND
 
 
+# --- secrets the agent uses but never sees (sammy.vault) ---
+
+
+@auth.signed_in
+async def list_secrets(request: Request, user: User) -> Response:
+    """Names and hosts only, never values."""
+    saved = await vault.listing(resources_of(request), user.id)
+    return JSONResponse([s.json() for s in saved], headers={'Cache-Control': 'no-store'})
+
+
+@auth.signed_in
+async def forget_secret(request: Request, user: User) -> Response:
+    deleted = await vault.forget(resources_of(request), user.id, str(request.path_params['name']))
+    return JSONResponse({'ok': True}) if deleted else NOT_FOUND
+
+
 # --- integrations: apps through Composio, and the user's own MCP servers (sammy.integrations) ---
 
 HEADER_NAME = re.compile(r'^[A-Za-z0-9!#$%&\'*+.^_`|~-]{1,100}$')
@@ -1029,8 +1064,10 @@ def schedule_json(schedule: Schedule, paused: bool, last: Run | None, now: datet
 def ask_json(ask: Ask) -> dict[str, Any]:
     """A hand-off's id stays on the server: the live view finds it from the signed-in user's open ask. A connect ask
     says what to connect (`integration`: `provider`, `key`, `name`, `logo`, a listed MCP server's `url` and `auth`, and
-    `server_id` to sign in to a server again)."""
+    `server_id` to sign in to a server again). A secret ask says the `secret`'s `name` and the `host` it is for."""
     shown: dict[str, Any] = {'id': ask.id, 'kind': ask.kind, 'prompt': ask.prompt}
+    if ask.kind == 'secret':
+        shown['secret'] = {'name': ask.details.get('name', ''), 'host': ask.details.get('host', '')}
     if ask.kind == 'connect':
         shown['integration'] = ask.integration
     return shown
