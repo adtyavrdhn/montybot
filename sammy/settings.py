@@ -98,9 +98,16 @@ class Settings(BaseSettings):
 
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
+    approval_reviewer_model: str | None = None
+    """The automatic reviewer (`sammy.reviewer`): a small, fast model, named as for `model`, that may approve a
+    low-risk action no rule covers, for users who turn it on. Unset: off, and every such action asks the user."""
+    approval_reviewer_threshold: float = Field(default=0.9, ge=0, le=1)
+    """The reviewer's least confidence to approve; below it, the user is asked."""
+    approval_reviewer_timeout_seconds: float = Field(default=1.5, gt=0, le=30)
+    """How long the reviewer may take; after that, the user is asked."""
     history_limit: int = 40
 
-    @field_validator('composio_api_key', mode='before')
+    @field_validator('composio_api_key', 'approval_reviewer_model', mode='before')
     @classmethod
     def blank_is_unset(cls, value: object) -> object:
         """`COMPOSIO_API_KEY=` (as in `.env.example`) means no Composio, not a key that is empty."""

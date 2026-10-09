@@ -64,6 +64,7 @@
           <button id="open-signins" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="4"/><path d="m11 12 8 8 3-3-3-3-2 2"/></svg> Saved browser data</button>
           <button id="open-integrations" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v4m6-4v4M7 7h10v4a5 5 0 0 1-10 0Zm5 9v5"/></svg> Integrations</button>
           <button id="open-schedules" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16m-12 4h3"/></svg> Schedules</button>
+          <button id="open-approvals" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6Z"/><path d="m9 12 2 2 4-4"/></svg> Approvals</button>
           <button id="enable-notifications" class="link" hidden><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9Zm4 12h4"/></svg> <span id="notifications-label">Notify me when Sammy needs me</span></button>
           <button id="signout" class="link">Sign out</button>
         </div>
@@ -164,6 +165,15 @@
           <div class="page-heading"><span class="page-symbol" aria-hidden="true">◷</span><h2 id="schedules-title" tabindex="-1">Schedules</h2></div>
           <p class="muted">Tasks Sammy runs on your schedule. Pause a task without deleting it, or resume it when you're ready.</p>
           <ul id="schedule-list" aria-label="Scheduled tasks"></ul>
+        </div>
+      </section>
+      <section id="approvals" class="page" aria-labelledby="approvals-title" hidden>
+        <div class="page-content">
+          <button class="secondary back">Back to chat</button>
+          <div class="page-heading"><span class="page-symbol" aria-hidden="true">✓</span><h2 id="approvals-title" tabindex="-1">Approvals</h2></div>
+          <p class="muted">What Sammy does without asking you, because you chose "Always allow this". Remove one and Sammy asks again.</p>
+          <ul id="rule-list" aria-label="Remembered approvals"></ul>
+          <p id="reviewer-row" class="page-note" hidden><label><input type="checkbox" id="reviewer-enabled"> Let an automatic reviewer approve low-risk actions no rule covers. It never spends money, sends as you or deletes, and asks you whenever it is unsure.</label></p>
         </div>
       </section>
     </section>

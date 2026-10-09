@@ -306,6 +306,34 @@ import Testing
         #expect(body == ["connected": false])
     }
 
+    @Test func anApprovalOffersToAlwaysAllowAndTheRulesAreListed() throws {
+        // As `api.ask_json` and `approvals_api.read_approvals` send them (sammy/approval_rules.py).
+        let json = #"{"id": "a", "kind": "approval", "prompt": "Place the order", "rule": {"tool": "commit", "scope": "walmart.com", "name": "place order", "risk": "money", "summary": "Click \"place order\" on walmart.com"}}"#
+        let rule = try #require(try JSONDecoder().decode(Ask.self, from: Data(json.utf8)).rule)
+        #expect(rule == ApprovalAction(tool: "commit", scope: "walmart.com", name: "place order", risk: "money", summary: "Click \"place order\" on walmart.com"))
+        #expect(rule.riskWords == "spends money")
+        #expect(try JSONDecoder().decode(Ask.self, from: Data(#"{"id": "a", "kind": "approval", "prompt": "Schedule it"}"#.utf8)).rule == nil)
+
+        func sent(_ body: AnswerBody) throws -> [String: Bool]? {
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(body)) as? [String: Bool]
+        }
+        // A risky action is remembered only with `allow_risky`; a low-risk one does not send it.
+        #expect(try sent(.alwaysAllow(rule)) == ["approved": true, "remember": true, "allow_risky": true])
+        let issue = ApprovalAction(tool: "call_integration_tool", scope: "linear", name: "LINEAR_CREATE_LINEAR_ISSUE", risk: nil, summary: "Use linear: LINEAR_CREATE_LINEAR_ISSUE")
+        #expect(try sent(.alwaysAllow(issue)) == ["approved": true, "remember": true])
+        #expect(try sent(.approve()) == ["approved": true])
+
+        let page = #"""
+        {"rules": [{"id": "r1", "tool": "call_integration_tool", "scope": "linear", "name": "LINEAR_CREATE_LINEAR_ISSUE", "risk": null, "summary": "Use linear: LINEAR_CREATE_LINEAR_ISSUE", "allow_risky": false}],
+         "reviewer": {"available": true, "enabled": false}}
+        """#
+        let approvals = try JSONDecoder().decode(Approvals.self, from: Data(page.utf8))
+        #expect(approvals.rules.map(\.summary) == ["Use linear: LINEAR_CREATE_LINEAR_ISSUE"])
+        #expect(approvals.rules[0].allowRisky == false && approvals.rules[0].risk == nil)
+        #expect(approvals.reviewer.available && !approvals.reviewer.enabled)
+        #expect(Telemetry.route("/api/approvals/rules/\(UUID().uuidString)") == "/api/approvals/rules/{rule_id}")
+    }
+
     @Test func anUploadSaysWhatItIs() throws {
         let json = #"{"id": "a1", "name": "photo.png", "media_type": "image/png", "size": 12345, "kind": "image"}"#
         let file = try JSONDecoder().decode(Attachment.self, from: Data(json.utf8))

@@ -94,9 +94,8 @@ struct JourneyTests {
         #expect(app.needsYou.isEmpty)
     }
 
-    @Test func signInThroughTheLiveViewThenApproveTheOrder() async throws {
-        let app = try await person()
-        let chat = try await say("Order eggs from \(try site("shop"))", in: app)
+    /// The shop asks the person to sign in: they take over, sign in as a person would, and hand the browser back.
+    func signInToTheShop(_ chat: ChatModel) async throws {
         try await eventually("the hand-off") { chat.ask?.kind == .handoff }
 
         await chat.takeOver()
@@ -116,6 +115,12 @@ struct JourneyTests {
         try await eventually("the give-back") { live.state == .ended(givenBack: true) }
         await chat.liveViewEnded()
         #expect(chat.live == nil)
+    }
+
+    @Test func signInThroughTheLiveViewThenApproveTheOrder() async throws {
+        let app = try await person()
+        let chat = try await say("Order eggs from \(try site("shop"))", in: app)
+        try await signInToTheShop(chat)
 
         try await eventually("the approval") { chat.ask?.kind == .approval }
         #expect(chat.ask?.prompt.lowercased().contains("eggs") == true)
@@ -136,6 +141,39 @@ struct JourneyTests {
 
         await app.loadSavedSites()
         #expect(app.savedSites?.contains { $0.site == "127.0.0.1" } == true)
+    }
+
+    @Test func alwaysAllowLetsTheNextOrderGoThroughUntilItIsRemoved() async throws {
+        let app = try await person()
+        let shop = try site("shop")
+        let first = try await say("Order eggs from \(shop)", in: app)
+        try await signInToTheShop(first)
+        try await eventually("the approval") { first.ask?.kind == .approval }
+        let rule = try #require(first.ask?.rule)
+        #expect(rule.tool == "commit" && rule.scope == "127.0.0.1" && rule.risk == "money")
+        await first.answer(.alwaysAllow(rule))  // the card asked once more first: it spends money
+        try await eventually("the first order") { first.run?.status == .done }
+        await app.loadApprovals()
+        #expect(app.approvals?.rules.map(\.summary) == [rule.summary])
+        #expect(app.approvals?.rules.first?.allowRisky == true)
+
+        // The same order again: signed in already, and allowed, so nothing stops it.
+        app.open(.chat(nil))
+        let second = try await say("Order eggs from \(shop)", in: app)
+        try await eventually("the second order") { second.run?.status == .done }
+        #expect(second.messages.contains { $0.role == .event && $0.text.hasPrefix("Approved by your rule") })
+        #expect(!second.messages.contains { $0.role == .event && $0.text.hasPrefix("You approved") })
+
+        // Removed in Settings: the next order asks again.
+        await app.remove(try #require(app.approvals?.rules.first))
+        #expect(app.approvals?.rules.isEmpty == true)
+        await app.loadApprovals()
+        #expect(app.approvals?.rules.isEmpty == true)
+        app.open(.chat(nil))
+        let third = try await say("Order eggs from \(shop)", in: app)
+        try await eventually("the approval again") { third.ask?.kind == .approval }
+        await third.answer(.deny("Not this week."))
+        try await eventually("the third chat to end") { third.run?.status == .done }
     }
 
     @Test func stoppingARunThatWaitsFreesTheChat() async throws {

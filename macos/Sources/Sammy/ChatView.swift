@@ -364,6 +364,7 @@ struct MessageView: View {
     /// The server words these lines in `chat_messages` (sammy/api.py); anything else gets the plain mark.
     private static func icon(for text: String) -> String {
         if text.hasPrefix("You approved") { return "checkmark.circle" }
+        if text.hasPrefix("Approved by") { return "checkmark.shield" }  // a rule of the user's, or the reviewer
         if text.hasPrefix("You said no") { return "xmark.circle" }
         if text.hasPrefix("You took over") { return "hand.point.up.left" }
         if text.hasPrefix("Not answered") { return "clock" }
@@ -542,6 +543,8 @@ struct AskCard: View {
     @Bindable var chat: ChatModel
     let ask: Ask
     @State private var reason = ""
+    /// "Always allow" on an action that spends money, sends as the user or deletes: asked once more.
+    @State private var confirmingRisk = false
     @FocusState private var focus: Field?
     @AccessibilityFocusState private var announced: Bool
 
@@ -611,8 +614,22 @@ struct AskCard: View {
                     // No keyboard shortcut: going ahead with something that costs money takes a deliberate click.
                     Button("Approve") { Task { await chat.answer(.approve()) } }
                         .buttonStyle(.primary)
+                    if let rule = ask.rule {
+                        Button("Always allow") { alwaysAllow(rule) }
+                            .buttonStyle(.outline)
+                            .help("Approve, and do this without asking from now on: \(rule.summary). Remove it in Settings › Approvals.")
+                    }
                     Button("Don't approve…") { chat.denying = true }
                         .buttonStyle(.outline)
+                }
+                .confirmationDialog("Always allow this?", isPresented: $confirmingRisk) {
+                    if let rule = ask.rule {
+                        Button("Always allow") { Task { await chat.answer(.alwaysAllow(rule)) } }
+                    }
+                } message: {
+                    if let rule = ask.rule {
+                        Text("This \(rule.riskWords ?? "can't be undone"). From now on \(app.sammyName) will do it without asking you: \(rule.summary). You can remove it in Settings › Approvals.")
+                    }
                 }
             }
         case .handoff:
@@ -649,6 +666,11 @@ struct AskCard: View {
     private func deny() {
         let why = reason.trimmingCharacters(in: .whitespaces)
         Task { await chat.answer(.deny(why.isEmpty ? "The user said no." : why)) }
+    }
+
+    /// A low-risk action is remembered at once; one that spends money, sends as the user or deletes asks first.
+    private func alwaysAllow(_ rule: ApprovalAction) {
+        if rule.risk == nil { Task { await chat.answer(.alwaysAllow(rule)) } } else { confirmingRisk = true }
     }
 }
 

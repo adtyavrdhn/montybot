@@ -80,6 +80,7 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
+            ApprovalSettings().tabItem { Label("Approvals", systemImage: "checkmark.shield") }
             AccountSettings().tabItem { Label("Account", systemImage: "person.crop.circle") }
         }
         .frame(width: 460)
@@ -163,6 +164,80 @@ struct GeneralSettings: View {
         opensAtLogin = SMAppService.mainApp.status == .enabled
         guard Bundle.main.bundleIdentifier != nil else { return }
         status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
+}
+
+/// What Sammy does without asking, because the user chose Always Allow on an approval, each removable; and the
+/// automatic reviewer, where the server has one.
+struct ApprovalSettings: View {
+    @Environment(AppModel.self) private var app
+    @State private var removing: ApprovalRule?
+
+    var body: some View {
+        Form {
+            if app.user == nil {
+                Text("Sign in to see what \(app.sammyName) does without asking you.").foregroundStyle(.secondary)
+            } else {
+                rules
+                reviewer
+            }
+        }
+        .formStyle(.grouped)
+        .task { await app.loadApprovals() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await app.loadApprovals() }
+        }
+        .confirmationDialog("Remove this approval?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
+            Button("Remove", role: .destructive) { if let removing { Task { await app.remove(removing) } } }
+        } message: {
+            Text("\(removing?.summary ?? ""). \(app.sammyName) will ask you again before doing it.")
+        }
+    }
+
+    private var rules: some View {
+        Section {
+            if let rules = app.approvals?.rules {
+                if rules.isEmpty {
+                    Text("Nothing yet. When \(app.sammyName) asks to do something you'd always say yes to, choose Always allow.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(rules) { rule in
+                    LabeledContent {
+                        Button("Remove…") { removing = rule }.accessibilityLabel("Remove \(rule.summary)")
+                    } label: {
+                        Text(rule.summary).textSelection(.enabled)
+                        Text(rule.risk.map { "Allowed although it \(ApprovalAction.riskWords($0))" } ?? "Low risk")
+                    }
+                }
+            } else if app.libraryError == nil {
+                ProgressView().controlSize(.small)
+            }
+            if let error = app.libraryError {
+                HStack {
+                    Text(error).font(.system(size: 12)).foregroundStyle(Palette.onErrorContainer)
+                    Spacer()
+                    Button("Try again") { app.libraryError = nil; Task { await app.loadApprovals() } }
+                }
+            }
+        } header: {
+            Text("Always allowed")
+        } footer: {
+            Text("Each covers one action on one site or app. Remove one and \(app.sammyName) asks you again.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var reviewer: some View {
+        if let state = app.approvals?.reviewer, state.available {
+            Section {
+                Toggle("Automatic reviewer", isOn: Binding(get: { state.enabled }, set: { on in Task { await app.setReviewer(on) } }))
+            } footer: {
+                Text("Approves low-risk actions no rule covers. It never spends money, sends as you or deletes, and asks you whenever it is unsure.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }
 

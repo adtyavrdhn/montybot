@@ -13,6 +13,10 @@ workflow (sammy.workflows.run_thread)              web app (sammy.api.answer)
   <- the answer
 ```
 
+An approval may go through without the user (`decide`): when a rule they made with "Always allow this" covers the
+action (`sammy.approval_rules`), or when they turned on the automatic reviewer and it approves (`sammy.reviewer`). The
+ask is then recorded as approved already (`auto`), so the chat shows what went through, and traced (`approval.auto`).
+
 `DBOS.recv` must be called from workflow code, not from inside a step. Pydantic AI runs plain function tools and
 `HandleDeferredToolCalls` handlers in workflow code under `DBOSDurability`, so both can wait here. The n-th ask of a
 run has the same id and topic on every replay, so a restarted run finds its ask and its answer again.
@@ -22,17 +26,21 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from dbos import DBOS
 from pydantic_ai import DeferredToolRequests, DeferredToolResults, RunContext, ToolDenied
 
-from sammy import store
+from sammy import approval_rules, reviewer, store
+from sammy.approval_rules import Action, commit_action, integration_action
 from sammy.browser.contract import BrowserError
 from sammy.browser.service import UnknownRun
 from sammy.deps import RunDeps
-from sammy.models import AskKind
+from sammy.models import AskKind, Run
 from sammy.notifications import notify
+from sammy.observability import timing
 from sammy.resources import Resources
 
 
@@ -45,11 +53,17 @@ def topic(occurrence: int) -> str:
 
 
 async def ask(
-    ctx: RunContext[RunDeps], kind: AskKind, prompt: str, details: dict[str, Any] | None = None
+    ctx: RunContext[RunDeps],
+    kind: AskKind,
+    prompt: str,
+    details: dict[str, Any] | None = None,
+    *,
+    occurrence: int | None = None,
 ) -> dict[str, Any] | None:
-    """Ask the run's user and wait for the answer. None if nobody answered in time."""
+    """Ask the run's user and wait for the answer. None if nobody answered in time. `occurrence` is for an ask the
+    run counted already (`handle_approvals`)."""
     deps = ctx.deps
-    occurrence = deps.asked.next()
+    occurrence = deps.asked.next() if occurrence is None else occurrence
     the_id = ask_id(deps.run_id, occurrence)
     await DBOS.run_step_async(
         {'name': f'ask.save.{occurrence}'}, save_browser, deps.resources, deps.run_id, deps.user_id
@@ -179,12 +193,19 @@ def describe(tool: str, args: dict[str, Any]) -> str:
 
 
 async def handle_approvals(ctx: RunContext[RunDeps], requests: DeferredToolRequests) -> DeferredToolResults:
-    """Ask the user to approve each call that needs it, one card per call, and wait."""
+    """Ask the user to approve each call that needs it, one card per call, and wait; unless one of their rules, or
+    the automatic reviewer, approves it (`decide`)."""
+    deps = ctx.deps
     verdicts: dict[str, bool | ToolDenied] = {}
     for call in requests.approvals:
         args = call.args_as_dict()
         what = describe(call.tool_name, args)
-        reply = await ask(ctx, 'approval', what, {'tool': call.tool_name, 'target': str(args.get('target', ''))})
+        occurrence = deps.asked.next()
+        decision = await decide(deps.resources, deps.run, occurrence, call.tool_name, args, what)
+        if decision.by is not None:
+            verdicts[call.tool_call_id] = True
+            continue
+        reply = await ask(ctx, 'approval', what, decision.details, occurrence=occurrence)
         if reply is None:
             verdicts[call.tool_call_id] = ToolDenied('The user did not answer in time, so this was not done.')
         elif reply.get('approved'):
@@ -193,3 +214,79 @@ async def handle_approvals(ctx: RunContext[RunDeps], requests: DeferredToolReque
             reason = str(reply.get('reason') or 'no reason given')
             verdicts[call.tool_call_id] = ToolDenied(f'The user said no: {reason}')
     return requests.build_results(approvals=verdicts)
+
+
+# --- approving without the user: remembered rules and the automatic reviewer ---
+
+AutoBy = Literal['rule', 'reviewer']
+
+
+@dataclass(frozen=True)
+class Decision:
+    by: AutoBy | None
+    """What approved the call without the user; None to ask them."""
+    details: dict[str, object]
+    """The ask's details: the tool, the target, and the action "Always allow this" would remember (`rule`)."""
+
+
+async def decide(
+    resources: Resources, run: Run, occurrence: int, tool: str, args: Mapping[str, object], prompt: str
+) -> Decision:
+    """Whether a rule of the user's, or the reviewer, approves this call. Decided once and kept on the ask's own row
+    (approved already, `auto`, when it went through), so a replay decides the same. Not in DBOS steps: a run that was
+    waiting for an approval before rules existed replays the steps it recorded."""
+    the_id = ask_id(run.id, occurrence)
+    async with resources.pool.connection() as connection:
+        recorded = await store.get_ask(connection, run.user_id, the_id)
+    if recorded is not None:
+        auto = (recorded.answer or {}).get('auto')
+        return Decision(by=auto if auto in ('rule', 'reviewer') else None, details=recorded.details)
+    action = await action_of(resources, run, tool, args)
+    by = None if action is None else await automatic(resources, run, action, args)
+    details: dict[str, object] = {'tool': tool, 'target': str(args.get('target', ''))}
+    if action is not None:
+        details['rule'] = action.json()
+    async with resources.pool.connection() as connection, connection.transaction():
+        await store.create_ask(
+            connection,
+            ask_id=the_id,
+            run_id=run.id,
+            user_id=run.user_id,
+            occurrence=occurrence,
+            kind='approval',
+            prompt=prompt,
+            details=details,
+        )
+        if by is not None and action is not None:
+            with timing('approval.auto') as span:  # shown in the chat as an approval the user did not give
+                span.set_attributes({'approval.by': by, 'approval.tool': tool, 'approval.scope': action.scope})
+                await store.answer_ask(connection, run.user_id, the_id, {'approved': True, 'auto': by})
+    return Decision(by=by, details=details)
+
+
+async def action_of(resources: Resources, run: Run, tool: str, args: Mapping[str, object]) -> Action | None:
+    """What a rule would cover; None for a call no rule can cover, such as setting up a schedule."""
+    if tool == 'call_integration_tool':
+        return integration_action(args)
+    if tool != 'commit':
+        return None
+    try:  # refs keep their numbers across snapshots, so reading the page changes nothing for the agent
+        page = (await resources.browser.snapshot(run_id=run.id, user_id=run.user_id)).snapshot
+    except (UnknownRun, BrowserError):
+        return None
+    return commit_action(str(args.get('target', '')), str(args.get('description', '')), page.url, page.text)
+
+
+async def automatic(resources: Resources, run: Run, action: Action, args: Mapping[str, object]) -> AutoBy | None:
+    async with resources.pool.connection() as connection:
+        if await approval_rules.matching_rule(connection, run.user_id, action) is not None:
+            return 'rule'
+        model = resources.reviewer_model
+        if (
+            model is None
+            or action.risk is not None
+            or not await approval_rules.reviewer_enabled(connection, run.user_id)
+        ):
+            return None
+    approved = await reviewer.approves(model, resources.settings, task=run.prompt, action=action, arguments=args)
+    return 'reviewer' if approved else None

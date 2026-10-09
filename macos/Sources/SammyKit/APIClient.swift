@@ -46,13 +46,26 @@ public enum APIError: Error, Equatable, LocalizedError {
 public struct AnswerBody: Encodable, Equatable, Sendable {
     public var text: String?
     public var approved: Bool?
+    /// With `approved`: "Always allow this", a rule for what the approval offers (`Ask.rule`).
+    public var remember: Bool?
+    /// With `remember`, for an action that spends money, sends as the user or deletes: they mean it.
+    public var allowRisky: Bool?
     public var reason: String?
     public var done: Bool?
     public var note: String?
     public var connected: Bool?
 
+    enum CodingKeys: String, CodingKey {
+        case text, approved, remember, reason, done, note, connected
+        case allowRisky = "allow_risky"
+    }
+
     public static func text(_ text: String) -> AnswerBody { AnswerBody(text: text) }
     public static func approve() -> AnswerBody { AnswerBody(approved: true) }
+    /// Approves, and keeps a rule so the same action goes through without asking from now on.
+    public static func alwaysAllow(_ rule: ApprovalAction) -> AnswerBody {
+        AnswerBody(approved: true, remember: true, allowRisky: rule.risk == nil ? nil : true)
+    }
     public static func deny(_ reason: String) -> AnswerBody { AnswerBody(approved: false, reason: reason) }
     public static func handBack(note: String = "") -> AnswerBody { AnswerBody(done: true, note: note) }
     /// A connect ask: true once they have connected it (the run checks for itself), false for not now.
@@ -327,7 +340,7 @@ public final class APIClient: Sendable {
         }
     }
 
-    // MARK: schedules, memories, sign-ins
+    // MARK: schedules, memories, approvals, sign-ins
 
     public func schedules() async throws -> [Schedule] { try await send("GET", "/api/schedules") }
 
@@ -343,6 +356,16 @@ public final class APIClient: Sendable {
 
     public func deleteMemory(_ memory: String) async throws {
         let _: Ok = try await send("DELETE", "/api/memories/\(memory)")
+    }
+
+    public func approvals() async throws -> Approvals { try await send("GET", "/api/approvals") }
+
+    public func deleteApprovalRule(_ rule: String) async throws {
+        let _: Ok = try await send("DELETE", "/api/approvals/rules/\(rule)")
+    }
+
+    public func setReviewer(_ enabled: Bool) async throws {
+        let _: Ok = try await send("POST", "/api/approvals/reviewer", body: ["enabled": enabled])
     }
 
     public func savedSites() async throws -> [SavedSite] { try await send("GET", "/api/sign-ins") }

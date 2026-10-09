@@ -186,12 +186,15 @@ public struct Ask: Codable, Equatable, Identifiable, Sendable {
     public let prompt: String
     /// For a `connect` ask, what to connect.
     public let integration: Offer?
+    /// For an approval, what "Always allow this" would cover; nil when it can't be remembered (or an older server).
+    public let rule: ApprovalAction?
 
-    public init(id: String, kind: AskKind, prompt: String, integration: Offer? = nil) {
+    public init(id: String, kind: AskKind, prompt: String, integration: Offer? = nil, rule: ApprovalAction? = nil) {
         self.id = id
         self.kind = kind
         self.prompt = prompt
         self.integration = integration
+        self.rule = rule
     }
 }
 
@@ -536,6 +539,69 @@ public struct Schedule: Codable, Equatable, Identifiable, Sendable {
 public struct Memory: Codable, Equatable, Identifiable, Sendable {
     public let id: String
     public let text: String
+}
+
+// MARK: remembered approvals (sammy/approval_rules.py)
+
+/// One action a rule can cover: `commit` on a site (`scope`, its host) for one control (`name`), or one tool (`name`)
+/// of one integration (`scope`). `risk` is `money`, `send` or `delete` for an action that spends money, sends as the
+/// user or deletes; such a rule is kept only if the user says so (`allow_risky`).
+public struct ApprovalAction: Codable, Equatable, Sendable {
+    public let tool: String
+    public let scope: String
+    public let name: String
+    public let risk: String?
+    /// What it covers, in words: `Use linear: LINEAR_CREATE_LINEAR_ISSUE`, `Click "add to cart" on walmart.com`.
+    public let summary: String
+
+    public init(tool: String, scope: String, name: String, risk: String?, summary: String) {
+        self.tool = tool
+        self.scope = scope
+        self.name = name
+        self.risk = risk
+        self.summary = summary
+    }
+
+    /// What the risk means, for a sentence: "spends money"; nil for a low-risk action.
+    public var riskWords: String? { risk.map(Self.riskWords) }
+
+    public static func riskWords(_ risk: String) -> String {
+        switch risk {
+        case "money": "spends money"
+        case "send": "sends something as you"
+        case "delete": "deletes data"
+        default: "can't be undone"
+        }
+    }
+}
+
+/// A remembered approval: what the user chose "Always allow this" for.
+public struct ApprovalRule: Codable, Equatable, Identifiable, Sendable {
+    public let id: String
+    public let tool: String
+    public let scope: String
+    public let name: String
+    public let risk: String?
+    public let summary: String
+    /// The user said to allow it although it spends money, sends as them or deletes.
+    public let allowRisky: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id, tool, scope, name, risk, summary
+        case allowRisky = "allow_risky"
+    }
+}
+
+/// The Approvals page: the user's rules, oldest first, and the automatic reviewer: whether the server has one
+/// (`available`) and the user turned it on.
+public struct Approvals: Codable, Equatable, Sendable {
+    public var rules: [ApprovalRule]
+    public var reviewer: Reviewer
+
+    public struct Reviewer: Codable, Equatable, Sendable {
+        public let available: Bool
+        public var enabled: Bool
+    }
 }
 
 public struct SavedSite: Codable, Equatable, Identifiable, Sendable {

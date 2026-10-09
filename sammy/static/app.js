@@ -340,7 +340,7 @@ function syncDrawer() {
   $('drawer').inert = !desktop.matches && !open;
   $('drawer-backdrop').hidden = !open;
   $('menu-button').setAttribute('aria-expanded', String(open));
-  for (const id of ['layout', 'signins', 'integrations', 'schedules', 'browser-button']) $(id).inert = open;
+  for (const id of ['layout', 'signins', 'integrations', 'schedules', 'approvals', 'browser-button']) $(id).inert = open;
 }
 function closeDrawer(restoreFocus = false) {
   const focusInside = $('drawer').contains(document.activeElement);
@@ -666,10 +666,9 @@ function renderAsk(ask) {
       await answer(ask, { text: input.value });
     }));
   } else if (ask.kind === 'approval') {
-    row.append(
-      button('Approve', 'good', () => answer(ask, { approved: true })),
-      button('Deny', 'bad', () => answer(ask, { approved: false, reason: 'the user said no' })),
-    );
+    row.append(button('Approve', 'good', () => answer(ask, { approved: true })));
+    if (ask.rule) row.append(button('Always allow this', 'secondary', () => alwaysAllow(ask)));
+    row.append(button('Deny', 'bad', () => answer(ask, { approved: false, reason: 'the user said no' })));
   } else if (ask.kind === 'connect') {
     box.replaceChildren(...connectCard(ask));
     return;
@@ -842,6 +841,17 @@ if ('BroadcastChannel' in window) {
   new BroadcastChannel('sammy-integrations').addEventListener('message', () => reportUnlessOffline(signInsChanged()));
 }
 
+const RISKS = { money: 'spends money', send: 'sends something as you', delete: 'deletes data' };
+
+async function alwaysAllow(ask) {
+  // Approves this one and remembers it: the same action, on the same site or app, then goes through without asking.
+  // One that spends money, sends as the user or deletes is remembered only if they say so here.
+  const { summary, risk } = ask.rule;
+  const later = `From now on Sammy will do this without asking you: ${summary}. You can remove it under Approvals.`;
+  if (risk && !confirm(`This ${RISKS[risk]}. ${later}`)) return;
+  await answer(ask, { approved: true, remember: true, ...(risk ? { allow_risky: true } : {}) });
+}
+
 function askIds(ask) {
   return { ask_id: ask.id, ask_kind: ask.kind, run_id: state.run && state.run.id, thread_id: state.threadId };
 }
@@ -850,7 +860,7 @@ async function answer(ask, body) {
   const before = page;
   const buttons = [...$('ask').querySelectorAll('button')];
   for (const each of buttons) each.disabled = true;  // Approve and Deny together: one answer only
-  const name = ask.kind === 'approval' ? (body.approved ? 'approve' : 'deny')
+  const name = ask.kind === 'approval' ? (body.remember ? 'always allow' : body.approved ? 'approve' : 'deny')
     : ask.kind === 'connect' ? (body.connected ? 'connected' : 'not now') : 'answer question';
   try {
     await telemetry.span(name, { ...askIds(ask), answer: body.text, reason: body.reason }, () => (
@@ -1484,7 +1494,34 @@ async function openSchedules() {
   }) : [element('li', 'No scheduled tasks yet. Tell Sammy what to do and when in a chat.')]));
 }
 
+async function openApprovals() {
+  $('approvals-title').focus();
+  const { rules, reviewer } = await api('/api/approvals');
+  $('rule-list').replaceChildren(...(rules.length ? rules.map((r) => {
+    const name = element('span');
+    name.append(element('strong', r.summary),
+      element('span', r.risk ? `Allowed although it ${RISKS[r.risk]}` : 'Low risk', 'list-detail'));
+    const actions = element('span', '', 'list-actions');
+    actions.append(button('Remove', 'secondary', async () => {
+      await telemetry.span('remove approval rule', { rule_id: r.id }, () => (
+        api(`/api/approvals/rules/${r.id}`, { method: 'DELETE' })));
+      await openApprovals();
+    }));
+    const item = element('li');
+    item.append(name, actions);
+    return item;
+  }) : [element('li', 'Nothing yet. Choose "Always allow this" on an approval, and Sammy stops asking for that.')]));
+  $('reviewer-row').hidden = !reviewer.available;
+  $('reviewer-enabled').checked = reviewer.enabled;
+}
+
+$('reviewer-enabled').addEventListener('change', (event) => {
+  const enabled = event.target.checked;
+  report(telemetry.span('set approval reviewer', { enabled }, () => (
+    api('/api/approvals/reviewer', { method: 'POST', body: { enabled } }))));
+});
 $('open-signins').addEventListener('click', () => { location.hash = '#/sign-ins'; closeDrawer(); });
+$('open-approvals').addEventListener('click', () => { location.hash = '#/approvals'; closeDrawer(); });
 $('open-schedules').addEventListener('click', () => { location.hash = '#/schedules'; closeDrawer(); });
 $('open-integrations').addEventListener('click', () => { location.hash = '#/integrations'; closeDrawer(); });
 for (const back of document.querySelectorAll('.page .back')) {
@@ -1553,8 +1590,10 @@ $('enable-notifications').addEventListener('click', () => (
 // --- routing ---
 
 const PAGES = { '#/sign-ins': ['signins', 'Saved browser data', openSignins],
-  '#/integrations': ['integrations', 'Integrations', openIntegrations], '#/schedules': ['schedules', 'Schedules', openSchedules] };
-const PAGE_BUTTONS = { '#/sign-ins': 'open-signins', '#/integrations': 'open-integrations', '#/schedules': 'open-schedules' };
+  '#/integrations': ['integrations', 'Integrations', openIntegrations], '#/schedules': ['schedules', 'Schedules', openSchedules],
+  '#/approvals': ['approvals', 'Approvals', openApprovals] };
+const PAGE_BUTTONS = { '#/sign-ins': 'open-signins', '#/integrations': 'open-integrations', '#/schedules': 'open-schedules',
+  '#/approvals': 'open-approvals' };
 
 async function route() {
   const hash = location.hash;

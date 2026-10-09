@@ -154,6 +154,27 @@ tool, and they appear on its reply.
 Jev intent and navigation advice is disabled for now, even when `TYPESAFE_API_KEY` is set. The main agent handles
 these decisions directly. Experimental Jev helpers remain available in the source for later evaluation.
 
+## Approvals
+
+`commit` and an integration tool that changes something ask the user first, with an approval card in the chat
+(`sammy/approvals.py`). Two things can approve without asking:
+
+- **Remembered approvals** (`sammy/approval_rules.py`). The card's "Always allow this" approves the call and keeps a
+  rule for that one action: `commit` on a site for one control (`add to cart` on `walmart.com`, as the page names it,
+  prices left out) or one tool of one integration (`linear: LINEAR_CREATE_LINEAR_ISSUE`). The next time the same
+  action comes up, in any chat, it goes through. Rules are listed and removed on the web app's Approvals page and in
+  the Mac app's Settings › Approvals. An action that
+  spends money, sends something as the user or deletes data (judged by the words in the control's or tool's name) is
+  remembered only if the user confirms that for the rule (`allow_risky`).
+- **The automatic reviewer** (`sammy/reviewer.py`), off unless the server sets `APPROVAL_REVIEWER_MODEL` (a small, fast
+  model) and the user turns it on in Approvals. For a low-risk action no rule covers, it gets the task, the action and
+  its arguments with secrets taken out (no passwords, tokens, cookies or keys), and answers approve or ask with a
+  confidence. Below `APPROVAL_REVIEWER_THRESHOLD` (0.9), after `APPROVAL_REVIEWER_TIMEOUT_SECONDS` (1.5) or on any
+  error, the user is asked. It never approves money, sending or deleting.
+
+Every automatic approval shows in the chat ("Approved by your rule: ...") and is traced as `approval.auto`. A
+schedule's runs never ask: approving the schedule approved its steps.
+
 ## Integrations
 
 Users connect the services they use, and Sammy works in them through three agent tools that never change
@@ -216,8 +237,8 @@ On desktop, chats stay in a persistent sidebar; on a phone, the Chats button ope
 
 Create an account or sign in, then describe a task in a new chat. Example prompts fill the message box for you to
 review before sending. Watch Sammy's browser while it works, take over when it asks you to sign in, and answer
-questions or approve actions in the chat. Saved sign-ins and schedules are available in the sidebar, alongside
-notification opt-in. Motion respects your device's reduced-motion preference.
+questions or approve actions in the chat. Saved sign-ins, schedules and remembered approvals are available in the
+sidebar, alongside notification opt-in. Motion respects your device's reduced-motion preference.
 
 ## Mac app
 

@@ -83,6 +83,8 @@ public final class AppModel {
     public private(set) var schedules: [Schedule]?
     public private(set) var savedSites: [SavedSite]?
     public private(set) var memories: [Memory]?
+    /// The user's remembered approvals, and the automatic reviewer's state, as Settings shows them.
+    public private(set) var approvals: Approvals?
     public private(set) var integrations: Integrations?
     /// What the Integrations page lists (featured by kind, then every other app), once read: it changes rarely.
     public private(set) var apps: [CatalogApp]?
@@ -459,6 +461,7 @@ public final class AppModel {
         schedules = nil
         savedSites = nil
         memories = nil
+        approvals = nil
         integrations = nil
         apps = nil
         serverNote = nil
@@ -959,6 +962,30 @@ public final class AppModel {
         }
         if forgotten {
             memories?.removeAll { $0.id == memory.id }
+        }
+    }
+
+    // MARK: remembered approvals
+
+    public func loadApprovals() async { approvals = await library { try await self.client.approvals() } ?? approvals }
+
+    /// Removes a rule: the next time that action comes up, Sammy asks again.
+    public func remove(_ rule: ApprovalRule) async {
+        let removed = await telemetry.action("remove approval rule", ["sammy.rule_id": .string(rule.id)]) { _ in
+            await library({ try await self.client.deleteApprovalRule(rule.id) }) != nil
+        }
+        if removed {
+            approvals?.rules.removeAll { $0.id == rule.id }
+        }
+    }
+
+    /// Lets the automatic reviewer approve low-risk actions no rule covers, or stops it.
+    public func setReviewer(_ enabled: Bool) async {
+        let set = await telemetry.action("set approval reviewer", ["sammy.enabled": .bool(enabled)]) { _ in
+            await library({ try await self.client.setReviewer(enabled) }) != nil
+        }
+        if set {
+            approvals?.reviewer.enabled = enabled
         }
     }
 
