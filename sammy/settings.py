@@ -96,11 +96,19 @@ class Settings(BaseSettings):
     """Each user is `<prefix><user id>` in Composio. A Composio project shared with other apps must give each its own
     prefix: Sammy never lists, uses or removes a connection outside it."""
 
+    native_web_tools: bool = True
+    """Search and read the web with the model provider's own tools when the model has them (Anthropic, OpenAI,
+    Google...). Off, or on a model without them: Sammy's `web_search` and `web_fetch` (`sammy/web_tools.py`)."""
+    tavily_api_key: SecretStr | None = None
+    """Tavily's search API, for `web_search` on a model without web search of its own. Unset: such a model searches
+    in its browser."""
+    tavily_url: str = 'https://api.tavily.com/search'
+
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
     history_limit: int = 40
 
-    @field_validator('composio_api_key', mode='before')
+    @field_validator('composio_api_key', 'tavily_api_key', mode='before')
     @classmethod
     def blank_is_unset(cls, value: object) -> object:
         """`COMPOSIO_API_KEY=` (as in `.env.example`) means no Composio, not a key that is empty."""
