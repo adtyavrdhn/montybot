@@ -16,7 +16,7 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from sammy import api, approvals, tunnel_api, workflows
+from sammy import account_api, api, approvals, tunnel_api, workflows
 from sammy.live import live_app
 from sammy.observability import ClientTraceContext
 from sammy.resources import Resources, open_resources
@@ -44,6 +44,9 @@ def create_app(settings: Settings) -> ASGIApp:
             Route('/api/password/reset', api.request_password_reset, methods=['POST']),
             Route('/api/password/reset/confirm', api.confirm_password_reset, methods=['POST']),
             Route('/api/me', api.me),
+            Route('/api/account', account_api.delete_account, methods=['DELETE']),
+            Route('/api/export', account_api.export_data),
+            Route('/api/exports/{token:str}', account_api.download_export),
             Route('/api/attachments', api.upload_attachment, methods=['POST']),
             Route('/api/attachments/{attachment_id:uuid}', api.read_attachment),
             Route('/api/threads', api.list_threads),

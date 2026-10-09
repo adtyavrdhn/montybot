@@ -59,6 +59,13 @@ public struct AnswerBody: Encodable, Equatable, Sendable {
     public static func connected(_ connected: Bool) -> AnswerBody { AnswerBody(connected: connected) }
 }
 
+/// What exporting the user's data gave: the zip, or word that a big account is zipped in the background and a link to
+/// it emailed to `email`.
+public enum DataExport: Equatable, Sendable {
+    case zip(Data)
+    case emailed(email: String)
+}
+
 /// What a run's event stream says: the run's state (authoritative), or a provisional preview of the reply.
 public enum RunEvent: Equatable, Sendable {
     case status(Run)
@@ -142,6 +149,25 @@ public final class APIClient: Sendable {
     }
 
     public func me() async throws -> User { try await send("GET", "/api/me") }
+
+    /// Everything of the user's, to take with them: chats, files, memories, schedules, integration names.
+    public func exportData() async throws -> DataExport {
+        try await raw(request("GET", "/api/export", accept: "*/*", timeout: 300)) { data, response in
+            switch response.statusCode {
+            case 200: return .zip(data)
+            case 202:
+                let answer = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                return .emailed(email: answer?["email"] as? String ?? "")
+            default: throw error(response.statusCode, data)
+            }
+        }
+    }
+
+    /// Deletes the account and everything in it, the password confirming it; the session ends with it.
+    public func deleteAccount(password: String) async throws {
+        let _: Ok = try await send("DELETE", "/api/account", body: ["password": password])
+        clearSession()
+    }
 
     /// Emails a reset code to the account's address (the answer is the same for any address).
     public func requestPasswordReset(email: String) async throws {

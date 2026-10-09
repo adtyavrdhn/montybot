@@ -339,6 +339,21 @@ public final class AppModel {
         phase = .signedOut
     }
 
+    /// Everything of the user's, as a zip, or word that a link to it is on its way by email (a big account).
+    public func exportData() async throws -> DataExport {
+        telemetry.log("export data")
+        return try await client.exportData()
+    }
+
+    /// Deletes the account and everything of it on the server, the user's password confirming it, then forgets it
+    /// here as signing out does. Throws, and changes nothing, when the password is wrong.
+    public func deleteAccount(password: String) async throws {
+        await finishPendingDelete()  // while the session can still delete it
+        telemetry.log("delete account")
+        try await client.deleteAccount(password: password)
+        await signOut()
+    }
+
     /// The server said the session is over (expired, or signed out elsewhere).
     public func sessionEnded() {
         guard user != nil else { return }

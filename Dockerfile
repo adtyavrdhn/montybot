@@ -21,9 +21,10 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY sammy ./sammy
 RUN uv sync --frozen --no-dev
 
-# The Claude Code sign-in and the users' files live on volumes mounted here; a new named volume copies this owner.
-RUN mkdir -p /data/claude-code /data/workspaces /run/browser-egress \
-    && chown pwuser:pwuser /data/claude-code /data/workspaces /run/browser-egress
+# The Claude Code sign-in, the users' files and their exports live on volumes mounted here; a new named volume copies
+# this owner.
+RUN mkdir -p /data/claude-code /data/workspaces /data/exports /run/browser-egress \
+    && chown pwuser:pwuser /data/claude-code /data/workspaces /data/exports /run/browser-egress
 USER pwuser
 
 # Last, so a new commit rebuilds nothing else. Logfire reports it as service.version.

@@ -860,4 +860,36 @@ struct JourneyTests {
         }
         #expect(app.phase == .signedOut)
     }
+
+    @Test func anAccountIsExportedThenDeletedWithItsPassword() async throws {
+        let app = try await person()
+        let chat = try await say("Say hello", in: app)
+        try await eventually("the reply") { chat.run?.status == .done }
+        let email = try #require(app.user?.email)
+
+        // The dev server sends no email, so even this export comes at once, as a zip.
+        guard case .zip(let data) = try await app.exportData() else {
+            Issue.record("the export was emailed")
+            return
+        }
+        #expect(data.starts(with: [0x50, 0x4B, 0x03, 0x04]))
+
+        do {
+            try await app.deleteAccount(password: "wrong password")
+            Issue.record("deleted with the wrong password")
+        } catch let error as APIError {
+            #expect(error.localizedDescription == "That password is wrong.")
+        }
+        #expect(app.phase == .signedIn(try #require(app.user)))
+
+        try await app.deleteAccount(password: "correct horse")
+        #expect(app.phase == .signedOut && app.threads.isEmpty && app.chat == nil)
+        #expect(!app.client.hasSessionCookie)
+        do {
+            try await app.signIn(email: email, password: "correct horse")
+            Issue.record("signed in to a deleted account")
+        } catch let error as APIError {
+            #expect(error.localizedDescription == "Wrong email or password.")
+        }
+    }
 }

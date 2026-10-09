@@ -173,6 +173,23 @@ and removed on the Integrations page of the web and Mac apps.
   with the user's data key. Requests go to public addresses only, checked as each connection opens
   (`sammy/integrations/egress.py`), and are never traced, as a server's URL can hold a key.
 
+## Your data
+
+Users take everything of theirs with them, or delete their account, from Your account in the web app and the
+Account settings of the Mac app (`sammy/account_api.py`).
+
+- **Export** (`GET /api/export`, `sammy/export.py`): one zip with their chats (Markdown as the apps show them, and
+  JSON with each task's steps and the model's messages), the files in them, their files from `/work`, their memories,
+  schedules, and the names of their integrations. It never holds sign-ins, passwords, tokens, MCP server URLs or
+  push subscriptions: the export does not read them at all. With `SMTP_URL` set, an account bigger than
+  `EXPORT_INLINE_BYTES` (50 MB) is zipped in the background (a DBOS workflow) into `EXPORTS_DIR`, and its user is
+  emailed a signed link that works for a day.
+- **Delete** (`DELETE /api/account` with the user's password, `sammy/accounts.py`): disconnects their Composio apps,
+  stops their runs, deletes their schedules, closes the browser kept for them, and deletes their DBOS workflows, whose
+  inputs and steps hold their data. Then it deletes their row, which every table of ours references with
+  `ON DELETE CASCADE`, and their files. `tests/e2e/test_account.py` checks that no row in any table, ours or DBOS's,
+  names them afterwards.
+
 ## Observability
 
 `LOGFIRE_TOKEN` is optional: without it, no telemetry is sent to Logfire. What is exported is decided per field in
@@ -216,8 +233,8 @@ On desktop, chats stay in a persistent sidebar; on a phone, the Chats button ope
 
 Create an account or sign in, then describe a task in a new chat. Example prompts fill the message box for you to
 review before sending. Watch Sammy's browser while it works, take over when it asks you to sign in, and answer
-questions or approve actions in the chat. Saved sign-ins and schedules are available in the sidebar, alongside
-notification opt-in. Motion respects your device's reduced-motion preference.
+questions or approve actions in the chat. Saved sign-ins, schedules and your account (export your data, or delete
+it) are available in the sidebar, alongside notification opt-in. Motion respects your device's reduced-motion preference.
 
 ## Mac app
 

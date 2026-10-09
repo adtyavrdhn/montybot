@@ -217,6 +217,9 @@ Considered:
   per user's jar at a time, through the same lease as the browser.
 - **Vector DB:** one namespace per user.
 - **Never** write `storageState`, cookies or live-view links into traces or logs.
+- **Leaving** (#135): a user can export everything of theirs and delete their account. Every table of ours references
+  `sammy.users` with `ON DELETE CASCADE`, so a new table that holds a user's data must too. Deleting an account also
+  deletes the user's DBOS workflows, whose inputs and step outputs hold their data.
 
 ## Open questions
 
