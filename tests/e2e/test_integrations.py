@@ -175,6 +175,8 @@ def test_an_action_the_user_always_allows_runs_end_to_end_without_stopping(
         'summary': 'Use linear: LINEAR_CREATE_LINEAR_ISSUE',
     }
     assert ask['rule'] == rule  # the card offers "Always allow this"
+    refused = client.http.post(f'/api/asks/{ask["id"]}', json={'approved': False, 'remember': True})
+    assert refused.status_code == 422  # only a yes is remembered
     client.answer(ask, approved=True, remember=True)
     assert 'Weekly groceries' in client.wait_for_reply(first)
     [kept] = client.http.get('/api/approvals').json()['rules']
