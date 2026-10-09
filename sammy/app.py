@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from pydantic import ValidationError
 from starlette.applications import Starlette
@@ -16,7 +16,7 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from sammy import api, approvals, tunnel_api, workflows
+from sammy import api, approvals, model_preferences_api, tunnel_api, workflows
 from sammy.live import live_app
 from sammy.observability import ClientTraceContext
 from sammy.resources import Resources, open_resources
@@ -44,6 +44,7 @@ def create_app(settings: Settings) -> ASGIApp:
             Route('/api/password/reset', api.request_password_reset, methods=['POST']),
             Route('/api/password/reset/confirm', api.confirm_password_reset, methods=['POST']),
             Route('/api/me', api.me),
+            Route('/api/model-preferences', model_preferences_api.preferences, methods=['GET', 'PUT']),
             Route('/api/attachments', api.upload_attachment, methods=['POST']),
             Route('/api/attachments/{attachment_id:uuid}', api.read_attachment),
             Route('/api/threads', api.list_threads),
@@ -127,7 +128,7 @@ class LiveApp:
     """The live view (`sammy.live`), made on first use from the app's resources, which exist once it starts."""
 
     def __init__(self) -> None:
-        self._app: Any = None
+        self._app: ASGIApp | None = None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if self._app is None:

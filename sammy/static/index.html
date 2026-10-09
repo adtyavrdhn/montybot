@@ -14,6 +14,7 @@
   <script src="/static/chat.js" defer></script>
   <script src="/static/integrations.js" defer></script>
   <script src="/static/composer.js" defer></script>
+  <script src="/static/model-picker.js" defer></script>
   <script src="/static/pages.js" defer></script>
 </head>
 <body>
@@ -70,6 +71,7 @@
           <button id="open-integrations" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v4m6-4v4M7 7h10v4a5 5 0 0 1-10 0Zm5 9v5"/></svg> Integrations</button>
           <button id="open-schedules" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16m-12 4h3"/></svg> Schedules</button>
           <button id="enable-notifications" class="link" hidden><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9Zm4 12h4"/></svg> <span id="notifications-label">Notify me when Sammy needs me</span></button>
+          <button id="open-settings" class="link">Settings</button>
           <button id="signout" class="link">Sign out</button>
         </div>
         <p class="sidebar-note">A browser of its own.<br>You in control.</p>
@@ -80,6 +82,7 @@
           <div id="status" class="status" role="status" hidden></div>
           <div id="ask" class="ask" role="region" aria-label="Sammy needs your input" hidden></div>
           <div class="composer-wrap">
+            <div id="quick-model" class="model-picker compact" aria-label="Model for next run"></div>
             <form id="composer">
               <ul id="attachments" aria-label="Files to send" hidden></ul>
               <div class="composer-row">
@@ -161,6 +164,15 @@
             <summary class="group-title">More apps <span id="more-count" class="group-count"></span></summary>
             <ul id="more-list" class="integration-list" aria-label="More apps"></ul>
           </details>
+        </div>
+      </section>
+      <section id="settings" class="page" aria-labelledby="settings-title" hidden>
+        <div class="page-content">
+          <button class="secondary back">Back to chat</button>
+          <div class="page-heading"><h2 id="settings-title" tabindex="-1">Settings</h2></div>
+          <h3>Model</h3>
+          <p class="muted">Changes save automatically for your next run. Runs already underway keep their model and settings.</p>
+          <div id="settings-model" class="model-picker"></div>
         </div>
       </section>
       <section id="schedules" class="page" aria-labelledby="schedules-title" hidden>

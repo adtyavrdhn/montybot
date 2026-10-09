@@ -35,6 +35,17 @@ hoc, so the first time they right-click Sammy.app and choose Open. With a Develo
 `scripts/build-app.sh https://sammy.example.com` builds an app that talks to that server; users can change it in
 Settings. The app is signed ad hoc; for users, sign it with a Developer ID and notarize it (see the script).
 
+## Choose a model
+
+While signed in, open Settings > Model or the model button above the message box. Both show the allowed models
+from your server and save changes to your account. Thinking offers low, medium and high only where supported;
+Advanced lists the server's enum options. Switching models clears the previous model's overrides and uses the
+new model's defaults. Numeric overrides are not exposed in this version of the Mac UI.
+
+The next message waits for a pending save before starting its task. If saving fails, the app keeps the confirmed
+selection and stops new messages until you retry the choice or use Reload saved settings. Running tasks keep
+their original model. The server must support `GET` and `PUT /api/model-preferences`.
+
 ## Test it
 
 ```bash

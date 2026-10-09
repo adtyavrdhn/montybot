@@ -110,9 +110,9 @@ $('enable-notifications').addEventListener('click', () => (
 
 // --- routing ---
 
-const PAGES = { '#/sign-ins': ['signins', 'Saved browser data', openSignins],
+const PAGES = { '#/settings': ['settings', 'Settings', openSettings], '#/sign-ins': ['signins', 'Saved browser data', openSignins],
   '#/integrations': ['integrations', 'Integrations', openIntegrations], '#/schedules': ['schedules', 'Schedules', openSchedules] };
-const PAGE_BUTTONS = { '#/sign-ins': 'open-signins', '#/integrations': 'open-integrations', '#/schedules': 'open-schedules' };
+const PAGE_BUTTONS = { '#/settings': 'open-settings', '#/sign-ins': 'open-signins', '#/integrations': 'open-integrations', '#/schedules': 'open-schedules' };
 
 async function route() {
   const hash = location.hash;
@@ -131,6 +131,7 @@ async function route() {
   const match = hash.match(/^#\/t\/([0-9a-f-]{36})$/);
   try {
     await openChat(match ? match[1] : null);
+    report(loadModelPreferences());
   } finally {
     await loadThreads();  // also when the chat failed to load: the list is where the user tries again
   }

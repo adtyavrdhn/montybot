@@ -12,6 +12,7 @@ struct Composer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            ComposerModelPicker()
             if let notice = chat.notice {
                 NoticeBar(notice: notice) { chat.notice = nil }
                     .transition(.move(edge: .bottom).combined(with: .opacity))

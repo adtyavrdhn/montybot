@@ -209,6 +209,7 @@ function show(screen) {
 }
 
 function signedOut() {
+  resetModelPreferences();
   newPage();
   state.threadId = null;
   state.run = null;
@@ -340,7 +341,7 @@ function syncDrawer() {
   $('drawer').inert = !desktop.matches && !open;
   $('drawer-backdrop').hidden = !open;
   $('menu-button').setAttribute('aria-expanded', String(open));
-  for (const id of ['layout', 'signins', 'integrations', 'schedules', 'browser-button']) $(id).inert = open;
+  for (const id of ['layout', 'signins', 'integrations', 'schedules', 'settings', 'browser-button']) $(id).inert = open;
 }
 function closeDrawer(restoreFocus = false) {
   const focusInside = $('drawer').contains(document.activeElement);

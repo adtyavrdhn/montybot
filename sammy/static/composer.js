@@ -2,6 +2,10 @@
 
 $('composer').addEventListener('submit', (event) => {
   event.preventDefault();
+  if (modelPicker.busy) {
+    showNotice('Wait for model settings to finish loading or saving before sending.');
+    return;
+  }
   if ($('send').hidden && !$('ask').hidden) {  // Sammy waits for an answer: take the user there
     $('ask').querySelector('textarea, button').focus();
     return;

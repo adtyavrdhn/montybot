@@ -148,6 +148,23 @@ h1, h2 { letter-spacing: -.045em; font-weight: 600; line-height: 1.15; }
 #notice-text { flex: 1; }
 #composer-hint { text-align: center; font-size: .72rem; color: var(--muted); margin: 10px 0 0; }
 
+/* Model preferences share controls between Settings and the quick composer switcher. */
+.model-picker { max-width: 560px; }
+.model-controls { border: 0; padding: 0; margin: 0; min-width: 0; }
+.model-field { min-width: 0; }
+.model-field label { margin: .6em 0 .3em; }
+.model-field select { width: 100%; min-width: 0; min-height: 44px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid #c5b6cc; border-radius: 8px; padding: .5em; }
+.model-picker details { margin-top: 20px; }
+.model-picker summary { cursor: pointer; font-weight: 600; }
+.model-picker .error:empty, .model-status:empty { display: none; }
+.model-status { color: var(--muted); font-size: .8rem; margin: 6px 0; }
+.model-picker.compact { max-width: none; margin-bottom: 8px; font-size: .8rem; }
+.compact .model-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.compact .model-field { flex: 1 1 120px; }
+.compact .model-field:first-child { flex-grow: 2; }
+.compact label { margin-top: 0; }
+.compact a { display: inline-block; color: var(--accent); margin-top: 4px; }
+
 /* Files: chips in the composer while they upload, and in messages once sent. */
 #attachments { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .attachment { position: relative; display: flex; align-items: center; gap: 10px; max-width: 260px; padding: 6px 4px 6px 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); overflow: hidden; }

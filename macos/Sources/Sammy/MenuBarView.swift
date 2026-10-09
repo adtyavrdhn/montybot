@@ -80,6 +80,7 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
+            ModelSettingsView().tabItem { Label("Model", systemImage: "slider.horizontal.3") }
             AccountSettings().tabItem { Label("Account", systemImage: "person.crop.circle") }
         }
         .frame(width: 460)

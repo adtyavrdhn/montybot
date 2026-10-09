@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from typing import Self
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -47,6 +48,21 @@ class Settings(BaseSettings):
     """A Pydantic AI model name; `claude-code:NAME` for a Claude Code subscription model (sign in with
     `sammy claude-code-login`); or `script:module:attribute` for a `Model` object, which is how tests script the
     model."""
+    allowed_models: list[str] = Field(default_factory=list)
+    """JSON list of selectable model IDs. Empty means only MODEL; MODEL must be included otherwise."""
+
+    @model_validator(mode='after')
+    def check_allowed_models(self) -> Self:
+        if self.allowed_models and self.model not in self.allowed_models:
+            raise ValueError('ALLOWED_MODELS must include MODEL')
+        if any(not name.strip() or name != name.strip() or ':' not in name for name in self.model_choices):
+            raise ValueError('Model IDs must be nonempty provider:model names without surrounding spaces')
+        return self
+
+    @property
+    def model_choices(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(self.allowed_models or [self.model]))
+
     browser_backend: str = 'sammy.browser.fake:FakeBrowser'
     """`module:attribute` of a callable that makes a closed `BrowserBackend` for one run."""
     browser_idle_timeout_seconds: float = 24 * 60 * 60
