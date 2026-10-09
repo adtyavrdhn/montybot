@@ -100,15 +100,15 @@ def routed_backend_factory(
 
 
 def mac_route(pool: Pool, tunnels: Tunnels) -> Callable[[str, str], Awaitable[Path | None]]:
-    """A browser goes out through its user's Mac while the Mac is connected, for a run the user started. A scheduled
-    run always goes out through the server: it runs whether the Mac is awake or not."""
+    """A browser goes out through its user's Mac while the Mac is connected, for a run the user started. A run a
+    schedule or a webhook started always goes out through the server: it runs whether the Mac is awake or not."""
 
     async def route(run_id: str, user_id: str) -> Path | None:
         if not tunnels.connected(user_id):
             return None
         async with pool.connection() as connection:
             run = await store.get_run(connection, user_id, run_id)
-        if run is None or run.trigger == 'schedule':
+        if run is None or run.trigger != 'message':
             return None
         return await tunnels.egress(user_id)
 

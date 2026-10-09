@@ -16,7 +16,7 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from sammy import api, approvals, tunnel_api, workflows
+from sammy import api, approvals, tunnel_api, webhook_api, workflows
 from sammy.live import live_app
 from sammy.observability import ClientTraceContext
 from sammy.resources import Resources, open_resources
@@ -73,6 +73,13 @@ def create_app(settings: Settings) -> ASGIApp:
             Route('/api/schedules/{schedule_id:uuid}/pause', api.pause_schedule, methods=['POST']),
             Route('/api/schedules/{schedule_id:uuid}/resume', api.resume_schedule, methods=['POST']),
             Route('/api/schedules/{schedule_id:uuid}', api.delete_schedule, methods=['DELETE']),
+            Route('/api/webhooks', webhook_api.list_webhooks),
+            Route('/api/webhooks', webhook_api.create_webhook, methods=['POST']),
+            Route('/api/webhooks/{webhook_id:uuid}/pause', webhook_api.pause_webhook, methods=['POST']),
+            Route('/api/webhooks/{webhook_id:uuid}/resume', webhook_api.resume_webhook, methods=['POST']),
+            Route('/api/webhooks/{webhook_id:uuid}/rotate', webhook_api.rotate_webhook, methods=['POST']),
+            Route('/api/webhooks/{webhook_id:uuid}', webhook_api.delete_webhook, methods=['DELETE']),
+            Route('/hooks/{token:str}', webhook_api.receive, methods=['POST']),
             Route('/api/integrations', api.list_integrations),
             Route('/api/integrations/apps', api.list_apps),
             Route('/api/integrations/apps/{slug:str}/connect', api.connect_app, methods=['POST']),

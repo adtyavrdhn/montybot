@@ -27,6 +27,7 @@ class MockAPI:
     run: dict[str, object] | None = None
     sites: list[dict[str, str]] = field(default_factory=list)
     schedules: list[dict[str, object]] = field(default_factory=list)
+    webhooks: list[dict[str, object]] = field(default_factory=list)
     uploads: dict[str, dict[str, object]] = field(default_factory=dict)  # by id, as `POST /api/attachments` made them
     upload_status: int = 201
     thread_status: str | None = None
@@ -111,6 +112,20 @@ class MockAPI:
                 self.schedules = []
             else:
                 self.schedules[0]['paused'] = path.endswith('/pause')
+        elif path == '/api/webhooks' and method == 'GET':
+            result = self.webhooks
+        elif path == '/api/webhooks' and method == 'POST':
+            assert isinstance(body, dict)
+            added = {'id': 'hook', 'thread_id': THREAD, 'paused': False, **body}
+            self.webhooks.append(added)
+            result, status = {**added, 'url': 'https://sammy.test/hooks/token-1', 'secret': 'secret-1'}, 201
+        elif path.startswith('/api/webhooks/'):
+            if method == 'DELETE':
+                self.webhooks = []
+            elif path.endswith('/rotate'):
+                result = {**self.webhooks[0], 'url': 'https://sammy.test/hooks/token-2', 'secret': 'secret-2'}
+            else:
+                self.webhooks[0]['paused'] = path.endswith('/pause')
         elif path.startswith('/api/asks/'):
             self.run = None
         elif path.endswith('/stop'):
@@ -315,6 +330,40 @@ def test_saved_signins_and_schedules(frontend: tuple[Page, MockAPI]) -> None:
     assert ('POST', '/api/schedules/task/pause', {}) in mock.calls
     assert ('POST', '/api/schedules/task/resume', {}) in mock.calls
     assert ('DELETE', '/api/schedules/task', None) in mock.calls
+
+
+def test_a_triggers_url_and_secret_are_shown_once(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    workspace(page, mock)
+    page.click('#open-webhooks')
+    expect(page.locator('#webhooks-title')).to_be_focused()
+    expect(page.locator('#webhook-list')).to_contain_text('No triggers yet')
+    page.fill('#webhook-name', 'New releases')
+    page.select_option('#webhook-source', 'github')
+    page.fill('#webhook-prompt', 'Summarise the release')
+    page.click('#add-webhook')
+    expect(page.locator('#webhook-url')).to_have_value('https://sammy.test/hooks/token-1')
+    expect(page.locator('#webhook-secret')).to_have_value('secret-1')
+    expect(page.locator('#webhook-list')).to_contain_text('GitHub')
+    body = {'name': 'New releases', 'prompt': 'Summarise the release', 'source': 'github'}
+    assert ('POST', '/api/webhooks', body) in mock.calls
+
+    page.get_by_role('button', name='Pause', exact=True).click()
+    expect(page.locator('#webhook-list')).to_contain_text('(paused)')
+    page.once('dialog', lambda dialog: dialog.accept())  # "Make a new URL and secret ...? The old ones stop working."
+    page.get_by_role('button', name='New URL', exact=True).click()
+    expect(page.locator('#webhook-secret')).to_have_value('secret-2')
+    # Shown once: back on the page later, they are gone.
+    page.click('#open-schedules')
+    page.click('#open-webhooks')
+    expect(page.locator('#webhook-list')).to_contain_text('(paused)')
+    expect(page.locator('#webhook-keys')).to_be_hidden()
+    page.once('dialog', lambda dialog: dialog.accept())
+    page.get_by_role('button', name='Delete', exact=True).click()
+    expect(page.locator('#webhook-list')).to_contain_text('No triggers yet')
+    assert ('POST', '/api/webhooks/hook/pause', {}) in mock.calls
+    assert ('POST', '/api/webhooks/hook/rotate', {}) in mock.calls
+    assert ('DELETE', '/api/webhooks/hook', None) in mock.calls
 
 
 @pytest.mark.parametrize('kind', ['question', 'approval', 'handoff'])
@@ -654,7 +703,7 @@ def test_sse_snapshots_error_recovery_and_committed_reply(frontend: tuple[Page, 
     assert not any(method == 'POST' for method, _, _ in mock.calls)
 
 
-@pytest.mark.parametrize('destination', ['#/new', '#/integrations', '#/schedules', '#/sign-ins'])
+@pytest.mark.parametrize('destination', ['#/new', '#/integrations', '#/schedules', '#/triggers', '#/sign-ins'])
 def test_navigation_discards_sse_draft_and_late_events(frontend: tuple[Page, MockAPI], destination: str) -> None:
     page, mock = frontend
     streaming_chat(page, mock)

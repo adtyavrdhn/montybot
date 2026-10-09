@@ -188,6 +188,13 @@ This script is a sketch. Library paths differ between distros, and Chromium may 
 - **Waiting for a person.** `DBOS.recv` waits for as long as the hand-off takes, across restarts. The gateway wakes
   it with `DBOS.send`.
 
+**Webhook triggers** (#133) start a run from an event instead of a cron. A trigger is like a schedule with a secret
+URL (`/hooks/<token>`) in place of the cron, and needs no DBOS schedule. An inbound POST must carry a signature
+(GitHub's own, or an HMAC over the delivery id and the body), and its body is capped. Its delivery id is recorded in
+the same transaction as the run, so a replay starts nothing; a thread still busy rolls both back, and the sender
+retries. The body reaches the model as a file of the run, as untrusted data. Unlike a schedule's run, a trigger's run
+still asks before anything irreversible: the user approved the prompt, not what a stranger may put in an event.
+
 Considered:
 
 - **Aioclock** runs in one process. With N replicas, every job fires N times.

@@ -25,6 +25,8 @@ from sammy.integration_tools import connected_integrations, integration_tools
 from sammy.memory import memory_tools, recall
 from sammy.schedule_tools import INSTRUCTIONS as SCHEDULE_INSTRUCTIONS
 from sammy.schedule_tools import schedule_tools, scheduled_run
+from sammy.webhooks import INSTRUCTIONS as WEBHOOK_INSTRUCTIONS
+from sammy.webhooks import webhook_run
 
 INSTRUCTIONS = """\
 You are Sammy, a flying squirrel with a browser and opinions. You do things for the user on the web, in your own
@@ -108,12 +110,14 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
             CPYTHON_INSTRUCTIONS,
             FILE_INSTRUCTIONS,
             SCHEDULE_INSTRUCTIONS,
+            WEBHOOK_INSTRUCTIONS,
             INTEGRATION_INSTRUCTIONS,
             user_time,
             your_name,
             connected_integrations,
             recall,
             scheduled_run,
+            webhook_run,
         ],
         toolsets=[
             code_tools,

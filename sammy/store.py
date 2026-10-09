@@ -480,14 +480,19 @@ async def delete_schedule(connection: Connection, user_id: str, schedule_id: str
     row = await cursor.fetchone()
     if row is None:
         return False
+    await delete_unused_thread(connection, row['thread_id'])
+    return True
+
+
+async def delete_unused_thread(connection: Connection, thread_id: str) -> None:
+    """The thread of a schedule or webhook just deleted, if it never ran."""
     # Lock the thread first: a run starting in it right now must either be seen below or wait for this to commit.
-    await connection.execute('SELECT 1 FROM sammy.threads WHERE id = %s FOR UPDATE', (row['thread_id'],))
+    await connection.execute('SELECT 1 FROM sammy.threads WHERE id = %s FOR UPDATE', (thread_id,))
     await connection.execute(
         'DELETE FROM sammy.threads t WHERE t.id = %s '
         'AND NOT EXISTS (SELECT 1 FROM sammy.runs r WHERE r.thread_id = t.id)',
-        (row['thread_id'],),
+        (thread_id,),
     )
-    return True
 
 
 async def load_schedule(connection: Connection, schedule_id: str) -> Schedule | None:

@@ -64,6 +64,7 @@
           <button id="open-signins" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="4"/><path d="m11 12 8 8 3-3-3-3-2 2"/></svg> Saved browser data</button>
           <button id="open-integrations" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v4m6-4v4M7 7h10v4a5 5 0 0 1-10 0Zm5 9v5"/></svg> Integrations</button>
           <button id="open-schedules" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16m-12 4h3"/></svg> Schedules</button>
+          <button id="open-webhooks" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7Z"/></svg> Triggers</button>
           <button id="enable-notifications" class="link" hidden><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9Zm4 12h4"/></svg> <span id="notifications-label">Notify me when Sammy needs me</span></button>
           <button id="signout" class="link">Sign out</button>
         </div>
@@ -164,6 +165,34 @@
           <div class="page-heading"><span class="page-symbol" aria-hidden="true">◷</span><h2 id="schedules-title" tabindex="-1">Schedules</h2></div>
           <p class="muted">Tasks Sammy runs on your schedule. Pause a task without deleting it, or resume it when you're ready.</p>
           <ul id="schedule-list" aria-label="Scheduled tasks"></ul>
+        </div>
+      </section>
+      <section id="webhooks" class="page" aria-labelledby="webhooks-title" hidden>
+        <div class="page-content">
+          <button class="secondary back">Back to chat</button>
+          <div class="page-heading"><span class="page-symbol" aria-hidden="true">ϟ</span><h2 id="webhooks-title" tabindex="-1">Triggers</h2></div>
+          <p class="muted">Tasks Sammy starts when another service sends an event to their webhook URL, such as GitHub publishing a release. Each event runs in the trigger's own chat.</p>
+          <ul id="webhook-list" aria-label="Triggers"></ul>
+          <div id="webhook-keys" class="server-form" role="status" hidden>
+            <p><strong>Copy these now: Sammy shows them only once.</strong> Give both to the service that sends the events.</p>
+            <label for="webhook-url">Webhook URL</label>
+            <input id="webhook-url" readonly>
+            <label for="webhook-secret">Secret</label>
+            <input id="webhook-secret" readonly>
+          </div>
+          <form id="webhook-form" class="server-form">
+            <label for="webhook-name">Name</label>
+            <input id="webhook-name" maxlength="120" placeholder="New releases" required>
+            <label for="webhook-source">Sent by</label>
+            <select id="webhook-source">
+              <option value="github">GitHub</option>
+              <option value="hmac">Another service (X-Sammy-Signature)</option>
+            </select>
+            <label for="webhook-prompt">What Sammy does with each event</label>
+            <textarea id="webhook-prompt" rows="3" maxlength="20000" placeholder="Summarise the release" required></textarea>
+            <p id="webhook-error" class="error" role="alert"></p>
+            <button type="submit" id="add-webhook">Add trigger</button>
+          </form>
         </div>
       </section>
     </section>

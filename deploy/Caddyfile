@@ -6,11 +6,14 @@
 # own browser, which may not have this login, and the page wakes the chat waiting for it. Each acts only on a state
 # Sammy made (signed with SESSION_SECRET, or stored and used once), so they let nobody sign up or start a run. Their
 # stylesheet comes with them.
+#
+# Webhook triggers (/hooks/<token>) are open to the services that send their events: each request must carry its
+# trigger's signature (sammy/webhooks.py), so the URL alone starts nothing.
 {$DOMAIN} {
 	handle /healthz {
 		reverse_proxy app:8000
 	}
-	@returned path /integrations/composio/callback /integrations/mcp/callback /static/app.css
+	@returned path /integrations/composio/callback /integrations/mcp/callback /static/app.css /hooks/*
 	handle @returned {
 		reverse_proxy app:8000
 	}

@@ -135,6 +135,8 @@ def test_the_web_app_is_served_over_https_behind_a_login(stack: Stack) -> None:
     assert returned.status_code == 400 and 'Not connected' in returned.text
     assert httpx.get(f'{stack.url}/integrations/mcp/callback?state=made-up&code=x', verify=False).status_code == 400
     assert httpx.get(f'{stack.url}/static/app.css', verify=False).status_code == 200
+    # Services send their events to webhook triggers without this login; the app checks each one's signature.
+    assert httpx.post(f'{stack.url}/hooks/made-up', content=b'{}', verify=False).status_code == 404
     for closed in ('/static/app.js', '/api/integrations', '/integrations/composio/callbackx', '/integrations/'):
         assert httpx.get(f'{stack.url}{closed}', verify=False).status_code == 401, closed
     with stack.client() as http:
