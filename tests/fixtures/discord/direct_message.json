@@ -1,0 +1,29 @@
+{
+  "type": 0,
+  "tts": false,
+  "timestamp": "2026-01-15T10:00:00.000000+00:00",
+  "pinned": false,
+  "nonce": "1460000000000000000",
+  "mentions": [],
+  "mention_roles": [],
+  "mention_everyone": false,
+  "id": "1460000000000000101",
+  "flags": 0,
+  "embeds": [],
+  "edited_timestamp": null,
+  "content": "Say hello",
+  "components": [],
+  "channel_type": 1,
+  "channel_id": "1300000000000000003",
+  "author": {
+    "username": "pat",
+    "public_flags": 0,
+    "id": "1200000000000000002",
+    "global_name": "Pat",
+    "discriminator": "0",
+    "clan": null,
+    "avatar_decoration_data": null,
+    "avatar": null
+  },
+  "attachments": []
+}

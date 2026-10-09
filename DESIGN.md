@@ -237,6 +237,11 @@ through its API. It registers with one line in `registry.BUILT_IN`, and is on on
   retried step. A restart in the middle of a reply sends each part once; a crash in the instant between the platform
   accepting a part and DBOS recording it can repeat that one part, as platform APIs take no idempotency key.
 - **Pings.** A linked direct chat is a notification target next to web push and email, which the user can turn off.
+- **Platforms with their own connection.** Discord sends normal messages only over its gateway, a websocket, not
+  to a webhook. Such a platform is also a `Listener` (`base.py`): the app keeps its connection open on one replica,
+  the one holding a Postgres advisory lock on a connection of its own (`leader.py`), and the others take over within
+  seconds once that connection ends. A reconnect resumes the session, and every delivery is still handled once by
+  its id.
 
 ## Data
 

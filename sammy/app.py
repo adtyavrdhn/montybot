@@ -18,6 +18,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from sammy import api, approvals, tunnel_api, workflows
 from sammy.channels import api as channels_api
+from sammy.channels.leader import Listeners
 from sammy.channels.outbound import Pump
 from sammy.live import live_app
 from sammy.observability import ClientTraceContext
@@ -35,7 +36,9 @@ def create_app(settings: Settings) -> ASGIApp:
         async with open_resources(settings) as resources:
             await approvals.redeliver_answers(resources)
             await workflows.start_queued(resources)
-            async with Pump(resources):  # sends what the chat apps' outbox holds
+            # The pump sends what the chat apps' outbox holds; the listeners keep a platform's own connection open
+            # (Discord's gateway) on one replica.
+            async with Pump(resources), Listeners(resources):
                 yield {'resources': resources}
 
     app = Starlette(

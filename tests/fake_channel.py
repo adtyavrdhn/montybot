@@ -8,7 +8,8 @@ pytest process                                   app process
 ```
 
 `PlatformServer` is the reusable part for a real platform's tests: point the adapter's API base URL at it, answer each
-`(method, path)` with `reply`, and read what was called from `calls`. It runs in the test process, so it outlives an
+`(method, path)` with `reply` (a `*` in a route's path stands for any one segment, such as an id), and read what was
+called from `calls`. It runs in the test process, so it outlives an
 app restart, and it can hold a call (`hold`) to stand for a crash before the platform accepted it.
 """
 
@@ -94,6 +95,20 @@ class PlatformServer(ThreadingHTTPServer):
     def url(self) -> str:
         return f'http://127.0.0.1:{self.server_address[1]}'
 
+    def route(self, method: str, path: str) -> Handler | None:
+        """The handler for the call: its exact route, else one whose `*` segments match any one segment."""
+        exact = self.routes.get((method, path))
+        if exact is not None:
+            return exact
+        segments = path.split('/')
+        for (known, pattern), handler in self.routes.items():
+            parts = pattern.split('/')
+            if known != method or len(parts) != len(segments):
+                continue
+            if all(p in ('*', s) for p, s in zip(parts, segments, strict=True)):
+                return handler
+        return None
+
     def hold(self, matches: Callable[[Call], bool]) -> Hold:
         """Hold the next call that `matches`; wait on `held`, then set `released`."""
         hold = Hold(matches)
@@ -122,7 +137,7 @@ class _Handler(BaseHTTPRequestHandler):
             hold.released.wait()
             self.close_connection = True
             return
-        handler = self.server.routes.get((self.command, self.path.split('?', 1)[0]))
+        handler = self.server.route(self.command, self.path.split('?', 1)[0])
         if handler is None:
             status, data, content_type = 404, b'{}', 'application/json'
         else:
@@ -137,6 +152,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     do_GET = _handle
     do_POST = _handle
+    do_PATCH = _handle
 
     def log_message(self, format: str, *args: object) -> None:
         pass

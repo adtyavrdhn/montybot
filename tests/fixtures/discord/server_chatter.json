@@ -1,0 +1,39 @@
+{
+  "type": 0,
+  "tts": false,
+  "timestamp": "2026-01-15T11:01:00.000000+00:00",
+  "pinned": false,
+  "mentions": [],
+  "mention_roles": [],
+  "mention_everyone": false,
+  "member": {
+    "roles": [],
+    "premium_since": null,
+    "pending": false,
+    "nick": null,
+    "mute": false,
+    "joined_at": "2025-11-02T09:12:44.120000+00:00",
+    "flags": 0,
+    "deaf": false,
+    "communication_disabled_until": null,
+    "avatar": null
+  },
+  "id": "1460000000000000302",
+  "flags": 0,
+  "embeds": [],
+  "edited_timestamp": null,
+  "content": "lunch anyone?",
+  "components": [],
+  "channel_type": 0,
+  "channel_id": "1500000000000000005",
+  "author": {
+    "username": "sam",
+    "public_flags": 0,
+    "id": "1200000000000000007",
+    "global_name": "Sam",
+    "discriminator": "0",
+    "avatar": null
+  },
+  "attachments": [],
+  "guild_id": "1400000000000000004"
+}

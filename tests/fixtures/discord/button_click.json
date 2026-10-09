@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "type": 3,
+  "token": "aW50ZXJhY3Rpb246MTQ2MDAwMDAwMDAwMDAwMDIwMTpGQUtFLVRPS0VOLUZPUi1URVNUUw",
+  "id": "1460000000000000201",
+  "application_id": "1100000000000000001",
+  "channel_id": "1300000000000000003",
+  "channel": {"type": 1, "recipients": [], "last_message_id": "1600000000000000001", "id": "1300000000000000003", "flags": 0},
+  "user": {
+    "username": "pat",
+    "public_flags": 0,
+    "id": "1200000000000000002",
+    "global_name": "Pat",
+    "discriminator": "0",
+    "avatar": null
+  },
+  "message": {
+    "type": 0,
+    "tts": false,
+    "timestamp": "2026-01-15T10:01:00.000000+00:00",
+    "pinned": false,
+    "mentions": [],
+    "mention_roles": [],
+    "mention_everyone": false,
+    "id": "1600000000000000001",
+    "flags": 0,
+    "embeds": [],
+    "edited_timestamp": null,
+    "content": "Sammy needs your approval:",
+    "components": [
+      {
+        "type": 1,
+        "id": 1,
+        "components": [
+          {"type": 2, "id": 2, "style": 3, "label": "Approve", "custom_id": "ASK:approve"},
+          {"type": 2, "id": 3, "style": 4, "label": "Decline", "custom_id": "ASK:decline"}
+        ]
+      }
+    ],
+    "channel_id": "1300000000000000003",
+    "author": {
+      "username": "Sammy",
+      "public_flags": 0,
+      "id": "1100000000000000001",
+      "global_name": null,
+      "discriminator": "4821",
+      "bot": true,
+      "avatar": null
+    },
+    "attachments": []
+  },
+  "data": {"id": 2, "custom_id": "ASK:approve", "component_type": 2},
+  "locale": "en-GB",
+  "app_permissions": "562949953601536",
+  "entitlements": [],
+  "entitlement_sku_ids": [],
+  "authorizing_integration_owners": {"0": "1400000000000000004"},
+  "context": 1,
+  "attachment_size_limit": 10485760
+}
