@@ -216,6 +216,9 @@ Considered:
 - **Cookie jar:** envelope-encrypted with a key per tenant (KMS). Saved after every run and every hand-off. One writer
   per user's jar at a time, through the same lease as the browser.
 - **Vector DB:** one namespace per user.
+- **Chat history:** every message is kept. A run gets a summary of a long chat's oldest messages, kept on the thread
+  and updated in the background by a cheap model, then the latest messages; tools read any older one word for word
+  (`sammy/history.py`, #126).
 - **Never** write `storageState`, cookies or live-view links into traces or logs.
 
 ## Open questions

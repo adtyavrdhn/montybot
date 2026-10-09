@@ -18,6 +18,7 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    SystemPromptPart,
     TextContent,
     TextPart,
     ToolCallPart,
@@ -34,6 +35,8 @@ class Turn:
     instructions: str = ''
     seen: list[str] = field(default_factory=list[str])
     """Each thing the user sent in the whole conversation, as the model got it (`seen_in`)."""
+    summary: str = ''
+    """A long chat's summary of its oldest messages, as the model got it (`sammy.history`)."""
 
     @property
     def last(self) -> str:
@@ -376,8 +379,31 @@ def acme_wiki(turn: Turn) -> ModelResponse:
     return say(turn.result_of('connect_integration'))
 
 
+def message_ten(turn: Turn) -> ModelResponse:
+    """ "What did I say in message 10?": in a long chat only the summary has it, so read it back."""
+    if not turn.called('read_history'):
+        return call('read_history', start=10, end=10)
+    return say(f'You said: {turn.result_of("read_history")}')
+
+
+def chat_seen(turn: Turn) -> ModelResponse:
+    """ "How much of our chat do you see?": how many of the user's messages, and whether a summary came with them."""
+    summarised = ' and a summary of the rest' if 'Summary of previous conversation' in turn.summary else ''
+    return say(f'I see {len(turn.seen)} of your messages{summarised}.')
+
+
+def summarize(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    return say('The user keeps notes about apples.')
+
+
+summarizer = FunctionModel(summarize, model_name='scripted-summarizer')
+"""Writes a long chat's summary (`HISTORY_SUMMARY_MODEL=script:e2e.scripts:summarizer`)."""
+
+
 SCRIPTS: dict[str, Script] = {
     "yo what's on my linear": my_linear,
+    'What did I say in message 10': message_ten,
+    'How much of our chat do you see': chat_seen,
     'Search my Acme Wiki': acme_wiki,
     'Check my Gmail': my_gmail,
     'Create a Linear issue called': new_linear_issue,
@@ -478,7 +504,14 @@ def current_turn(messages: list[ModelMessage]) -> Turn:
     ]
     latest = messages[-1]
     instructions = (latest.instructions or '') if isinstance(latest, ModelRequest) else ''
-    return Turn(prompt=prompt, returns=returns, instructions=instructions, seen=seen_in(messages))
+    summary = '\n'.join(
+        part.content
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, SystemPromptPart)
+    )
+    return Turn(prompt=prompt, returns=returns, instructions=instructions, seen=seen_in(messages), summary=summary)
 
 
 def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:

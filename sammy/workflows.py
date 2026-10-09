@@ -9,6 +9,7 @@ run_thread(run_id)                                   @DBOS.workflow
   agent.run(...)        model requests are steps (DBOSDurability); browser and memory calls are our own steps;
                         ask_user, approvals and hand-offs wait in DBOS.recv (sammy.approvals)
   step run.finish       append the new messages (files as notes: sammy.attachments), status done (or failed)
+  compact_history       a workflow of its own: summarise the thread's oldest messages (sammy.history)
   step run.close        the browser service saves the user's sign-ins and closes the run's browser
 ```
 
@@ -26,7 +27,6 @@ import logfire
 from dbos import DBOS, SetWorkflowID, StepOptions, WorkflowHandleAsync
 from dbos._error import DBOSAwaitedWorkflowCancelledError, DBOSException, DBOSWorkflowCancelledError
 from pydantic_ai.messages import (
-    ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
@@ -38,6 +38,7 @@ from sammy import attachments, store, streaming
 from sammy.browser.contract import BrowserError
 from sammy.browser.service import UnknownRun
 from sammy.deps import RunDeps
+from sammy.history import compact_history, for_run, limit, recent
 from sammy.models import FINISHED, Attachment, Run, RunStatus, Schedule
 from sammy.observability import timed, timing
 from sammy.resources import Resources, current
@@ -118,7 +119,8 @@ async def run_thread(run_id: str) -> str:
         if run.status in FINISHED:
             return run.status  # stopped before its workflow started
         lifecycle.set_attributes({'thread_id': run.thread_id, 'user_id': run.user_id, 'trigger': run.trigger})
-        history = recent(ModelMessagesTypeAdapter.validate_json(history_json), resources.settings.history_limit)
+        # Runs recorded before compaction replay the whole history; `run.start` gives this many messages at most now.
+        history = recent(ModelMessagesTypeAdapter.validate_json(history_json), limit(resources.settings))
         # The files go in outside a step, so DBOS records no file's bytes: a replay reads the same rows again.
         asked = ModelRequest(parts=[UserPromptPart(content=attachments.prompt(run.prompt, files))])
         *history, asked = await attachments.with_files(resources.pool, run.user_id, [*history, asked])
@@ -150,6 +152,7 @@ async def run_thread(run_id: str) -> str:
             await DBOS.run_step_async(
                 {**RETRIED, 'name': 'run.finish'}, finish_run, resources, run, new_messages, result.output
             )
+            await DBOS.start_workflow_async(compact_history, run.thread_id)  # in the background; a failure is its own
             return 'done'
         finally:
             try:
@@ -173,7 +176,7 @@ async def start_run(
         async with resources.pool.connection() as connection, connection.transaction():
             run = await store.load_run(connection, run_id)
             await store.set_run_status(connection, run_id, 'running')
-            history = await store.load_history(connection, run.thread_id)
+            history = await for_run(connection, run.thread_id, resources.settings)
             schedule = await store.schedule_of_thread(connection, run.thread_id) if run.trigger == 'schedule' else None
             user = await store.get_user(connection, run.user_id)
         timezone = user.timezone if user is not None else 'UTC'
@@ -248,20 +251,6 @@ async def close_browser(resources: Resources, run: Run) -> None:
             pass
         except BrowserError:  # the browser is closed either way; the lease is released
             logfire.warn('Closing the browser of run {run_id} failed', run_id=run.id)
-
-
-def recent(history: list[ModelMessage], limit: int) -> list[ModelMessage]:
-    """About the last `limit` messages, starting at a user's message so no tool call is cut from its return. If the
-    last turn alone is longer than `limit`, all of it."""
-    starts = [
-        index
-        for index, message in enumerate(history)
-        if isinstance(message, ModelRequest) and any(isinstance(p, UserPromptPart) for p in message.parts)
-    ]
-    if len(history) <= limit or not starts:
-        return history
-    within = [index for index in starts if index >= len(history) - limit]
-    return history[within[0] if within else starts[-1] :]
 
 
 @timed('run.start_queued')
