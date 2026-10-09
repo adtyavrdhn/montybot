@@ -3,7 +3,9 @@ span says which, a warning says a fallback happened, and a DBOS replay keeps the
 
 from __future__ import annotations
 
+import sys
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -17,7 +19,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.instrumented import InstrumentationSettings
 
 from sammy import agent as agent_module
-from sammy import streaming
+from sammy import cli, streaming
 from sammy.chains import chain, fall_back
 from sammy.deps import RunDeps
 from sammy.resources import load_model
@@ -127,6 +129,35 @@ def test_an_expired_claude_code_sign_in_falls_back(capfire: CaptureLogfire) -> N
         'claude-code',
         'ClaudeCodeSignInExpiredError',
     )
+
+
+@pytest.mark.parametrize(
+    ('model', 'chains', 'exit_code'),
+    [
+        ('claude-code:claude-opus-5-5', '{}', 0),
+        ('chain:main', '{"main": ["anthropic:claude-opus-5-5", "claude-code:claude-opus-5-5"]}', 0),
+        ('anthropic:claude-opus-5-5', '{"other": ["claude-code:claude-opus-5-5"]}', 1),
+        ('chain:main', '{"main": ["anthropic:claude-opus-5-5"], "other": ["claude-code:claude-opus-5-5"]}', 1),
+    ],
+)
+def test_the_deploy_checks_the_claude_code_sign_in_of_a_chain(
+    model: str, chains: str, exit_code: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`deploy/deploy.sh` asks for the server's Claude Code sign-in when `sammy uses-claude-code` exits 0: for a
+    Claude Code model, or a chain with one, and not for a chain this `MODEL` does not run."""
+    monkeypatch.chdir(tmp_path)  # no .env
+    for name, value in {
+        'DATABASE_URL': 'postgresql://unused',
+        'SESSION_SECRET': 'secret',
+        'ENCRYPTION_KEY': 'key',
+        'MODEL': model,
+        'MODEL_CHAINS': chains,
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(sys, 'argv', ['sammy', 'uses-claude-code'])
+    with pytest.raises(SystemExit) as exited:
+        cli.main()
+    assert exited.value.code == exit_code
 
 
 def test_a_chain_is_named_in_settings(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -48,14 +48,14 @@ elif [ -n "${MONTY_PRIVATE_COMMIT:-}" ]; then
     export MONTY_PRIVATE_COMMIT COMPOSE_PROFILES=full-monty MONTY_URL=ws://monty-server:8000
 fi
 compose build --pull app
-case "${MODEL:-}" in claude-code:*)
-    if ! compose run --rm --no-deps -T app test -s /data/claude-code/auth.json; then
-        echo "The server has no Claude Code sign-in yet. Sign in once, then deploy again:"
-        echo "  ssh -t $(whoami)@$(curl -fsS -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip) \\"
-        echo "    'cd /opt/sammy/src/deploy && sudo docker compose --env-file /opt/sammy/.env run --rm app sammy claude-code-login'"
-        exit 1
-    fi
-esac
+# MODEL, or a model of its fallback chain (MODEL_CHAINS), on Claude Code needs the server signed in. The app decides
+# (`sammy uses-claude-code`), so the chain is read as the app reads it.
+if ! compose run --rm --no-deps -T app sh -c '! sammy uses-claude-code || test -s /data/claude-code/auth.json'; then
+    echo "The server has no Claude Code sign-in yet. Sign in once, then deploy again:"
+    echo "  ssh -t $(whoami)@$(curl -fsS -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip) \\"
+    echo "    'cd /opt/sammy/src/deploy && sudo docker compose --env-file /opt/sammy/.env run --rm app sammy claude-code-login'"
+    exit 1
+fi
 
 compose up -d --remove-orphans --wait --wait-timeout 300
 # They mount files from src/, which was just replaced; recreate them so they see the new ones.

@@ -12,10 +12,10 @@ model at all.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import logfire
-from pydantic_ai.exceptions import ModelAPIError
+from pydantic_ai.exceptions import ModelAPIError, UserError
 from pydantic_ai.models import Model
 from pydantic_ai.models.fallback import FallbackModel
 
@@ -36,6 +36,17 @@ def check_member(model: str) -> str:
     if chain_name(model) is not None:
         raise ValueError(f'{model}: a chain cannot contain another chain.')
     return model
+
+
+def members(model: str, chains: Mapping[str, Sequence[str]]) -> list[str]:
+    """The models `model` runs, in order: the members of its chain in `chains` for `chain:NAME`, else `model`."""
+    name = chain_name(model)
+    if name is None:
+        return [model]
+    found = chains.get(name)
+    if not found:
+        raise UserError(f'No chain named {name!r}: name its models in MODEL_CHAINS.')
+    return [check_member(member) for member in found]
 
 
 def fall_back(error: Exception) -> bool:
