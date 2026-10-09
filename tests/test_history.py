@@ -107,7 +107,8 @@ async def test_a_long_chat_keeps_a_stable_prompt(pool: Pool, settings: Settings)
     thread_id = await new_thread(pool)
     summarizer = Summarizer()
     window, most = settings.history_window, history.limit(settings)
-    written = number = 0
+    written = number = compacted_up_to = 0
+    summary = ''
     while written < 300:
         added = turn(number, written)
         async with pool.connection() as c:
