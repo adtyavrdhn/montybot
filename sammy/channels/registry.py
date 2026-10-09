@@ -16,7 +16,7 @@ from sammy.settings import Settings
 
 Factory = Callable[[Settings], Channel | None]
 
-BUILT_IN: tuple[str, ...] = ()
+BUILT_IN: tuple[str, ...] = ('sammy.channels.slack:new_channel',)
 """The platforms that ship with Sammy, by factory."""
 
 

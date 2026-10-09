@@ -1,0 +1,48 @@
+{
+  "token": "verification-token-unused",
+  "team_id": "T0SAMMY01",
+  "context_team_id": "T0SAMMY01",
+  "api_app_id": "A0SAMMY01",
+  "event": {
+    "client_msg_id": "9f5b6a7c-4d8e-4fa0-81b2-3d4e5f607182",
+    "type": "app_mention",
+    "text": "<@U0SAMMYBOT> what about <https://example.com/a?b=1&amp;c=2|the page> &amp; &lt;this&gt; from <@U0SAM0002>?",
+    "user": "U0PAT0001",
+    "ts": "1767225800.000800",
+    "thread_ts": "1767225700.000600",
+    "blocks": [
+      {
+        "type": "rich_text",
+        "block_id": "Xq1Lp",
+        "elements": [
+          {
+            "type": "rich_section",
+            "elements": [
+              {
+                "type": "text",
+                "text": "what about"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "team": "T0SAMMY01",
+    "channel": "C0TEAM0001",
+    "event_ts": "1767225800.000800"
+  },
+  "type": "event_callback",
+  "event_id": "Ev0TEAM00002",
+  "event_time": 1767225600,
+  "authorizations": [
+    {
+      "enterprise_id": null,
+      "team_id": "T0SAMMY01",
+      "user_id": "U0SAMMYBOT",
+      "is_bot": true,
+      "is_enterprise_install": false
+    }
+  ],
+  "is_ext_shared_channel": false,
+  "event_context": "4-eyJldCI6Im1lc3NhZ2UiLCJ0aWQiOiJUMFNBTU1ZMDEifQ"
+}

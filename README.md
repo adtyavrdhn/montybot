@@ -177,7 +177,7 @@ and removed on the Integrations page of the web and Mac apps.
 
 People can message Sammy from chat apps as well as the web and Mac apps, through one shared layer
 (`sammy/channels/`, see [`DESIGN.md`](DESIGN.md#chat-apps)). Each platform is a thin adapter, on only when all its
-credentials are set; the platforms themselves come in their own changes (#139 Slack, #140 Telegram, #141 WhatsApp,
+credentials are set: [Slack](#slack) here, and the others in their own changes (#140 Telegram, #141 WhatsApp,
 #142 Discord). Webhooks arrive at `POST /api/channels/<name>/webhook`.
 
 - **Linking.** Message the bot directly and it sends a link (`/#/link/<code>`) to open in the web app, signed in;
@@ -197,6 +197,50 @@ credentials are set; the platforms themselves come in their own changes (#139 Sl
 
 `CHANNEL_BACKENDS` adds platforms by `module:function` (comma-separated); the tests add a fake one this way
 (`tests/fake_channel.py`), whose `PlatformServer` a platform's own tests can reuse to stand in for its API.
+
+### Slack
+
+Sammy talks in direct messages (one Sammy thread per DM) and, in channels, only when mentioned: it answers in the
+message's Slack thread, and each Slack thread is a Sammy thread. Asks come with Approve and Decline buttons, and the
+message is updated once answered. Code: `sammy/channels/slack.py` (Events API, interactivity and the Web API, plain
+httpx) and `slack_mrkdwn.py` (Markdown to Slack's mrkdwn).
+
+1. At <https://api.slack.com/apps>, **Create New App**, **From an app manifest**, and paste this, with your
+   `PUBLIC_URL` in both URLs:
+
+   ```yaml
+   display_information:
+     name: Sammy
+   features:
+     app_home:
+       messages_tab_enabled: true
+       messages_tab_read_only_enabled: false
+     bot_user:
+       display_name: Sammy
+       always_online: true
+   oauth_config:
+     scopes:
+       bot: [chat:write, im:history, app_mentions:read, files:read, files:write]
+   settings:
+     event_subscriptions:
+       request_url: https://sammy.example.com/api/channels/slack/webhook
+       bot_events: [message.im, app_mention]
+     interactivity:
+       is_enabled: true
+       request_url: https://sammy.example.com/api/channels/slack/webhook
+   ```
+
+2. Install it to the workspace. Put **OAuth & Permissions**, Bot User OAuth Token (`xoxb-...`) in `SLACK_BOT_TOKEN`
+   and **Basic Information**, Signing Secret in `SLACK_SIGNING_SECRET`, and restart Sammy. Slack is on only with
+   both. If Slack could not verify the request URL while the app was made (Sammy was not running with the secret
+   yet), press **Retry** under **Event Subscriptions**: the handshake is answered only when signed with the secret.
+3. Each person links once from a DM with the app (it sends them a link), or sends `/start <code>` from the web app's
+   **Chat apps** page. Slack accounts are never matched by email. To use Sammy in a channel, invite the app there.
+
+Every request must carry a valid `X-Slack-Signature` signed within the last 5 minutes. The webhook answers at once and
+the work runs in a DBOS workflow, so Slack's 3 second limit holds; Slack's retries carry the same `event_id` and are
+handled once. Replies are split at 3,000 characters (a Block Kit section's limit, so an ask's text always fits next to
+its buttons).
 
 ## Observability
 
