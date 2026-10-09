@@ -14,7 +14,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-KEYS = ('TYPESAFE_API_KEY', 'LOGFIRE_TOKEN')
+KEYS = ('TYPESAFE_API_KEY', 'LOGFIRE_TOKEN', 'MONTY_EXECUTION_KEY', 'COMPOSIO_API_KEY')
 TOKEN = re.compile(r'[A-Za-z0-9_.:/+=-]+')
 
 
@@ -46,7 +46,7 @@ def main() -> None:
     if not payload:
         return
     # Bootstrap is idempotent and generates VM-local secrets only on the first deployment.
-    command = 'sh ~/montybot-release/deploy/bootstrap.sh && python3 ~/montybot-release/deploy/update-secrets.py --apply /opt/montybot/.env'
+    command = 'sh ~/sammy-release/deploy/bootstrap.sh && python3 ~/sammy-release/deploy/update-secrets.py --apply /opt/sammy/.env'
     args = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20']
     if key := os.environ.get('SSH_KEY'):
         args.extend(['-i', key])

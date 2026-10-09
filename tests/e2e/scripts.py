@@ -1,20 +1,24 @@
-"""The scripted model for end-to-end tests, as in `poc/montybot_poc/remote.py`'s `scripted_shopper`.
+"""The scripted model for end-to-end tests, as in `poc/sammy_poc/remote.py`'s `scripted_shopper`.
 
 The model reads the user's message and picks a script for it, as a real model picks a plan. A script looks only at
 what its tools returned in this run, so it behaves the same whether a step ran or was replayed after a restart. The
-same messages run against a real model with MONTYBOT_TEST_MODEL.
+same messages run against a real model with SAMMY_TEST_MODEL.
 """
 
 from __future__ import annotations
 
+import io
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from PIL import Image
 from pydantic_ai.messages import (
+    BinaryContent,
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    TextContent,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -28,6 +32,8 @@ class Turn:
     prompt: str
     returns: list[ToolReturnPart]
     instructions: str = ''
+    seen: list[str] = field(default_factory=list[str])
+    """Each thing the user sent in the whole conversation, as the model got it (`seen_in`)."""
 
     @property
     def last(self) -> str:
@@ -49,7 +55,7 @@ class Turn:
 Script = Callable[[Turn], ModelResponse]
 
 
-def call(tool: str, **args: object) -> ModelResponse:
+def call(tool: str, /, **args: object) -> ModelResponse:
     return ModelResponse(parts=[ToolCallPart(tool_name=tool, args=args)])
 
 
@@ -90,7 +96,7 @@ def line_with(page: str, needle: str) -> str:
 
 
 def hello(turn: Turn) -> ModelResponse:
-    return say('Hello! I am monty-bot.')
+    return say('Hello! I am Sammy.')
 
 
 def users_time(turn: Turn) -> ModelResponse:
@@ -109,6 +115,11 @@ def two_facts_then_ask(turn: Turn) -> ModelResponse:
         return call('ask_user', question='Anything else I should remember?')
     results = [str(r.content) for r in turn.returns if r.tool_name in ('remember', 'list_schedules')]
     return say(f'{" | ".join(results)} | You said: {turn.result_of("ask_user")}')
+
+
+def own_name(turn: Turn) -> ModelResponse:
+    named = (line for line in turn.instructions.splitlines() if 'The user named you' in line)
+    return say(next(named, 'Nobody has named me yet.'))
 
 
 def favourite_colour(turn: Turn) -> ModelResponse:
@@ -242,6 +253,20 @@ def show_file(turn: Turn) -> ModelResponse:
     return say(turn.last)
 
 
+def describe_files(turn: Turn) -> ModelResponse:
+    """Says what the model was given: everything the user sent in the conversation, one line each."""
+    return say('\n'.join(turn.seen))
+
+
+def share_report(turn: Turn) -> ModelResponse:
+    """Makes a file with code, then gives it to the user."""
+    if not turn.called('run_code'):
+        return run("from pathlib import Path\nPath('/work/report.csv').write_text('item,total\\neggs,3\\n')")
+    if not turn.called('share_file'):
+        return call('share_file', path='report.csv')
+    return say(f'Here is your report. ({turn.result_of("share_file")})')
+
+
 def fail(turn: Turn) -> ModelResponse:
     raise RuntimeError('the model provider is down')
 
@@ -322,7 +347,60 @@ def my_schedules(turn: Turn) -> ModelResponse:
     return say(turn.last)
 
 
+def my_linear(turn: Turn) -> ModelResponse:
+    """ "yo what's on my linear": connect Linear if it is not, then read the issues."""
+    if not turn.called('connect_integration'):
+        return call('connect_integration', service='Linear', reason='Connect Linear so I can look up your issues.')
+    connected = turn.result_of('connect_integration')
+    if 'is connected' not in connected:
+        return say(connected)
+    if not turn.called('list_integration_tools'):
+        return call('list_integration_tools', integration='linear', search='list issues')
+    if not turn.called('call_integration_tool'):
+        return call('call_integration_tool', integration='linear', tool='LINEAR_LIST_LINEAR_ISSUES', arguments={})
+    return say(turn.last)
+
+
+def new_linear_issue(turn: Turn) -> ModelResponse:
+    """ "Create a Linear issue called X": a tool that changes something, so the user approves it first."""
+    if not turn.called('call_integration_tool'):
+        title = turn.prompt.removeprefix('Create a Linear issue called ').strip()
+        return call(
+            'call_integration_tool', integration='linear', tool='LINEAR_CREATE_LINEAR_ISSUE', arguments={'title': title}
+        )
+    return say(turn.last)
+
+
+def my_notes(turn: Turn) -> ModelResponse:
+    """ "What notes are in mcp:<server>": the user's own MCP server."""
+    key = turn.prompt.split()[-1].rstrip('?')
+    if not turn.called('list_integration_tools'):
+        return call('list_integration_tools', integration=key)
+    if not turn.called('call_integration_tool'):
+        return call('call_integration_tool', integration=key, tool='list_notes', arguments={})
+    return say(f'Your notes: {turn.last}')
+
+
+def my_gmail(turn: Turn) -> ModelResponse:
+    """ "Check my Gmail": connect Gmail, an app through Composio, and say how that went."""
+    if not turn.called('connect_integration'):
+        return call('connect_integration', service='Gmail', reason='Connect Gmail so I can check your email.')
+    return say(turn.result_of('connect_integration'))
+
+
+def acme_wiki(turn: Turn) -> ModelResponse:
+    """A service no app is offered for: the chat offers to add an MCP server for it."""
+    if not turn.called('connect_integration'):
+        return call('connect_integration', service='Acme Wiki', reason='Add your Acme Wiki so I can search it.')
+    return say(turn.result_of('connect_integration'))
+
+
 SCRIPTS: dict[str, Script] = {
+    "yo what's on my linear": my_linear,
+    'Search my Acme Wiki': acme_wiki,
+    'Check my Gmail': my_gmail,
+    'Create a Linear issue called': new_linear_issue,
+    'What notes are in': my_notes,
     'Every Monday at 9, fill my cart at': schedule(
         name='Weekly groceries',
         cron='0 9 * * 1',
@@ -365,13 +443,40 @@ SCRIPTS: dict[str, Script] = {
     'Ask me my favourite colour': favourite_colour,
     'Remember two things about me, then ask': two_facts_then_ask,
     'What time is it for me': users_time,
+    'What is your name': own_name,
     'Order eggs from': order_eggs,
     'Find the three cheapest flights to Lisbon next Friday': cheapest_flights,
     'What is on offer today at': todays_offer,
     'Download my last three invoices from': total_invoices,
     'Total my last three invoices with pandas from': total_invoices_with_pandas,
     'Show me my files and the file': show_file,
+    'Describe what I attached': describe_files,
+    'Make me a report': share_report,
 }
+
+
+def seen_in(messages: list[ModelMessage]) -> list[str]:
+    """What the user sent, as the model got it, one line each (newlines as `\\n`): `text: ...`, `note: ...` for a
+    file's note, `file text: ...` for a text file's contents, and `<media type> <width>x<height>` or `<media type> <bytes> bytes` for a file it sees."""
+    seen: list[str] = []
+    for message in messages:
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if not isinstance(part, UserPromptPart):
+                continue
+            for item in [part.content] if isinstance(part.content, str) else part.content:
+                if isinstance(item, str):
+                    seen.append(f'text: {item}')
+                elif isinstance(item, TextContent):
+                    is_note = isinstance(item.metadata, dict) and 'attachment' in item.metadata
+                    seen.append(f'note: {item.content}' if is_note else f'file text: {item.content}')
+                elif isinstance(item, BinaryContent) and item.is_image:
+                    with Image.open(io.BytesIO(item.data)) as image:
+                        seen.append(f'{item.media_type} {image.width}x{image.height}')
+                elif isinstance(item, BinaryContent):
+                    seen.append(f'{item.media_type} {len(item.data)} bytes')
+    return [line.replace('\n', '\\n') for line in seen]  # one line each, whatever a file's text holds
 
 
 def current_turn(messages: list[ModelMessage]) -> Turn:
@@ -381,11 +486,9 @@ def current_turn(messages: list[ModelMessage]) -> Turn:
         for i, m in enumerate(messages)
         if isinstance(m, ModelRequest) and any(isinstance(p, UserPromptPart) for p in m.parts)
     )
-    prompt = next(
-        str(p.content)
-        for p in messages[start].parts
-        if isinstance(p, UserPromptPart)  # pyright: ignore[reportAttributeAccessIssue]
-    )
+    content = next(p.content for p in messages[start].parts if isinstance(p, UserPromptPart))  # pyright: ignore[reportAttributeAccessIssue]
+    # A message with files is a list: the text first, if there is any.
+    prompt = content if isinstance(content, str) else next((c for c in content if isinstance(c, str)), '')
     returns = [
         part
         for message in messages[start:]
@@ -395,7 +498,7 @@ def current_turn(messages: list[ModelMessage]) -> Turn:
     ]
     latest = messages[-1]
     instructions = (latest.instructions or '') if isinstance(latest, ModelRequest) else ''
-    return Turn(prompt=prompt, returns=returns, instructions=instructions)
+    return Turn(prompt=prompt, returns=returns, instructions=instructions, seen=seen_in(messages))
 
 
 def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:

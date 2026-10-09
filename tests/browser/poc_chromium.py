@@ -1,4 +1,4 @@
-"""A throwaway Chromium `BrowserBackend`, ported from `ChromiumBrowser` in `poc/montybot_poc/remote.py`, so the browser
+"""A throwaway Chromium `BrowserBackend`, ported from `ChromiumBrowser` in `poc/sammy_poc/remote.py`, so the browser
 service can be tested against a real engine before #11 lands. Replace it with #11's backend then.
 
 Each `open` launches its own headless Chromium, so one run's browser is one process that a test can kill (`pid`).
@@ -14,7 +14,7 @@ from playwright.async_api import Browser, BrowserContext, Page, Playwright
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 
-from montybot.browser.contract import (
+from sammy.browser.contract import (
     Action,
     ActionFailed,
     Click,
@@ -34,7 +34,7 @@ from montybot.browser.contract import (
     TargetNotFound,
     Type,
 )
-from montybot.browser.state import BLANK_URL, BrowserState, Cookie
+from sammy.browser.state import BLANK_URL, BrowserState, Cookie
 
 ENGINE = 'chromium (poc)'
 WAIT_MS = 2000

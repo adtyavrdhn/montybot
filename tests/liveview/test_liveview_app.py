@@ -16,7 +16,7 @@ from liveview_harness import StubBrowserService, backends, serve_app, serve_fixt
 from playwright.async_api import async_playwright, expect
 from websockets.exceptions import InvalidStatus
 
-from montybot.browser.contract import (
+from sammy.browser.contract import (
     Action,
     Click,
     MouseDown,
@@ -28,14 +28,14 @@ from montybot.browser.contract import (
     Scroll,
     Type,
 )
-from montybot.browser.fake import FakeBrowser, FakePage
-from montybot.browser.live import LiveInput
-from montybot.browser.service import Handoff, HandoffActive
-from montybot.liveview.app import CLOSE_ENDED, CLOSE_NOT_FOUND, CLOSE_REPLACED, CLOSE_SIGNED_OUT, live_view_app
-from montybot.liveview.auth import SESSION_COOKIE, StubAuthenticator
-from montybot.liveview.client import LiveViewClient, LiveViewClosed
-from montybot.liveview.handoffs import InMemoryHandoffs
-from montybot.liveview.wire import ViewportSize
+from sammy.browser.fake import FakeBrowser, FakePage
+from sammy.browser.live import LiveInput
+from sammy.browser.service import Handoff, HandoffActive
+from sammy.liveview.app import CLOSE_ENDED, CLOSE_NOT_FOUND, CLOSE_REPLACED, CLOSE_SIGNED_OUT, live_view_app
+from sammy.liveview.auth import SESSION_COOKIE, StubAuthenticator
+from sammy.liveview.client import LiveViewClient, LiveViewClosed
+from sammy.liveview.handoffs import InMemoryHandoffs
+from sammy.liveview.wire import CloseTab, Command, NewTab, ViewportSize
 
 pytestmark = pytest.mark.anyio
 
@@ -126,7 +126,7 @@ async def test_the_page_is_only_for_the_requester() -> None:
         assert 'id="back"' in (await get(f'{setup.base}/handoff/nope', setup.alice)).text
         page = await get(path, setup.alice)
         assert page.status_code == 200
-        assert 'Give back to Monty' in page.text
+        assert 'Give back to Sammy' in page.text
         assert "script-src 'self'" in page.headers['content-security-policy']
         assert page.headers['cache-control'] == 'no-store'
         script = await get(f'{setup.base}/live.js')
@@ -182,6 +182,34 @@ async def test_the_user_sees_and_drives_while_the_agent_is_refused() -> None:
         with pytest.raises(HandoffActive):
             await setup.service.act(run_id=RUN, user_id='alice', action=Click(target=at))
         assert len(performed(setup.browser)) == len(actions)
+
+
+async def test_the_user_can_go_to_an_address_but_only_a_web_one() -> None:
+    async with live() as setup, setup.connect() as client:
+        await client.wait_until(lambda: client.hello is not None)
+        for refused in ('file:///etc/passwd', 'chrome://settings', 'javascript:alert(1)', 'https://'):
+            await client.send(Navigate(url=refused))
+        await client.wait_until(lambda: len(client.errors) == 4)
+        assert set(client.errors) == {'Only web addresses can be opened.'}
+        await client.send(Navigate(url='http://shop.test/cart'))
+        await eventually(lambda: setup.browser.actions[-1:] == [Navigate(url='http://shop.test/cart')])
+        assert await client.wait_for_url(lambda url: url == 'http://shop.test/cart') == 'http://shop.test/cart'
+
+
+async def test_a_polled_browser_has_no_buttons_and_says_so() -> None:
+    """The polled source cannot go back, reload or open tabs: the hello says so, so the app disables them, and each
+    is refused in words with the connection kept."""
+    async with live() as setup, setup.connect() as client:
+        await client.wait_until(lambda: client.hello is not None)
+        assert client.hello is not None and not client.hello.controls
+        await client.wait_until(lambda: client.active_tab is not None)
+        tab = client.active_tab
+        assert tab is not None and not tab.closable
+        for message in (Command(kind='back'), Command(kind='reload'), NewTab(), CloseTab(tab_id=tab.tab_id)):
+            await client.send(message)
+        await client.wait_until(lambda: len(client.errors) == 4)
+        assert set(client.errors) == {'This browser has no back, reload or tab buttons.'}
+        assert performed(setup.browser) == []
 
 
 async def test_an_input_the_engine_cannot_do_is_reported_and_the_connection_stays() -> None:
@@ -319,7 +347,7 @@ async def test_the_whole_picture_fits_the_screen(width: int, height: int, phone:
                     await context.add_cookies([{'name': SESSION_COOKIE, 'value': auth.sign_in('alice'), 'url': base}])
                     page = await context.new_page()
                     await page.goto(f'{base}/handoff/{handoff.handoff_id}')
-                    await page.locator('#reason', has_text='Monty needs you: Please sign in').wait_for()
+                    await page.locator('#reason', has_text='Sammy needs you: Please sign in').wait_for()
                     view = page.locator('#view')
                     # Frames are in CSS pixels: on the phone, as wide as the room the page has once it is phone-sized.
                     await expect(view).to_have_attribute('width', '1280' if not phone else re.compile(r'^3\d\d$'))

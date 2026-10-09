@@ -1,9 +1,9 @@
 #!/bin/sh
-# Prepare an Ubuntu 24.04 VM for montybot. Safe to run on every deploy: each step does nothing once done.
+# Prepare an Ubuntu 24.04 VM for Sammy. Safe to run on every deploy: each step does nothing once done.
 # Runs on the VM as a user with sudo; deploy/deploy.sh calls it.
 set -eu
 
-ROOT=/opt/montybot
+ROOT=/opt/sammy
 ENV_FILE=$ROOT/.env
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -26,6 +26,29 @@ if [ -f /etc/sysctl.d/60-montybot-userns.conf ]; then
     sudo sysctl -q kernel.apparmor_restrict_unprivileged_userns=1
 fi
 
+# Once, on a VM deployed before the rename from montybot: stop the old stack and take over its settings (secrets,
+# domain, login), Claude Code sign-in, TLS certificates and Full Monty images. Its database and files are not carried
+# over: the app starts empty. The old volumes are left in place; `docker volume ls -q -f name=montybot_` lists them.
+if [ -d /opt/montybot ] && [ ! -d "$ROOT" ]; then
+    echo "Moving /opt/montybot to $ROOT"
+    sudo docker compose -p montybot down --remove-orphans
+    for volume in claude-code caddy-data; do
+        if sudo docker volume inspect "montybot_$volume" >/dev/null 2>&1; then
+            sudo docker volume create --label com.docker.compose.project=sammy \
+                --label com.docker.compose.volume="$volume" "sammy_$volume" >/dev/null
+            sudo docker run --rm -v "montybot_$volume:/from:ro" -v "sammy_$volume:/to" caddy:2 cp -a /from/. /to/
+        fi
+    done
+    sudo docker image ls --format '{{.Repository}}:{{.Tag}}' | grep '^montybot-monty-' | while read -r image; do
+        sudo docker image tag "$image" "sammy-${image#montybot-}"
+    done
+    sudo mv /opt/montybot "$ROOT"
+    # Settings that name the old package or path, such as BROWSER_BACKEND=montybot.engines:...
+    for file in "$ENV_FILE" "$ROOT/compose.local.yaml"; do
+        [ ! -f "$file" ] || sed -i 's#/opt/montybot#/opt/sammy#g; s#montybot\.#sammy.#g' "$file"
+    done
+fi
+
 sudo mkdir -p "$ROOT"
 sudo chown "$(id -u):$(id -g)" "$ROOT"
 
@@ -46,7 +69,7 @@ DOMAIN=$DOMAIN
 POSTGRES_PASSWORD=$(openssl rand -hex 24)
 SESSION_SECRET=$(openssl rand -hex 32)
 ENCRYPTION_KEY=$(openssl rand -base64 32 | tr '+/' '-_')
-BASIC_AUTH_USER=montybot
+BASIC_AUTH_USER=sammy
 BASIC_AUTH_PASSWORD=$password
 BASIC_AUTH_HASH='$hash'
 MODEL=claude-code:claude-opus-5-5

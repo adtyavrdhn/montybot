@@ -1,4 +1,4 @@
-"""The shop (U2 sign in once, U3 act with approval, U4 the weekly cart), grown from `poc/montybot_poc/demo_site.py`.
+"""The shop (U2 sign in once, U3 act with approval, U4 the weekly cart), grown from `poc/sammy_poc/demo_site.py`.
 
 - Sign-in sets an HttpOnly `sid` cookie, so only the browser engine carries it, not page scripts.
 - The cart lives on the server, per account, as on real shops. Adding an item that is already in the cart does not

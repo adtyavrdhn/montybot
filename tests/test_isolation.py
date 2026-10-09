@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -12,10 +13,11 @@ import pytest
 from cryptography.exceptions import InvalidTag
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-from montybot import crypto, memory, schedules, signins, store
-from montybot.browser.state import BrowserState, Cookie
-from montybot.db import Pool, create_pool, migrate
-from montybot.workspaces import WorkspaceFiles, Workspaces, save_download
+from sammy import crypto, memory, schedules, signins, store
+from sammy.browser.state import BrowserState, Cookie
+from sammy.db import Pool, create_pool, migrate
+from sammy.models import AskKind, Schedule, Trigger
+from sammy.workspaces import WorkspaceFiles, Workspaces, save_download
 
 pytestmark = pytest.mark.anyio
 KEY = crypto.deployment_key(crypto.new_key())
@@ -113,7 +115,7 @@ async def test_sign_ins_are_encrypted_per_user(pool: Pool) -> None:
     assert await jar.load(user_id=a.id) == state
     assert await jar.load(user_id=b.id) is None
     async with pool.connection() as c:
-        row = await (await c.execute('SELECT state, version FROM montybot.sign_ins')).fetchone()
+        row = await (await c.execute('SELECT state, version FROM sammy.sign_ins')).fetchone()
         assert row is not None and row['version'] == 2
         sealed = bytes(row['state'])
         assert b's3cret-session' not in sealed and b'shop.test' not in sealed
@@ -127,7 +129,7 @@ async def test_sign_ins_are_encrypted_per_user(pool: Pool) -> None:
     # An older version put back in place does not load as the current one.
     async with pool.connection() as c:
         await jar.save(user_id=a.id, state=BrowserState(url='https://shop.test/'))  # version 3, after forgetting
-        await c.execute('UPDATE montybot.sign_ins SET state = %s WHERE user_id = %s', (sealed, a.id))
+        await c.execute('UPDATE sammy.sign_ins SET state = %s WHERE user_id = %s', (sealed, a.id))
     with pytest.raises(signins.UnreadableSignIns):
         await jar.load(user_id=a.id)
 
@@ -145,20 +147,37 @@ async def test_one_run_at_a_time_holds_a_users_sign_ins(pool: Pool) -> None:
     assert await lease.acquire(user_id=a.id, run_id='run-1')  # again, as on a retry
     assert not await lease.acquire(user_id=a.id, run_id='run-2')
     await lease.release(user_id=a.id, run_id='run-2')  # not the holder: no effect
-    assert await lease.holder(user_id=a.id) == 'run-1'
+    assert await lease.holds(user_id=a.id, run_id='run-1')
     await lease.release(user_id=a.id, run_id='run-1')
     assert await lease.acquire(user_id=a.id, run_id='run-2')
 
     # A lease that outlived its run expires, so the user is not locked out for good.
     short = signins.PostgresLease(pool, seconds=-1)
     assert await short.acquire(user_id=a.id, run_id='run-2')
-    assert await lease.holder(user_id=a.id) is None
+    assert not await lease.holds(user_id=a.id, run_id='run-2')
     assert await lease.acquire(user_id=a.id, run_id='run-3')
 
     # Renewing never takes a free lease: a stopped run must not lock the user's browser again.
     await lease.release(user_id=a.id, run_id='run-3')
     await lease.renew(user_id=a.id, run_id='run-3')
-    assert await lease.holder(user_id=a.id) is None
+    assert not await lease.holds(user_id=a.id, run_id='run-3')
+
+
+async def test_runs_sharing_one_browser_share_the_lease_on_one_server_only(pool: Pool) -> None:
+    async with pool.connection() as c:
+        a = await store.create_user(c, 'a@example.test', 'x')
+    assert a is not None
+    here, there = signins.PostgresLease(pool, owner='vm-1'), signins.PostgresLease(pool, owner='vm-2')
+    assert await here.acquire(user_id=a.id, run_id='run-1', shared=True)
+    assert await here.acquire(user_id=a.id, run_id='run-2', shared=True)  # a tab of the same browser
+    assert not await here.acquire(user_id=a.id, run_id='run-3')  # an engine without tabs: a browser of its own
+    assert not await there.acquire(user_id=a.id, run_id='run-4', shared=True)  # another server: another browser
+    forget = signins.PostgresLease(pool, seconds=60)  # forgetting a site edits the jar alone
+    assert not await forget.acquire(user_id=a.id, run_id='forget:1')
+    await here.release(user_id=a.id, run_id='run-1')
+    await here.release(user_id=a.id, run_id='run-2')
+    assert await forget.acquire(user_id=a.id, run_id='forget:1')
+    assert not await here.acquire(user_id=a.id, run_id='run-5', shared=True)  # nor shares it
 
 
 async def test_user_b_cannot_reach_user_a_files(tmp_path: Path) -> None:
@@ -191,7 +210,7 @@ async def test_thread_history_and_status_share_a_snapshot(pool: Pool, monkeypatc
     from pydantic_ai.messages import ModelResponse, TextPart
     from starlette.requests import Request
 
-    from montybot import api
+    from sammy import api
 
     async with pool.connection() as connection:
         user = await store.create_user(connection, 'snapshot@example.test', 'x')
@@ -245,8 +264,8 @@ async def test_saved_browser_data_includes_storage_and_forgets_subdomains(pool: 
 
     from starlette.requests import Request
 
-    from montybot import api
-    from montybot.browser.state import BLANK_URL, BrowserState, Cookie
+    from sammy import api
+    from sammy.browser.state import BLANK_URL, BrowserState, Cookie
 
     async with pool.connection() as connection:
         user = await store.create_user(connection, 'data@example.test', 'x')
@@ -273,7 +292,15 @@ async def test_saved_browser_data_includes_storage_and_forgets_subdomains(pool: 
         async def save(self, *, user_id: str, state: BrowserState) -> None:
             assert user_id == user.id
 
-    resources = SimpleNamespace(pool=pool, jar=Jar())
+    class Browser:
+        def __init__(self) -> None:
+            self.discarded: list[str] = []
+
+        async def discard_parked(self, user_id: str) -> None:
+            self.discarded.append(user_id)
+
+    browser = Browser()
+    resources = SimpleNamespace(pool=pool, jar=Jar(), browser=browser)
 
     def request(method: str, site: str = '') -> Request:
         return Request(
@@ -296,12 +323,13 @@ async def test_saved_browser_data_includes_storage_and_forgets_subdomains(pool: 
     assert state.session_storage == {} and state.url == BLANK_URL
     assert (await api.forget_sign_in(request('DELETE', 'storage-only.test'))).status_code == 200
     assert state.local_storage == {}
+    assert browser.discarded == [user.id, user.id]  # the kept browser goes each time, with the cookies it still has
 
 
 async def test_an_answered_run_shows_as_working_until_it_carries_on(pool: Pool) -> None:
     """Between the user's answer and the run waking up, the run is still `waiting` in the database, but it waits for
     nobody: the user sees it working, not an empty "waiting"."""
-    from montybot import api
+    from sammy import api
 
     async with pool.connection() as connection:
         user = await store.create_user(connection, 'answered@example.test', 'x')
@@ -329,6 +357,7 @@ async def test_an_answered_run_shows_as_working_until_it_carries_on(pool: Pool) 
         await store.answer_ask(connection, user.id, ask_id, {'text': 'that one'})
         answered = await api.run_view(connection, user, await store.load_run(connection, run_id))
         assert answered['status'] == 'running' and answered['ask'] is None
+        assert answered['prompt'] == 'hello'  # what the apps send again to try a task again
         assert await store.active_runs(connection, user.id) == {thread.id: 'running'}  # the chat list agrees
 
 
@@ -346,3 +375,107 @@ async def test_a_run_for_a_deleted_chat_says_so(pool: Pool) -> None:
                 prompt='hi',
                 trigger='schedule',
             )
+
+
+async def test_chats_are_listed_by_when_they_were_last_active(pool: Pool) -> None:
+    """The apps group chats by `updated_at` and show them in the list's order: the two must agree, including for a
+    schedule's chat that has no run yet."""
+    async with pool.connection() as connection:
+        user = await store.create_user(connection, 'order@example.test', 'x')
+        assert user is not None
+        older = await store.create_thread(connection, user.id, 'older')
+        await store.create_run(
+            connection, run_id=str(uuid.uuid4()), user_id=user.id, thread_id=older.id, prompt='hi', trigger='message'
+        )
+        await connection.execute(
+            "UPDATE sammy.runs SET created_at = now() - interval '2 days' WHERE thread_id = %s", (older.id,)
+        )
+        scheduled = await store.create_thread(connection, user.id, 'a schedule, not run yet')
+        listed = [thread.id for thread in await store.list_threads(connection, user.id)]
+        last_active = await store.last_active(connection, user.id)
+    assert listed == [scheduled.id, older.id]
+    assert last_active[scheduled.id] > last_active[older.id]
+
+
+async def test_the_chat_list_says_what_a_waiting_chat_waits_for(pool: Pool) -> None:
+    """`waiting_for` names the latest open ask of a waiting run, for its user only."""
+    async with pool.connection() as connection:
+        user = await store.create_user(connection, 'waits@example.test', 'x')
+        other = await store.create_user(connection, 'other-waits@example.test', 'x')
+        assert user is not None and other is not None
+        thread = await store.create_thread(connection, user.id, 'buy eggs')
+        run_id = str(uuid.uuid4())
+        await store.create_run(
+            connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt='buy eggs', trigger='message'
+        )
+        asks: list[tuple[int, AskKind]] = [(1, 'question'), (2, 'approval')]
+        for occurrence, kind in asks:
+            await store.create_ask(
+                connection,
+                ask_id=str(uuid.uuid4()),
+                run_id=run_id,
+                user_id=user.id,
+                occurrence=occurrence,
+                kind=kind,
+                prompt='?',
+                details={},
+            )
+        await store.set_run_status(connection, run_id, 'waiting')
+        assert await store.waiting_for(connection, user.id) == {thread.id: 'approval'}
+        assert await store.waiting_for(connection, other.id) == {}
+
+
+async def test_a_schedule_says_when_it_runs_next_and_how_it_last_went(pool: Pool) -> None:
+    """`last_scheduled_runs` has each thread's latest scheduled run, for its user only; `next_run` is in its zone."""
+    async with pool.connection() as connection:
+        user = await store.create_user(connection, 'sched-times@example.test', 'x')
+        other = await store.create_user(connection, 'other-sched-times@example.test', 'x')
+        assert user is not None and other is not None
+        thread = await store.create_thread(connection, user.id, 'slots')
+        runs: list[tuple[str, Trigger]] = [('first', 'schedule'), ('second', 'schedule'), ('by hand', 'message')]
+        for hours_ago, (prompt, trigger) in zip([3, 2, 1], runs, strict=True):
+            run_id = str(uuid.uuid4())
+            await store.create_run(
+                connection, run_id=run_id, user_id=user.id, thread_id=thread.id, prompt=prompt, trigger=trigger
+            )
+            await store.finish_run(connection, run_id, 'done', output='ok')
+            await connection.execute(  # hours apart, as scheduled runs are
+                'UPDATE sammy.runs SET created_at = now() - make_interval(hours => %s) WHERE id = %s',
+                (hours_ago, run_id),
+            )
+        last = await store.last_scheduled_runs(connection, user.id)
+        assert last[thread.id].prompt == 'second'
+        assert await store.last_scheduled_runs(connection, other.id) == {}
+    weekly = Schedule(
+        id='s',
+        user_id=user.id,
+        thread_id=thread.id,
+        name='n',
+        cron='0 9 * * 1',
+        timezone='America/Toronto',
+        when='Mondays at 09:00',
+        prompt='p',
+        watch=False,
+    )
+    monday = schedules.next_run(weekly, datetime(2026, 10, 7, 23, 30, tzinfo=UTC))
+    assert monday.isoformat() == '2026-10-12T09:00:00-04:00'
+
+
+async def test_chats_are_found_by_what_was_said_in_them(pool: Pool) -> None:
+    """Search covers titles, tasks and replies, any case, for the user's own chats only; `%` is a character."""
+    async with pool.connection() as connection:
+        user = await store.create_user(connection, 'search@example.test', 'x')
+        other = await store.create_user(connection, 'other-search@example.test', 'x')
+        assert user is not None and other is not None
+        flights = await store.create_thread(connection, user.id, 'Trip')
+        run_id = str(uuid.uuid4())
+        await store.create_run(
+            connection, run_id=run_id, user_id=user.id, thread_id=flights.id, prompt='Find flights', trigger='message'
+        )
+        await store.finish_run(connection, run_id, 'done', output='The cheapest is Air Transat at CA$375, 100% sure.')
+        theirs = await store.create_thread(connection, other.id, 'Air Transat for them')
+        assert await store.search_threads(connection, user.id, 'air transat') == [flights.id]
+        assert await store.search_threads(connection, user.id, 'TRIP') == [flights.id]
+        assert await store.search_threads(connection, user.id, '100%') == [flights.id]
+        assert await store.search_threads(connection, user.id, '9%') == []  # not "9, then anything"
+        assert theirs.id in await store.search_threads(connection, other.id, 'transat')

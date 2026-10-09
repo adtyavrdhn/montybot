@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from montybot.browsing import refused_url
+from sammy.browsing import refused_url
 
 
 @pytest.mark.parametrize(

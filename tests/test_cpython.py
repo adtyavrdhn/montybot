@@ -25,9 +25,9 @@ from pydantic_ai.workspaces import WorkspaceBackend
 from pydantic_ai.workspaces.conformance import WorkspaceBackendSuite
 from pydantic_ai_harness.bubblewrap_sandbox import BubblewrapWorkspace
 
-from montybot.cpython import can_jail, jail_of, run_jailed
-from montybot.settings import Settings
-from montybot.workspaces import Workspaces, save_download
+from sammy.cpython import can_jail, jail_of, run_jailed
+from sammy.settings import Settings
+from sammy.workspaces import Workspaces, save_download
 
 pytestmark = pytest.mark.anyio
 linux_only = pytest.mark.skipif(
@@ -43,7 +43,7 @@ def anyio_backend() -> str:
 @pytest.fixture
 def workspaces_dir() -> Iterator[Path]:
     """Outside `/tmp`, as on the server, because the jail has its own `/tmp` and would hide the folder for free."""
-    folder = Path.home() / '.cache' / 'montybot-tests' / uuid.uuid4().hex
+    folder = Path.home() / '.cache' / 'sammy-tests' / uuid.uuid4().hex
     folder.mkdir(parents=True)
     yield folder
     shutil.rmtree(folder)
@@ -98,10 +98,10 @@ attempt('every user', lambda: os.listdir(ROOT))
 attempt('app folder', lambda: os.listdir(APP))
 attempt('app environment', lambda: open(f'/proc/{APP_PID}/environ', 'rb').read())
 attempt('environment', lambda: [k for k in os.environ if k not in ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'HOME', 'PWD', 'OPENBLAS_NUM_THREADS', 'SHLVL', '_')])
-attempt('own environ', lambda: b'montybot-secret' in open('/proc/self/environ', 'rb').read())
+attempt('own environ', lambda: b'sammy-secret' in open('/proc/self/environ', 'rb').read())
 attempt('processes', lambda: len([p for p in os.listdir('/proc') if p.isdigit()]) < 5)
 attempt('network', lambda: socket.create_connection(('127.0.0.1', PORT), timeout=2))
-attempt('outside write', lambda: open('/usr/montybot-was-here', 'w'))
+attempt('outside write', lambda: open('/usr/sammy-was-here', 'w'))
 print(json.dumps(seen))
 """
 
@@ -110,7 +110,7 @@ print(json.dumps(seen))
 async def test_the_jail_sees_only_the_users_files(
     resources: Any, listener: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv('MONTYBOT_PROBE_SECRET', 'montybot-secret')  # as the app's settings would be
+    monkeypatch.setenv('SAMMY_PROBE_SECRET', 'sammy-secret')  # as the app's settings would be
     a, b = str(uuid.uuid4()), str(uuid.uuid4())
     await save_download(resources.workspaces.files(a), 'a.csv', b'only for A')
     other = resources.workspaces.directory(a) / 'downloads' / 'a.csv'
@@ -223,7 +223,7 @@ async def test_what_the_jail_leaves_cannot_lead_the_app_out(resources: Any) -> N
 
 
 async def test_code_limit_counts_utf8_bytes(resources: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr('montybot.cpython.can_jail', lambda: True)
+    monkeypatch.setattr('sammy.cpython.can_jail', lambda: True)
     # Below the character limit, but above Linux's per-argument byte limit.
     result = await run_jailed(resources, str(uuid.uuid4()), '#' + '😀' * 40_000)
     assert result == 'Error: the code is over 100000 UTF-8 bytes; write it in smaller steps.'

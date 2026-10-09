@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from helpers import eventually
 from sites.shop import Shop
 
-from montybot.notifications import new_vapid_keys
+from sammy.notifications import new_vapid_keys
 
 VAPID_PRIVATE, VAPID_PUBLIC = new_vapid_keys()
 
@@ -150,7 +150,7 @@ def test_the_user_hears_that_the_bot_needs_them(
     assert client.http.request('DELETE', subscriptions, json={'endpoint': firefox['endpoint']}).status_code == 404
     with psycopg.connect(database_url) as connection:
         connection.execute(
-            'UPDATE montybot.push_subscriptions SET endpoint = %s',
+            'UPDATE sammy.push_subscriptions SET endpoint = %s',
             (f'http://127.0.0.1:{push_service.server_address[1]}/push',),
         )
 

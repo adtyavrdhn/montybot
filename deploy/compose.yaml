@@ -1,28 +1,28 @@
 # The whole product on one server: Postgres with a nightly backup, the app with its jailed browsers, and Caddy for
-# HTTPS. deploy/deploy.sh runs it on the VM with the settings in /opt/montybot/.env (made by deploy/bootstrap.sh).
+# HTTPS. deploy/deploy.sh runs it on the VM with the settings in /opt/sammy/.env (made by deploy/bootstrap.sh).
 # Networks: Caddy and the app share `edge`; the app, Postgres and the backup share `db`. The browser-egress
 # sidecar is only on its own internet-facing bridge, with no db network or app credentials. The public Caddy URL
 # remains reachable as it is from any internet client, under basic auth. Browsers in bwrap use a read-only mounted
 # Unix socket directory to reach the proxy.
-name: montybot
+name: sammy
 
 services:
   postgres:
     image: postgres:17
     restart: unless-stopped
     environment:
-      POSTGRES_USER: montybot
+      POSTGRES_USER: sammy
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
-      POSTGRES_DB: montybot
+      POSTGRES_DB: sammy
     volumes:
       - postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U montybot']
+      test: ['CMD-SHELL', 'pg_isready -U sammy']
       interval: 2s
       retries: 30
     networks: [db]
 
-  # pg_dump every night at BACKUP_AT (UTC) into /opt/montybot/backups, keeping BACKUP_KEEP_DAYS days of dumps.
+  # pg_dump every night at BACKUP_AT (UTC) into /opt/sammy/backups, keeping BACKUP_KEEP_DAYS days of dumps.
   # One now: `docker compose exec backup backup now`. Restore: deploy/backup.sh says how.
   backup:
     image: postgres:17
@@ -32,15 +32,15 @@ services:
         condition: service_healthy
     environment:
       PGHOST: postgres
-      PGUSER: montybot
+      PGUSER: sammy
       PGPASSWORD: ${POSTGRES_PASSWORD:?}
-      PGDATABASE: montybot
+      PGDATABASE: sammy
       BACKUP_AT: ${BACKUP_AT:-03:00}
       BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
     entrypoint: ['/usr/local/bin/backup']
     volumes:
       - ./backup.sh:/usr/local/bin/backup:ro
-      - ${BACKUP_DIR:-/opt/montybot/backups}:/backups
+      - ${BACKUP_DIR:-/opt/sammy/backups}:/backups
     networks: [db]
 
   # The only process resolving browser destinations. It has internet access, but no route to the db bridge and no
@@ -50,8 +50,8 @@ services:
       context: ..
       args:
         COMMIT: ${COMMIT:-}
-    image: montybot-app
-    command: ['python', '-m', 'montybot.browser.egress_server', '/run/browser-egress/proxy.sock']
+    image: sammy-app
+    command: ['python', '-m', 'sammy.browser.egress_server', '/run/browser-egress/proxy.sock']
     restart: unless-stopped
     read_only: true
     tmpfs: [/tmp]
@@ -71,7 +71,7 @@ services:
       context: ..
       args:
         COMMIT: ${COMMIT:-}
-    image: montybot-app
+    image: sammy-app
     restart: unless-stopped
     depends_on:
       postgres:
@@ -79,7 +79,7 @@ services:
       browser-egress:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://montybot:${POSTGRES_PASSWORD:?}@postgres:5432/montybot
+      DATABASE_URL: postgresql://sammy:${POSTGRES_PASSWORD:?}@postgres:5432/sammy
       SESSION_SECRET: ${SESSION_SECRET:?}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?}
       HOST: 0.0.0.0
@@ -88,10 +88,10 @@ services:
       SECURE_COOKIES: 'true'
       EXECUTOR_ID: vm-1
       MODEL: ${MODEL:-claude-code:claude-opus-5-5}
-      # Chrome over our own CDP pipe (montybot/browser/cdp.md). Roll back to Playwright with
-      # BROWSER_BACKEND=montybot.engines:chromium_server in /opt/montybot/.env.
-      BROWSER_BACKEND: ${BROWSER_BACKEND:-montybot.engines:chromium_cdp_server}
-      BROWSER_MAX_OPEN: ${BROWSER_MAX_OPEN:-2}
+      # Chrome over our own CDP pipe (sammy/browser/cdp.md). Roll back to Playwright with
+      # BROWSER_BACKEND=sammy.engines:chromium_server in /opt/sammy/.env.
+      BROWSER_BACKEND: ${BROWSER_BACKEND:-sammy.engines:chromium_cdp_server}
+      BROWSER_MAX_OPEN: ${BROWSER_MAX_OPEN:-8}
       BROWSER_EGRESS_SOCKET: /run/browser-egress/proxy.sock
       CLAUDE_CODE_CREDENTIALS: file
       CLAUDE_CODE_AUTH_FILE: /data/claude-code/auth.json
@@ -103,6 +103,8 @@ services:
       LOGFIRE_INCLUDE_CONTENT: ${LOGFIRE_INCLUDE_CONTENT:-true}
       ENVIRONMENT: ${ENVIRONMENT:-production}
       MONTY_URL: ${MONTY_URL:-}
+      MONTY_EXECUTION_KEY: ${MONTY_EXECUTION_KEY:-}
+      COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
     volumes:
       - claude-code:/data/claude-code
       - workspaces:/data/workspaces
@@ -131,7 +133,7 @@ services:
   # Installed manually by build-monty.sh; never fetched from a registry or built by app CD.
   monty-server:
     profiles: [full-monty]
-    image: montybot-monty-server:${MONTY_PRIVATE_COMMIT:-not-installed}
+    image: sammy-monty-server:${MONTY_PRIVATE_COMMIT:-not-installed}
     pull_policy: never
     restart: unless-stopped
     # Both services default to a 30s drain window; allow it to finish before SIGKILL.
@@ -148,7 +150,7 @@ services:
 
   monty-worker:
     profiles: [full-monty]
-    image: montybot-monty-worker:${MONTY_PRIVATE_COMMIT:-not-installed}
+    image: sammy-monty-worker:${MONTY_PRIVATE_COMMIT:-not-installed}
     pull_policy: never
     restart: unless-stopped
     # Both services default to a 30s drain window; allow it to finish before SIGKILL.

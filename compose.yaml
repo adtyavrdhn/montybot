@@ -1,25 +1,28 @@
-# Local development: Postgres, and Full Monty (monty-server relaying to monty-worker). `docker compose up -d`, then
-# `uv run montybot serve` with the settings in `.env` (copy `.env.example`). #7 grows this into the whole product on
-# one server.
+# Local development: Postgres. `docker compose up -d`, then `uv run sammy serve` with the settings in `.env` (copy
+# `.env.example`). #7 grows this into the whole product on one server.
 #
-# Monty's images build from a checkout of monty-private, `../monty-private` unless MONTY_PRIVATE_DIR says otherwise.
+# The agent's code runs on the hosted Monty sandboxes (MONTY_URL and MONTY_EXECUTION_KEY in `.env`). Our own Full
+# Monty (monty-server relaying to monty-worker) is kept behind the `full-monty` profile and no longer starts by
+# default: `docker compose --profile full-monty up -d` and MONTY_URL=ws://127.0.0.1:8100 to use it again. Its images
+# build from a checkout of monty-private, `../monty-private` unless MONTY_PRIVATE_DIR says otherwise.
 services:
   postgres:
     image: postgres:17
     environment:
-      POSTGRES_USER: montybot
-      POSTGRES_PASSWORD: montybot
-      POSTGRES_DB: montybot
+      POSTGRES_USER: sammy
+      POSTGRES_PASSWORD: sammy
+      POSTGRES_DB: sammy
     ports:
       - '127.0.0.1:5432:5432'
     volumes:
       - postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U montybot']
+      test: ['CMD-SHELL', 'pg_isready -U sammy']
       interval: 2s
       retries: 30
 
   monty-server:
+    profiles: [full-monty]
     build:
       context: ${MONTY_PRIVATE_DIR:-../monty-private}
       dockerfile: crates/monty-server/Dockerfile
@@ -36,6 +39,7 @@ services:
       - monty-worker
 
   monty-worker:
+    profiles: [full-monty]
     build:
       context: ${MONTY_PRIVATE_DIR:-../monty-private}
       dockerfile: crates/monty-worker/Dockerfile

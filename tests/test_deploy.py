@@ -1,5 +1,5 @@
 """The deployed stack (deploy/compose.yaml) on this machine's Docker, end to end. Skipped unless
-`MONTYBOT_TEST_DEPLOY=1`: it builds the images and needs the host set up as deploy/README.md says (on Ubuntu 24.04,
+`SAMMY_TEST_DEPLOY=1`: it builds the images and needs the host set up as deploy/README.md says (on Ubuntu 24.04,
 the bwrap AppArmor profile) and the internet (example.com).
 
 ```
@@ -7,7 +7,7 @@ pytest --> https://localhost:8443 (Caddy, its own CA) --> app (scripted model, C
        --> docker compose exec / restart                                                        --> backup
 ```
 
-One stack for the module, under the compose project `montybot-smoke`, removed afterwards with its volumes.
+One stack for the module, under the compose project `sammy-smoke`, removed afterwards with its volumes.
 """
 
 from __future__ import annotations
@@ -26,11 +26,11 @@ from helpers import eventually
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / 'deploy'
-PROJECT = 'montybot-smoke'
+PROJECT = 'sammy-smoke'
 
 pytestmark = [
     pytest.mark.deploy,
-    pytest.mark.skipif(os.environ.get('MONTYBOT_TEST_DEPLOY') != '1', reason='set MONTYBOT_TEST_DEPLOY=1'),
+    pytest.mark.skipif(os.environ.get('SAMMY_TEST_DEPLOY') != '1', reason='set SAMMY_TEST_DEPLOY=1'),
 ]
 
 
@@ -62,7 +62,7 @@ class Stack:
 
 @pytest.fixture(scope='module')
 def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
-    port = os.environ.get('MONTYBOT_TEST_DEPLOY_PORT', '8443')
+    port = os.environ.get('SAMMY_TEST_DEPLOY_PORT', '8443')
     password = secrets.token_urlsafe(16)
     hashed = subprocess.run(
         ['docker', 'run', '--rm', 'caddy:2', 'caddy', 'hash-password', '--plaintext', password],
@@ -93,7 +93,7 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
         stack.compose('up', '-d', '--build', '--wait', '--wait-timeout', '300')
         yield stack
     finally:
-        if os.environ.get('MONTYBOT_TEST_DEPLOY_KEEP') != '1':
+        if os.environ.get('SAMMY_TEST_DEPLOY_KEEP') != '1':
             stack.compose('down', '--volumes', '--remove-orphans')
 
 
@@ -129,6 +129,14 @@ def reply(http: httpx.Client, thread_id: str) -> str:
 
 def test_the_web_app_is_served_over_https_behind_a_login(stack: Stack) -> None:
     assert httpx.get(stack.url, verify=False).status_code == 401
+    # An integration's sign-in comes back to Sammy in the user's own browser, without this login: those pages (which
+    # act only on a state Sammy made) and their stylesheet are open, and nothing else is.
+    returned = httpx.get(f'{stack.url}/integrations/composio/callback?state=made-up', verify=False)
+    assert returned.status_code == 400 and 'Not connected' in returned.text
+    assert httpx.get(f'{stack.url}/integrations/mcp/callback?state=made-up&code=x', verify=False).status_code == 400
+    assert httpx.get(f'{stack.url}/static/app.css', verify=False).status_code == 200
+    for closed in ('/static/app.js', '/api/integrations', '/integrations/composio/callbackx', '/integrations/'):
+        assert httpx.get(f'{stack.url}{closed}', verify=False).status_code == 401, closed
     with stack.client() as http:
         page = http.get('/')
         assert page.status_code == 200 and '<html' in page.text.lower()
@@ -140,8 +148,8 @@ def test_the_web_app_is_served_over_https_behind_a_login(stack: Stack) -> None:
 ENGINES = ('chromium_cdp_server', 'chromium_server')
 PROBE = """
 import asyncio
-from montybot import engines
-from montybot.browser.contract import ActionFailed, Navigate
+from sammy import engines
+from sammy.browser.contract import ActionFailed, Navigate
 
 async def main(name):
     browser = getattr(engines, name)()
@@ -211,12 +219,10 @@ def test_a_backup_restores_into_a_new_database(stack: Stack) -> None:
         sign_up(http)
     written = stack.compose('exec', '-T', 'backup', 'backup', 'now')
     dump = written.split('wrote ', 1)[1].split(' ', 1)[0]
-    stack.compose('exec', '-T', 'backup', 'dropdb', '--if-exists', 'montybot_restored')
-    stack.compose('exec', '-T', 'backup', 'createdb', 'montybot_restored')
-    stack.compose(
-        'exec', '-T', 'backup', 'pg_restore', '--no-owner', '--exit-on-error', '-d', 'montybot_restored', dump
-    )
-    count = 'SELECT count(*) FROM montybot.users'
+    stack.compose('exec', '-T', 'backup', 'dropdb', '--if-exists', 'sammy_restored')
+    stack.compose('exec', '-T', 'backup', 'createdb', 'sammy_restored')
+    stack.compose('exec', '-T', 'backup', 'pg_restore', '--no-owner', '--exit-on-error', '-d', 'sammy_restored', dump)
+    count = 'SELECT count(*) FROM sammy.users'
     live = stack.compose('exec', '-T', 'backup', 'psql', '-tAc', count)
-    restored = stack.compose('exec', '-T', 'backup', 'psql', '-d', 'montybot_restored', '-tAc', count)
+    restored = stack.compose('exec', '-T', 'backup', 'psql', '-d', 'sammy_restored', '-tAc', count)
     assert int(restored) == int(live) >= 1

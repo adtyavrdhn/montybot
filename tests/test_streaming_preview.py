@@ -33,8 +33,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import FunctionModel
 
-from montybot import agent as agent_module
-from montybot import streaming
+from sammy import agent as agent_module
+from sammy import streaming
 
 pytestmark = pytest.mark.anyio
 
@@ -63,12 +63,16 @@ async def events(*items: AgentStreamEvent) -> AsyncIterator[AgentStreamEvent]:
 
 @pytest.fixture
 def deps(run_id: str, monkeypatch: pytest.MonkeyPatch) -> Any:
-    # Recall is an instruction provider with a database dependency, not part of streaming.
-    async def no_memories(ctx: Any) -> str:
+    # Recall and the connected integrations are instruction providers with a database dependency, not part of
+    # streaming.
+    async def nothing(ctx: Any) -> str:
         return ''
 
-    monkeypatch.setattr(agent_module, 'recall', no_memories)
-    return SimpleNamespace(run_id=run_id, run=SimpleNamespace(id=run_id, prompt='hello'), schedule=None, local_time='')
+    monkeypatch.setattr(agent_module, 'recall', nothing)
+    monkeypatch.setattr(agent_module, 'connected_integrations', nothing)
+    return SimpleNamespace(
+        run_id=run_id, run=SimpleNamespace(id=run_id, prompt='hello'), schedule=None, local_time='', squirrel_name=''
+    )
 
 
 async def test_handler_publishes_text_before_event_stream_finishes(run_id: str) -> None:
@@ -272,7 +276,7 @@ async def test_final_write_skips_already_finished_run(monkeypatch: pytest.Monkey
 
     from pydantic_ai.messages import ModelMessagesTypeAdapter
 
-    from montybot import store, workflows
+    from sammy import store, workflows
 
     @asynccontextmanager
     async def transaction() -> AsyncIterator[None]:

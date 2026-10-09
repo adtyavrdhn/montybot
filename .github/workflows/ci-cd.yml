@@ -28,8 +28,8 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked
-      - run: uv run ruff check montybot tests
-      - run: uv run ruff format --check montybot tests
+      - run: uv run ruff check sammy tests
+      - run: uv run ruff format --check sammy tests
       - run: uv run pyright
       - name: Validate production Compose configuration
         run: DOMAIN=localhost POSTGRES_PASSWORD=test SESSION_SECRET=test ENCRYPTION_KEY=test BASIC_AUTH_USER=test BASIC_AUTH_HASH=test docker compose -f deploy/compose.yaml config --quiet
@@ -68,7 +68,7 @@ jobs:
         ports:
           - 5432:5432
     env:
-      MONTYBOT_TEST_POSTGRES: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      SAMMY_TEST_POSTGRES: postgresql://postgres:postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v4
         with:
@@ -115,7 +115,7 @@ jobs:
             https://github.com/servo/servo/releases/download/v0.7.0/servo-x86_64-linux-gnu.tar.gz
           echo "$SERVO_SHA256  $RUNNER_TEMP/servo.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/servo.tar.gz" -C "$RUNNER_TEMP"
-          echo "MONTYBOT_SERVO_BINARY=$RUNNER_TEMP/servo/servoshell" >> "$GITHUB_ENV"
+          echo "SAMMY_SERVO_BINARY=$RUNNER_TEMP/servo/servoshell" >> "$GITHUB_ENV"
       - run: uv sync --locked
       - run: uv run pytest -q -p no:cacheprovider -rs tests/browser/test_servo.py tests/browser/test_egress.py
 
@@ -145,7 +145,7 @@ jobs:
             https://github.com/lightpanda-io/browser/releases/download/1.0.0/lightpanda-x86_64-linux
           echo "$LIGHTPANDA_SHA256  $RUNNER_TEMP/lightpanda/lightpanda" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/lightpanda/lightpanda"
-          echo "MONTYBOT_LIGHTPANDA_BINARY=$RUNNER_TEMP/lightpanda/lightpanda" >> "$GITHUB_ENV"
+          echo "SAMMY_LIGHTPANDA_BINARY=$RUNNER_TEMP/lightpanda/lightpanda" >> "$GITHUB_ENV"
       - run: uv sync --locked
       - run: uv run pytest -q -p no:cacheprovider -rs tests/browser/test_lightpanda.py tests/browser/test_egress.py
 
@@ -165,7 +165,7 @@ jobs:
         ports:
           - 5432:5432
     env:
-      MONTYBOT_TEST_POSTGRES: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      SAMMY_TEST_POSTGRES: postgresql://postgres:postgres@127.0.0.1:5432/postgres
       CHROME_VERSION: 153.0.8010.12
       CHROME_SHA256: 8aac35011c18f6e2d10696154af89a5728ac2ddd6dc6fad24ffdf243c3fcfd5a
     steps:
@@ -187,7 +187,7 @@ jobs:
             "https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION/linux64/chrome-linux64.zip"
           echo "$CHROME_SHA256  $RUNNER_TEMP/chrome.zip" | sha256sum -c -
           unzip -q "$RUNNER_TEMP/chrome.zip" -d "$RUNNER_TEMP"
-          echo "MONTYBOT_CHROME_BINARY=$RUNNER_TEMP/chrome-linux64/chrome" >> "$GITHUB_ENV"
+          echo "SAMMY_CHROME_BINARY=$RUNNER_TEMP/chrome-linux64/chrome" >> "$GITHUB_ENV"
       # Not the engine: the end-to-end tests drive the web app as its user would, in Playwright's headless shell.
       - run: uv run playwright install --with-deps --only-shell chromium
       - run: uv run pytest -q -p no:cacheprovider -rs tests/browser/test_cdp.py tests/browser/test_egress.py
@@ -211,7 +211,7 @@ jobs:
         ports:
           - 5432:5432
     env:
-      MONTYBOT_TEST_POSTGRES: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      SAMMY_TEST_POSTGRES: postgresql://postgres:postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v4
         with:
@@ -232,7 +232,7 @@ jobs:
       # end-to-end tests drive the web app as its user would, in it.
       - run: uv run playwright install --with-deps --only-shell chromium
       - name: CloakBrowser, free build, verified
-        run: echo "MONTYBOT_CLOAK_BINARY=$(sh tests/linux/fetch_cloak.sh "$RUNNER_TEMP/cloak")" >> "$GITHUB_ENV"
+        run: echo "SAMMY_CLOAK_BINARY=$(sh tests/linux/fetch_cloak.sh "$RUNNER_TEMP/cloak")" >> "$GITHUB_ENV"
       - run: uv run pytest -q -p no:cacheprovider -rs tests/browser/test_cloak.py
       - run: uv run pytest -q -p no:cacheprovider -rs tests/liveview/test_liveview_engines.py -k cloak
       - run: uv run pytest -q -p no:cacheprovider -n 4 --durations=10 tests/e2e --browser=cloak
@@ -264,8 +264,8 @@ jobs:
         run: |
           docker compose -f deploy/compose.yaml -f deploy/compose.smoke.yaml exec -T app python - <<'PY'
           import asyncio
-          from montybot.browser.contract import ActionFailed, Navigate
-          from montybot.engines import chromium_cdp_server, chromium_server
+          from sammy.browser.contract import ActionFailed, Navigate
+          from sammy.engines import chromium_cdp_server, chromium_server
 
           # The default (CDP) and the Playwright engine kept to roll back to.
           async def check(make):
@@ -316,4 +316,6 @@ jobs:
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           LOGFIRE_TOKEN: ${{ secrets.LOGFIRE_TOKEN }}
+          MONTY_EXECUTION_KEY: ${{ secrets.MONTY_EXECUTION_KEY }}
+          COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
         run: SSH_KEY="$HOME/.ssh/vm" sh deploy/deploy.sh "${{ vars.VM_USER }}@${{ vars.VM_HOST }}"

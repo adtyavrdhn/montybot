@@ -1,0 +1,233 @@
+"""The way out of a jailed browser's network namespace: a proxy on a Unix socket, shared or one per browser.
+
+On the server, bwrap gives Chrome its own network namespace with only a loopback interface (`--unshare-net`). Inside
+it, `socat` listens on `127.0.0.1:PROXY_PORT` and passes each connection to this proxy's Unix socket, which is mounted
+into the jail. Chrome sends every connection there (`--proxy-server=socks5://...`, loopback included), with the host
+name unresolved, so the proxy does the DNS lookup itself and connects to the address it checked:
+
+```
+Chrome --TCP--> socat (in the jail) --Unix socket--> EgressProxy (sidecar on the server) --TCP--> public address
+```
+
+Only public addresses are allowed (`ipaddress.is_global`), unless `allow_private`: a page cannot reach the app's own
+services, the host, or anything else on a private network, by name or by address, redirects and subresources too.
+Only TCP leaves the jail, so QUIC and WebRTC's UDP have nowhere to go.
+
+The same socket also takes an HTTP `CONNECT` request, which is the only kind of proxy Servo speaks (it tunnels
+`http://` as well as `https://`). The first byte tells them apart: 5 for SOCKS5, a letter for HTTP. Both go through the
+same address check.
+
+Where a connection goes is the `dial` step: by default this proxy resolves and connects itself, as above. The Mac
+tunnel (`tunnel.py`) passes its own, which asks the user's Mac to connect instead, and the Mac makes the check.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import ipaddress
+import socket
+import struct
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+
+PROXY_PORT = 1080
+"""The port socat listens on inside the jail, on its own loopback."""
+
+_VERSION = 5
+_NO_AUTH = 0
+_CONNECT = 1
+_IPV4, _DOMAIN, _IPV6 = 1, 3, 4
+SUCCEEDED, NOT_ALLOWED, HOST_UNREACHABLE, REFUSED, _NOT_SUPPORTED = 0, 2, 4, 5, 7
+CONNECT_TIMEOUT = 30
+
+Upstream = tuple[asyncio.StreamReader, asyncio.StreamWriter]
+Dial = Callable[[str, int], Awaitable[tuple[int, Upstream | None]]]
+"""Connects to `host:port` for one browser connection: a SOCKS5 status, and the connection when it is `SUCCEEDED`."""
+_HANDSHAKE_TIMEOUT = 10
+_MAX_CONNECTIONS = 128
+_CLOSE_GRACE = 5
+
+
+async def proxy_answers(path: Path, *, attempts: int = 5) -> bool:
+    """Whether a shared proxy on `path` answers a SOCKS5 greeting, trying once a second up to `attempts` times. The
+    browser checks it before starting, so it fails closed when the sidecar is down."""
+    for attempt in range(attempts):
+        try:
+            reader, writer = await asyncio.wait_for(asyncio.open_unix_connection(path), 2)
+            try:
+                writer.write(bytes([_VERSION, 1, _NO_AUTH]))
+                return await asyncio.wait_for(reader.readexactly(2), 2) == bytes([_VERSION, _NO_AUTH])
+            finally:
+                writer.close()
+                with contextlib.suppress(OSError):
+                    await writer.wait_closed()
+        except (OSError, TimeoutError, asyncio.IncompleteReadError):
+            if attempt < attempts - 1:
+                await asyncio.sleep(1)
+    return False
+
+
+class EgressProxy:
+    """A SOCKS5 and HTTP `CONNECT` server (no authentication) on the Unix socket `path`."""
+
+    def __init__(self, path: Path, *, allow_private: bool = False, dial: Dial | None = None) -> None:
+        self.path = path
+        self.allow_private = allow_private
+        self._dial = dial or self._connect
+        self._server: asyncio.Server | None = None
+        self._connections: set[asyncio.Task[None]] = set()
+
+    async def start(self) -> None:
+        # The sidecar may restart on a persistent volume after an unclean exit.
+        self.path.unlink(missing_ok=True)
+        self._server = await asyncio.start_unix_server(self._serve, path=str(self.path))
+        self.path.chmod(0o600)
+
+    async def stop(self) -> None:
+        if self._server is not None:
+            self._server.close()
+            for task in self._connections:
+                task.cancel()
+            await asyncio.gather(*self._connections, return_exceptions=True)
+            await self._server.wait_closed()
+            self._server = None
+            self.path.unlink(missing_ok=True)
+
+    async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        if len(self._connections) >= _MAX_CONNECTIONS:
+            writer.close()
+            return
+        self._connections.add(task)
+        try:
+            await self._handle(reader, writer)
+        except (OSError, asyncio.IncompleteReadError, TimeoutError, UnicodeError):
+            pass  # a name that is not one (bad IDNA, a label over 63 characters) ends the connection like a bad peer
+        finally:
+            self._connections.discard(task)
+            writer.close()
+
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        async with asyncio.timeout(_HANDSHAKE_TIMEOUT):
+            (first,) = await reader.readexactly(1)
+            socks = first == _VERSION
+            request = await (self._handshake(reader, writer) if socks else _http_connect(first, reader, writer))
+        if request is None:
+            return
+        try:
+            status, upstream = await asyncio.wait_for(self._dial(*request), CONNECT_TIMEOUT)
+        except TimeoutError:
+            status, upstream = HOST_UNREACHABLE, None
+        (_reply if socks else _http_reply)(writer, status)
+        if upstream is not None:
+            await self._relay(reader, writer, upstream)
+
+    async def _handshake(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> tuple[str, int] | None:
+        """The rest of a SOCKS5 greeting and request, after its version byte."""
+        (count,) = await reader.readexactly(1)
+        methods = await reader.readexactly(count)
+        if _NO_AUTH not in methods:
+            writer.write(bytes([_VERSION, 0xFF]))
+            return
+        writer.write(bytes([_VERSION, _NO_AUTH]))
+        version, command, _, kind = await reader.readexactly(4)
+        if kind == _IPV4:
+            host = socket.inet_ntop(socket.AF_INET, await reader.readexactly(4))
+        elif kind == _IPV6:
+            host = socket.inet_ntop(socket.AF_INET6, await reader.readexactly(16))
+        elif kind == _DOMAIN:
+            host = (await reader.readexactly((await reader.readexactly(1))[0])).decode('idna')
+        else:
+            _reply(writer, _NOT_SUPPORTED)
+            return
+        (port,) = struct.unpack('>H', await reader.readexactly(2))
+        if version != _VERSION or command != _CONNECT:
+            _reply(writer, _NOT_SUPPORTED)
+            return None
+        return host, port
+
+    async def _relay(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        upstream: Upstream,
+    ) -> None:
+        up_reader, up_writer = upstream
+        # When either side is done, the other gets a moment to finish, then both close: socat inside the jail never
+        # keeps a half-closed connection, and a silent server must not hold sockets open until the browser closes.
+        directions = {asyncio.ensure_future(_pipe(reader, up_writer)), asyncio.ensure_future(_pipe(up_reader, writer))}
+        try:
+            _, pending = await asyncio.wait(directions, return_when=asyncio.FIRST_COMPLETED)
+            if pending:
+                await asyncio.wait(pending, timeout=_CLOSE_GRACE)
+        finally:
+            for direction in directions:
+                direction.cancel()
+            up_writer.transport.abort()  # at once: data a server never reads must not keep the socket open
+            await asyncio.gather(*directions, return_exceptions=True)
+
+    async def _connect(self, host: str, port: int) -> tuple[int, Upstream | None]:
+        try:
+            infos = await asyncio.wait_for(
+                asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM), CONNECT_TIMEOUT
+            )
+        except (OSError, TimeoutError):
+            return HOST_UNREACHABLE, None
+        addresses = [str(info[4][0]) for info in infos]
+        # Any private answer refuses the name, as `browsing.refused_url` does, so DNS cannot pick one for us.
+        if not self.allow_private and not all(ipaddress.ip_address(a).is_global for a in addresses):
+            return NOT_ALLOWED, None
+        for address in addresses:
+            try:
+                upstream = await asyncio.wait_for(asyncio.open_connection(address, port), CONNECT_TIMEOUT)
+            except (OSError, TimeoutError):
+                continue
+            return SUCCEEDED, upstream
+        return REFUSED, None
+
+
+def _reply(writer: asyncio.StreamWriter, status: int) -> None:
+    writer.write(bytes([_VERSION, status, 0, _IPV4, 0, 0, 0, 0, 0, 0]))
+
+
+_HTTP_STATUS = {
+    SUCCEEDED: b'200 Connection established',
+    NOT_ALLOWED: b'403 Forbidden',
+    _NOT_SUPPORTED: b'405 Method Not Allowed',
+}
+
+
+async def _http_connect(
+    first: int, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+) -> tuple[str, int] | None:
+    """An HTTP `CONNECT host:port` request, after its first byte. Headers are read and ignored."""
+    try:
+        head = bytes([first]) + await reader.readuntil(b'\r\n\r\n')
+    except asyncio.LimitOverrunError:
+        head = b''
+    method, _, rest = head.partition(b' ')
+    target = rest.partition(b' ')[0].decode('ascii', errors='replace')
+    host, _, port = target.rpartition(':')
+    host = host.removeprefix('[').removesuffix(']')
+    if method != b'CONNECT' or not host or not port.isdigit() or not 0 < int(port) < 65536:
+        _http_reply(writer, _NOT_SUPPORTED)
+        return None
+    return host, int(port)
+
+
+def _http_reply(writer: asyncio.StreamWriter, status: int) -> None:
+    writer.write(b'HTTP/1.1 ' + _HTTP_STATUS.get(status, b'502 Bad Gateway') + b'\r\n\r\n')
+
+
+async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    try:
+        while data := await reader.read(65536):
+            writer.write(data)
+            await writer.drain()
+        if writer.can_write_eof():
+            writer.write_eof()
+    except OSError:
+        with contextlib.suppress(OSError):
+            writer.close()

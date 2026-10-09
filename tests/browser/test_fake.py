@@ -5,8 +5,8 @@ from contextlib import asynccontextmanager
 
 import pytest
 
-from montybot.browser.conformance import BrowserBackendConformance, Site, fake_site
-from montybot.browser.contract import (
+from sammy.browser.conformance import BrowserBackendConformance, Site, fake_site
+from sammy.browser.contract import (
     Action,
     BrowserBackend,
     Click,
@@ -24,8 +24,8 @@ from montybot.browser.contract import (
     Type,
     features_of,
 )
-from montybot.browser.fake import FakeBrowser, FakeElement, FakePage
-from montybot.browser.state import BrowserState, Cookie
+from sammy.browser.fake import FakeBrowser, FakeElement, FakePage
+from sammy.browser.state import BrowserState, Cookie
 
 pytestmark = pytest.mark.anyio
 

@@ -177,7 +177,7 @@ def test_streaming_preview_and_completed_model_step_survive_recovery(app: App, c
     assert thread['run']['status'] == 'done'
     assert thread['messages'] == [
         {'role': 'user', 'text': PROMPT},
-        {'role': 'assistant', 'text': QUESTION},  # what Monty asked, and the answer
+        {'role': 'assistant', 'text': QUESTION},  # what Sammy asked, and the answer
         {'role': 'user', 'text': 'green'},
         {'role': 'assistant', 'text': FINAL},
     ]  # The initial assistant text + tool call is not a durable chat reply.
@@ -185,7 +185,7 @@ def test_streaming_preview_and_completed_model_step_survive_recovery(app: App, c
 
 
 def test_streaming_failure_reconciles_preview_and_reconnect(app: App, client: Client, tmp_path: Path) -> None:
-    from montybot.workflows import FAILURE_NOTICE
+    from sammy.workflows import FAILURE_NOTICE
 
     client.sign_up()
     prompt = 'Fail after preview.'

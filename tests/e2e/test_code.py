@@ -1,7 +1,7 @@
 """#5: the agent's code runs on Full Monty, and a run's Monty session is parked in monty-server's store while the run
 waits, so no worker is held and the code finds its variables afterwards.
 
-Needs a Full Monty pair: `MONTYBOT_TEST_MONTY_URL` (monty-server) and `MONTYBOT_TEST_MONTY_CONTAINERS` (the server and
+Needs a Full Monty pair: `SAMMY_TEST_MONTY_URL` (monty-server) and `SAMMY_TEST_MONTY_CONTAINERS` (the server and
 worker containers, comma-separated, which the test restarts). `compose.yaml` runs both.
 """
 
@@ -15,11 +15,11 @@ import pytest
 from conftest import Client, Human
 from sites.shop import Shop
 
-CONTAINERS = [c for c in os.environ.get('MONTYBOT_TEST_MONTY_CONTAINERS', '').split(',') if c]
+CONTAINERS = [c for c in os.environ.get('SAMMY_TEST_MONTY_CONTAINERS', '').split(',') if c]
 
 pytestmark = pytest.mark.skipif(
-    not (os.environ.get('MONTYBOT_TEST_MONTY_URL') and CONTAINERS),
-    reason='needs Full Monty: MONTYBOT_TEST_MONTY_URL and MONTYBOT_TEST_MONTY_CONTAINERS',
+    not (os.environ.get('SAMMY_TEST_MONTY_URL') and CONTAINERS),
+    reason='needs Full Monty: SAMMY_TEST_MONTY_URL and SAMMY_TEST_MONTY_CONTAINERS',
 )
 
 

@@ -19,9 +19,9 @@ import pytest
 from playwright.async_api import async_playwright
 from sites.invoices import INVOICES, Invoices, csv_of, pdf_of
 
-from montybot.browser.chromium import ChromiumBackend, ChromiumOptions
-from montybot.browser.conformance import BrowserBackendConformance, Site
-from montybot.browser.contract import (
+from sammy.browser.chromium import ChromiumBackend, ChromiumOptions
+from sammy.browser.conformance import BrowserBackendConformance, Site
+from sammy.browser.contract import (
     ActionFailed,
     BrowserBackend,
     Click,
@@ -33,14 +33,14 @@ from montybot.browser.contract import (
     TargetNotFound,
     Type,
 )
-from montybot.browser.state import BrowserState
+from sammy.browser.state import BrowserState
 
 pytestmark = pytest.mark.anyio
 
 HEADLESS = ChromiumOptions(headless=True)
 HEADED = ChromiumOptions.for_this_machine(allow_private_networks=True)  # the fixture sites are on 127.0.0.1
 """A window on a Mac or a Linux desktop; on Linux without a desktop, Xvfb and bwrap."""
-SHOW_WINDOWS = os.environ.get('MONTYBOT_HEADED') == '1'
+SHOW_WINDOWS = os.environ.get('SAMMY_HEADED') == '1'
 """Headed tests on a desktop open a real window per test, so they only run when asked for."""
 
 
@@ -52,7 +52,7 @@ def anyio_backend() -> str:
 def can_run(options: ChromiumOptions) -> str | None:
     """Why `options` cannot run on this machine, or None."""
     if not options.headless and not options.virtual_screen and not SHOW_WINDOWS:
-        return 'opens real windows on this desktop; set MONTYBOT_HEADED=1 to run'
+        return 'opens real windows on this desktop; set SAMMY_HEADED=1 to run'
     if options.bwrap and sys.platform != 'linux':
         return 'bwrap needs Linux'
     for needed, tool in ((options.bwrap, options.bwrap_path), (options.virtual_screen, options.xvfb_path)):

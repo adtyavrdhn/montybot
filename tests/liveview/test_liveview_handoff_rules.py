@@ -5,9 +5,9 @@ from contextlib import asynccontextmanager
 
 from liveview_harness import StubBrowserService
 
-from montybot.browser.fake import FakeBrowser
-from montybot.browser.service import BrowserService
-from montybot.liveview.conformance import HandoffRulesConformance
+from sammy.browser.fake import FakeBrowser
+from sammy.browser.service import BrowserService
+from sammy.liveview.conformance import HandoffRulesConformance
 
 
 class TestStubBrowserService(HandoffRulesConformance):

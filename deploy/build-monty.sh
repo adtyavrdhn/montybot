@@ -32,8 +32,8 @@ case "$(sudo docker info --format '{{.OSType}}/{{.Architecture}}')" in
     *) echo "Expected native Linux amd64/arm64 Docker daemon" >&2; exit 1 ;;
 esac
 for service in server worker; do
-    if sudo docker image inspect "montybot-monty-$service:$COMMIT" >/dev/null 2>&1; then
-        echo "Tag already installed: montybot-monty-$service:$COMMIT; refusing to overwrite" >&2
+    if sudo docker image inspect "sammy-monty-$service:$COMMIT" >/dev/null 2>&1; then
+        echo "Tag already installed: sammy-monty-$service:$COMMIT; refusing to overwrite" >&2
         exit 1
     fi
 done
@@ -41,8 +41,8 @@ tar -xf "$archive" -C "$source_dir"
 cd "$source_dir"
 for service in server worker; do
     sudo docker build --build-arg MONTY_COMMIT="$COMMIT" --build-arg CARGO_PROFILE=release \
-        -f "crates/monty-$service/Dockerfile" -t "montybot-monty-$service:$COMMIT" .
+        -f "crates/monty-$service/Dockerfile" -t "sammy-monty-$service:$COMMIT" .
 done
 echo "Installed both local private images for $COMMIT. Compose has not been changed or restarted."
 REMOTE
-echo "Next: set MONTY_PRIVATE_COMMIT=$commit in /opt/montybot/.env when ready to enable Full Monty."
+echo "Next: set MONTY_PRIVATE_COMMIT=$commit in /opt/sammy/.env when ready to enable Full Monty."
