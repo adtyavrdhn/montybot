@@ -166,7 +166,8 @@ def test_deleting_an_account_leaves_no_row_of_it(
     assert response.status_code == 200 and response.headers['content-type'] == 'application/zip'
     entries = unzipped(response.content)
     assert {'account.json', 'memories.json', 'schedules.json', 'integrations.json', 'files/notes.txt'} <= set(entries)
-    assert sum(name.endswith('/chat.md') for name in entries) == 4  # hello, two colours, and the schedule's chat
+    # Hello, two about colours, the one that set up the schedule, and the schedule's own.
+    assert sum(name.endswith('/chat.md') for name in entries) == 5
     assert json.loads(entries['memories.json'])[0]['text'] == 'Favourite colour: green'
     assert {(i['name'], i['kind']) for i in json.loads(entries['integrations.json'])} == {
         ('Linear', 'composio'),
