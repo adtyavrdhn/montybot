@@ -1,0 +1,45 @@
+{
+  "token": "verification-token-unused",
+  "team_id": "T0SAMMY01",
+  "context_team_id": "T0SAMMY01",
+  "api_app_id": "A0SAMMY01",
+  "event": {
+    "type": "message",
+    "subtype": "message_changed",
+    "message": {
+      "type": "message",
+      "text": "Say hello again",
+      "user": "U0PAT0001",
+      "ts": "1767225600.000100",
+      "edited": {
+        "user": "U0PAT0001",
+        "ts": "1767225630.000000"
+      }
+    },
+    "previous_message": {
+      "type": "message",
+      "text": "Say hello",
+      "user": "U0PAT0001",
+      "ts": "1767225600.000100"
+    },
+    "channel": "D0PAT0001",
+    "hidden": true,
+    "ts": "1767225630.000400",
+    "event_ts": "1767225630.000400",
+    "channel_type": "im"
+  },
+  "type": "event_callback",
+  "event_id": "Ev0PAT00004",
+  "event_time": 1767225600,
+  "authorizations": [
+    {
+      "enterprise_id": null,
+      "team_id": "T0SAMMY01",
+      "user_id": "U0SAMMYBOT",
+      "is_bot": true,
+      "is_enterprise_install": false
+    }
+  ],
+  "is_ext_shared_channel": false,
+  "event_context": "4-eyJldCI6Im1lc3NhZ2UiLCJ0aWQiOiJUMFNBTU1ZMDEifQ"
+}

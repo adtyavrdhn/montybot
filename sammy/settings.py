@@ -100,12 +100,16 @@ class Settings(BaseSettings):
     channel_backends: Annotated[list[str], NoDecode] = Field(default_factory=list[str])
     """Extra chat platforms (`sammy.channels.registry`), comma-separated `module:function` factories that take the
     settings and return a `Channel`, or None when not configured. Tests add a fake platform this way."""
+    slack_bot_token: SecretStr | None = None
+    """Slack (`sammy.channels.slack`): the app's Bot User OAuth Token (`xoxb-...`). On only with the signing secret."""
+    slack_signing_secret: SecretStr | None = None
+    """The Slack app's signing secret, which checks every request Slack sends to the webhook."""
 
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
     history_limit: int = 40
 
-    @field_validator('composio_api_key', mode='before')
+    @field_validator('composio_api_key', 'slack_bot_token', 'slack_signing_secret', mode='before')
     @classmethod
     def blank_is_unset(cls, value: object) -> object:
         """`COMPOSIO_API_KEY=` (as in `.env.example`) means no Composio, not a key that is empty."""

@@ -1,0 +1,39 @@
+{
+  "token": "verification-token-unused",
+  "team_id": "T0SAMMY01",
+  "context_team_id": "T0SAMMY01",
+  "api_app_id": "A0SAMMY01",
+  "event": {
+    "type": "message",
+    "text": "Hello! I am Sammy.",
+    "user": "U0SAMMYBOT",
+    "bot_id": "B0SAMMY01",
+    "app_id": "A0SAMMY01",
+    "ts": "1767225640.000500",
+    "team": "T0SAMMY01",
+    "bot_profile": {
+      "id": "B0SAMMY01",
+      "app_id": "A0SAMMY01",
+      "name": "Sammy",
+      "deleted": false,
+      "team_id": "T0SAMMY01"
+    },
+    "channel": "D0PAT0001",
+    "event_ts": "1767225640.000500",
+    "channel_type": "im"
+  },
+  "type": "event_callback",
+  "event_id": "Ev0SAMMY0001",
+  "event_time": 1767225600,
+  "authorizations": [
+    {
+      "enterprise_id": null,
+      "team_id": "T0SAMMY01",
+      "user_id": "U0SAMMYBOT",
+      "is_bot": true,
+      "is_enterprise_install": false
+    }
+  ],
+  "is_ext_shared_channel": false,
+  "event_context": "4-eyJldCI6Im1lc3NhZ2UiLCJ0aWQiOiJUMFNBTU1ZMDEifQ"
+}

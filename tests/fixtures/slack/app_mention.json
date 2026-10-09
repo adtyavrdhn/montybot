@@ -1,0 +1,47 @@
+{
+  "token": "verification-token-unused",
+  "team_id": "T0SAMMY01",
+  "context_team_id": "T0SAMMY01",
+  "api_app_id": "A0SAMMY01",
+  "event": {
+    "client_msg_id": "8e4a5f6b-3c7d-4e9f-b0a1-2c3d4e5f6071",
+    "type": "app_mention",
+    "text": "<@U0SAMMYBOT> Say hello",
+    "user": "U0PAT0001",
+    "ts": "1767225700.000600",
+    "blocks": [
+      {
+        "type": "rich_text",
+        "block_id": "Xq1Lp",
+        "elements": [
+          {
+            "type": "rich_section",
+            "elements": [
+              {
+                "type": "text",
+                "text": "Say hello"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "team": "T0SAMMY01",
+    "channel": "C0TEAM0001",
+    "event_ts": "1767225700.000600"
+  },
+  "type": "event_callback",
+  "event_id": "Ev0TEAM00001",
+  "event_time": 1767225600,
+  "authorizations": [
+    {
+      "enterprise_id": null,
+      "team_id": "T0SAMMY01",
+      "user_id": "U0SAMMYBOT",
+      "is_bot": true,
+      "is_enterprise_install": false
+    }
+  ],
+  "is_ext_shared_channel": false,
+  "event_context": "4-eyJldCI6Im1lc3NhZ2UiLCJ0aWQiOiJUMFNBTU1ZMDEifQ"
+}

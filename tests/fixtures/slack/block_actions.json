@@ -1,0 +1,95 @@
+{
+  "type": "block_actions",
+  "user": {
+    "id": "U0PAT0001",
+    "username": "pat",
+    "name": "pat",
+    "team_id": "T0SAMMY01"
+  },
+  "api_app_id": "A0SAMMY01",
+  "token": "verification-token-unused",
+  "container": {
+    "type": "message",
+    "message_ts": "1767225900.000900",
+    "channel_id": "D0PAT0001",
+    "is_ephemeral": false
+  },
+  "trigger_id": "10230000000.1023000000.0123456789abcdef0123456789abcdef",
+  "team": {
+    "id": "T0SAMMY01",
+    "domain": "sammy-test"
+  },
+  "enterprise": null,
+  "is_enterprise_install": false,
+  "channel": {
+    "id": "D0PAT0001",
+    "name": "directmessage"
+  },
+  "message": {
+    "user": "U0SAMMYBOT",
+    "type": "message",
+    "ts": "1767225900.000900",
+    "bot_id": "B0SAMMY01",
+    "app_id": "A0SAMMY01",
+    "text": "Sammy needs your approval:",
+    "team": "T0SAMMY01",
+    "blocks": [
+      {
+        "type": "section",
+        "block_id": "Ab1",
+        "text": {
+          "type": "mrkdwn",
+          "text": "Sammy needs your approval:",
+          "verbatim": false
+        }
+      },
+      {
+        "type": "actions",
+        "block_id": "Ab2",
+        "elements": [
+          {
+            "type": "button",
+            "action_id": "sammy-0",
+            "text": {
+              "type": "plain_text",
+              "text": "Approve",
+              "emoji": true
+            },
+            "style": "primary",
+            "value": "0b4a0e1c-1f7e-5d0e-9f3a-0c4d2b9e7a11:approve"
+          },
+          {
+            "type": "button",
+            "action_id": "sammy-1",
+            "text": {
+              "type": "plain_text",
+              "text": "Decline",
+              "emoji": true
+            },
+            "style": "danger",
+            "value": "0b4a0e1c-1f7e-5d0e-9f3a-0c4d2b9e7a11:decline"
+          }
+        ]
+      }
+    ]
+  },
+  "state": {
+    "values": {}
+  },
+  "response_url": "https://hooks.slack.com/actions/T0SAMMY01/1023000000000/AbCdEfGhIjKlMnOpQrStUvWx",
+  "actions": [
+    {
+      "action_id": "sammy-0",
+      "block_id": "Ab2",
+      "text": {
+        "type": "plain_text",
+        "text": "Approve",
+        "emoji": true
+      },
+      "value": "0b4a0e1c-1f7e-5d0e-9f3a-0c4d2b9e7a11:approve",
+      "style": "primary",
+      "type": "button",
+      "action_ts": "1767225960.123456"
+    }
+  ]
+}
