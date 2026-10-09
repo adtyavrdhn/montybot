@@ -34,7 +34,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from sammy import attachments, store, streaming
+from sammy import attachments, store, streaming, subagent_runs
 from sammy.browser.contract import BrowserError
 from sammy.browser.service import UnknownRun
 from sammy.deps import RunDeps
@@ -217,7 +217,7 @@ async def stop(resources: Resources, run: Run) -> bool:
     await DBOS.cancel_workflow_async(run.id, cancel_children=True)
     stopped = await end_run(resources, run, 'stopped', STOPPED_NOTICE)
     async with resources.pool.connection() as connection, connection.transaction():
-        subagents = await store.stop_subagents(connection, run.id, STOPPED_NOTICE)
+        subagents = await subagent_runs.stop(connection, run.id, STOPPED_NOTICE)
     for subagent in subagents:
         await close_browser(resources, subagent)
     await close_browser(resources, run)

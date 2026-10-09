@@ -44,8 +44,6 @@ class Run:
     error: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
-    parent_run_id: str | None = None
-    """For a subagent's run (`sammy.subagents`), the run that started it; its answer goes there, not to the chat."""
 
 
 AttachmentKind = Literal['image', 'pdf', 'text', 'file']

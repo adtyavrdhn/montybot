@@ -3,7 +3,7 @@
 ```
 run_thread (the parent's workflow)
   run_subagents(jobs)                        a tool, in workflow code
-    step subagents.create.<n>                a run per job, in the parent's thread (store.create_subagent_runs)
+    step subagents.create.<n>                a run per job, in the parent's thread (sammy.subagent_runs)
     DBOS.start_workflow_async per job  --->  run_subagent(run_id)                   @DBOS.workflow, id = the run's id
                                                step subagent.start                  status running
                                                the subagent agent.run(task)         its own context, its own tab
@@ -22,24 +22,34 @@ parent's thread (`store.open_ask`). The parent's context gets the answers only, 
 
 One call starts at most `SUBAGENT_MAX_JOBS` jobs. All the jobs of one run share `SUBAGENT_TOKEN_BUDGET` tokens: a call
 splits what is left between its jobs, and a job that reaches its share stops.
+
+While a run's jobs are going, the live screen (`GET /api/runs/<id>/screen`, which the web and Mac apps poll) shows
+their tabs side by side in one picture (`screen`), so neither app needs to know about jobs.
 """
 
 from __future__ import annotations
 
+import asyncio
+import io
 import logging
+import math
 import uuid
+from collections import OrderedDict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import logfire
 from dbos import DBOS, SetWorkflowID, WorkflowHandleAsync
 from dbos._error import DBOSException
+from PIL import Image, ImageOps
 from pydantic_ai import FunctionToolset, RunContext, ToolDefinition
 from pydantic_ai.usage import UsageLimits
 
-from sammy import store
+from sammy import store, subagent_runs
+from sammy.browser.contract import BrowserError
 from sammy.deps import RunDeps
 from sammy.models import FINISHED, Run, RunStatus, Schedule
-from sammy.observability import timing
+from sammy.observability import timed, timing
 from sammy.resources import Resources, current
 from sammy.workflows import RETRIED, STOPPED_NOTICE, close_browser, failure_notice, local_time_in
 
@@ -118,7 +128,7 @@ def task_of(job: Job) -> str:
 async def create_runs(resources: Resources, parent: Run, tasks: list[tuple[str, str]]) -> None:
     with timing('subagents.create'):
         async with resources.pool.connection() as connection, connection.transaction():
-            await store.create_subagent_runs(connection, parent, tasks)
+            await subagent_runs.create(connection, parent, tasks)
 
 
 @DBOS.workflow(name='sammy.run_subagent')
@@ -177,3 +187,61 @@ async def end(resources: Resources, run_id: str, status: RunStatus, output: str,
             if await store.lock_finished(connection, run_id):
                 return  # stopped meanwhile, or this step ran before and committed
             await store.finish_run(connection, run_id, status, output=output, error=error)
+
+
+# --- the live screen ---
+
+GAP = 8
+"""Pixels between two tabs in the picture."""
+BACKGROUND = (32, 33, 36)
+FRAMES_KEPT = 64
+_frames: OrderedDict[str, bytes] = OrderedDict()
+"""Each job's latest frame (PNG), by run id, in this process: a tab that is busy, or in a hand-off, keeps showing it
+rather than leaving a hole. Never logged or traced, like the frames themselves."""
+
+
+@timed('subagents.screen', only_in_trace=True)
+async def screen(resources: Resources, user_id: str, run_id: str) -> bytes | None:
+    """A PNG of the tabs of the run's jobs that are going, side by side, each where it is now (or was last seen).
+    None while the run has no jobs going or none of them has a tab yet: then the screen is the run's own tab."""
+    async with resources.pool.connection() as connection:
+        jobs = await subagent_runs.active_jobs(connection, user_id, run_id)
+    frames = await asyncio.gather(*(frame(resources, user_id, job) for job in jobs))
+    if not any(frames):
+        return None
+    return await asyncio.to_thread(tile, frames)
+
+
+async def frame(resources: Resources, user_id: str, run_id: str) -> bytes | None:
+    """The job's tab now, or its last frame while it is busy, in a hand-off or not open; None if never seen."""
+    try:
+        shot = await resources.browser.peek_screenshot(run_id=run_id, user_id=user_id, parked=False)
+    except BrowserError:
+        return _frames.get(run_id)
+    _frames[run_id] = shot.png
+    _frames.move_to_end(run_id)
+    while len(_frames) > FRAMES_KEPT:
+        _frames.popitem(last=False)
+    return shot.png
+
+
+def tile(frames: Sequence[bytes | None]) -> bytes:
+    """The frames in a grid as near square as it gets (two jobs side by side, three or four in two rows), in order,
+    each fitted into its cell; a missing frame leaves its cell empty. As big as the first frame, so the screen keeps
+    its shape. At least one frame must be there."""
+    images = [Image.open(io.BytesIO(png)) if png else None for png in frames]
+    width, height = next(image for image in images if image is not None).size
+    columns = math.ceil(math.sqrt(len(images)))
+    rows = math.ceil(len(images) / columns)
+    cell = ((width - GAP * (columns - 1)) // columns, (height - GAP * (rows - 1)) // rows)
+    canvas = Image.new('RGB', (width, height), BACKGROUND)
+    for index, image in enumerate(images):
+        if image is None:
+            continue
+        fitted = ImageOps.contain(image.convert('RGB'), cell)
+        left = (index % columns) * (cell[0] + GAP) + (cell[0] - fitted.width) // 2
+        top = (index // columns) * (cell[1] + GAP) + (cell[1] - fitted.height) // 2
+        canvas.paste(fitted, (left, top))
+    picture = io.BytesIO()
+    canvas.save(picture, format='PNG')
+    return picture.getvalue()

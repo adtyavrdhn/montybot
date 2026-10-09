@@ -27,7 +27,7 @@ from pydantic import AfterValidator, BaseModel, Field, StrictBool, StringConstra
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
-from sammy import approvals, attachments, auth, schedules, store, streaming, workflows
+from sammy import approvals, attachments, auth, schedules, store, streaming, subagents, workflows
 from sammy.browser.contract import (
     BrowserError,
 )
@@ -585,18 +585,21 @@ async def live_link(request: Request, user: User) -> Response:
 
 @auth.signed_in
 async def watch_screen(request: Request, user: User) -> Response:
-    """The bot's browser as it works, for the user to watch: read only. Once the run has ended, the user's browser
-    kept open for their next run (during a hand-off the user has the live view instead)."""
+    """The bot's browser as it works, for the user to watch: read only. While the run's subagents work, their tabs
+    side by side (sammy.subagents). Once the run has ended, the user's browser kept open for their next run (during a
+    hand-off the user has the live view instead)."""
     resources = resources_of(request)
     async with resources.pool.connection() as connection:
         run = await store.get_run(connection, user.id, str(request.path_params['run_id']))
     if run is None:
         return NOT_FOUND
     try:
-        screenshot = await resources.browser.peek_screenshot(run_id=run.id, user_id=user.id)
+        png = await subagents.screen(resources, user.id, run.id)
+        if png is None:
+            png = (await resources.browser.peek_screenshot(run_id=run.id, user_id=user.id)).png
     except BrowserError:
         return Response(status_code=204)  # no picture now: no browser yet, busy with a call, or a hand-off began
-    return Response(screenshot.png, media_type='image/png', headers={'Cache-Control': 'no-store'})
+    return Response(png, media_type='image/png', headers={'Cache-Control': 'no-store'})
 
 
 # --- notifications ---

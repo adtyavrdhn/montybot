@@ -270,13 +270,15 @@ class BrowserHost:
             await _close_quietly(parked.backend)
 
     @timed('browser.peek_screenshot', only_in_trace=True)
-    async def peek_screenshot(self, *, run_id: RunId, user_id: UserId) -> Screenshot:
+    async def peek_screenshot(self, *, run_id: RunId, user_id: UserId, parked: bool = True) -> Screenshot:
         """The viewport of the run's open browser, for the user watching the run. Read only: it never opens, restarts
         or keeps a browser alive, and does not wait for a call in progress. Once the run has ended, the user's browser
-        kept open (`keep_open`), where their last run left it. `UnknownRun` if there is no open browser or it is busy;
-        `HandoffActive` during a hand-off."""
+        kept open (`keep_open`), where their last run left it, unless `parked` is False (a subagent's own tab only).
+        `UnknownRun` if there is no open browser or it is busy; `HandoffActive` during a hand-off."""
         run = self._runs.get(run_id)
         if run is None:
+            if not parked:
+                raise UnknownRun('no browser to watch for this run')
             return await self._peek_parked(user_id)
         backend = run.backend if run.user_id == user_id else None
         if backend is None or run.lock.locked():

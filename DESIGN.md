@@ -226,7 +226,11 @@ the parent's context gets only their answers.
 - **Limits:** at most `SUBAGENT_MAX_JOBS` jobs per call (tools run one at a time, so that is also the most at once),
   and `SUBAGENT_TOKEN_BUDGET` tokens for all the jobs of one run. Tokens stand in for cost because they are always
   known; a model's price is not.
+- **Live screen:** while a run has jobs going, `GET /api/runs/<id>/screen` returns their tabs side by side in one
+  picture (a tab that is busy shows its last frame), so the web and Mac apps show them without knowing about jobs.
 - **Stopping** the parent cancels its workflow and its children's, and closes their tabs.
+- **Storage:** the jobs' own queries are in `sammy/subagent_runs.py`; `sammy/store.py` only leaves jobs out of a
+  thread's own runs and shows their asks and activity as the parent's.
 - **Needs tabs.** Without an engine that has tabs (`TabsBackend`), a second run of the user cannot get a browser
   while the first holds it, so the tool is not offered.
 

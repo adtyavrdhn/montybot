@@ -4,12 +4,14 @@ a job waiting for the user survives the app being killed, and stopping the paren
 
 from __future__ import annotations
 
+import io
 import time
 from collections.abc import Iterator
 
 import psycopg
 import pytest
 from conftest import App, Client, Human
+from PIL import Image
 from sites.prices import KettleShop
 from sites.shop import Shop
 
@@ -94,14 +96,30 @@ def statuses(client: Client) -> dict[str, tuple[str | None, str | None]]:
     return {t['id']: (t['status'], t['waiting_for']) for t in client.http.get('/api/threads').json()}
 
 
+def pixels(png: bytes) -> tuple[tuple[int, int], bytes]:
+    with Image.open(io.BytesIO(png)) as image:
+        return image.size, image.convert('RGB').tobytes()
+
+
 def test_a_jobs_question_is_asked_in_the_parent_thread_and_survives_a_restart(
-    app: App, client: Client, shops: list[KettleShop]
+    app: App, client: Client, shops: list[KettleShop], database_url: str
 ) -> None:
     client.sign_up()
     thread = client.ask(f'Side by side, ask me which kettle at {shops[0].url}')
     question = client.wait_for_ask(thread, 'question')
     assert question['prompt'] == 'Which kettle do you mean?'
     assert statuses(client) == {thread: ('waiting', 'question')}
+
+    # The parent's live screen is the job's tab, open on its page while it waits: the parent has no tab of its own.
+    parent = client.thread(thread)['run']['id']
+    with psycopg.connect(database_url) as connection:
+        row = connection.execute('SELECT id FROM sammy.runs WHERE parent_run_id = %s', (parent,)).fetchone()
+    assert row is not None
+    job = row[0]
+    screen = client.http.get(f'/api/runs/{parent}/screen')
+    assert screen.status_code == 200, screen.status_code
+    assert screen.headers['content-type'] == 'image/png'
+    assert pixels(screen.content) == pixels(client.http.get(f'/api/runs/{job}/screen').content)
 
     app.kill()
     app.start()  # DBOS resumes the parent's workflow and the job's, which waits for the same answer

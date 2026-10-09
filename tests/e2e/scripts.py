@@ -418,13 +418,13 @@ def find_kettle_price(turn: Turn) -> ModelResponse:
     return say(f'{turn.url} sells it for ${found.group(1)}' if found else f'No price at {turn.url}.')
 
 
-def ask_then_find_price(turn: Turn) -> ModelResponse:
-    """A subagent's job that needs the user first."""
-    if not turn.called('ask_user'):
-        return call('ask_user', question='Which kettle do you mean?')
+def read_then_ask(turn: Turn) -> ModelResponse:
+    """A subagent's job that opens its page, then needs the user: its tab stays open while it waits."""
     if not turn.called('run_code'):
         return run(f'print(await goto({turn.url + "/"!r}))')
-    found = KETTLE_PRICE.search(turn.last)
+    if not turn.called('ask_user'):
+        return call('ask_user', question='Which kettle do you mean?')
+    found = KETTLE_PRICE.search(turn.result_of('run_code'))
     return say(f'The {turn.result_of("ask_user")} at {turn.url} is ${found.group(1) if found else "?"}')
 
 
@@ -456,8 +456,8 @@ SCRIPTS: dict[str, Script] = {
     'One site at a time, compare the kettle at': compare_one_by_one,
     'Side by side, compare the kettle at': compare_side_by_side,
     'Find the price of the Acme kettle at': find_kettle_price,
-    'Side by side, ask me which kettle at': one_job('Ask me which kettle, then find its price at {url}'),
-    'Ask me which kettle, then find its price at': ask_then_find_price,
+    'Side by side, ask me which kettle at': one_job('Open the kettle page, then ask me which kettle, at {url}'),
+    'Open the kettle page, then ask me which kettle, at': read_then_ask,
     'Have a helper put eggs in my cart at': one_job('Put eggs in my cart at {url}'),
     'Put eggs in my cart at': cart_eggs,
     "yo what's on my linear": my_linear,

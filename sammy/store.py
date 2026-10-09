@@ -27,11 +27,9 @@ class ThreadGone(Exception):
 
 
 USER_COLUMNS = 'id, email, name, timezone, squirrel_name'
-RUN_COLUMNS = 'id, user_id, thread_id, trigger, prompt, status, output, error, created_at, completed_at, parent_run_id'
+RUN_COLUMNS = 'id, user_id, thread_id, trigger, prompt, status, output, error, created_at, completed_at'
 ASK_COLUMNS = 'id, run_id, user_id, occurrence, kind, prompt, details, answer'
-ASK_COLUMNS_OF_A = ', '.join(f'a.{column}' for column in ASK_COLUMNS.split(', '))
-# A subagent's run (sammy.subagents) is part of its parent's: the chat shows the parent's, with the child's asks and
-# activity under it. Queries for a thread's own runs leave the children out.
+THREAD_RUNS = f'SELECT {RUN_COLUMNS} FROM sammy.runs WHERE thread_id = %s AND user_id = %s AND parent_run_id IS NULL'
 SCHEDULE_COLUMNS = 'id, user_id, thread_id, name, cron, timezone, when_text, prompt, watch'
 
 # --- users ---
@@ -129,16 +127,13 @@ async def list_threads(connection: Connection, user_id: str) -> list[Thread]:
 
 
 async def active_runs(connection: Connection, user_id: str) -> dict[str, RunStatus]:
-    """The status of each of the user's unfinished runs, by thread id. A run waits while it or one of its subagents
-    asks the user something; one waiting with every ask answered is about to carry on, so it counts as running (as in
-    `api.run_view`)."""
+    """Each unfinished run's status by thread id: waiting while it or one of its subagents asks (see `api.run_view`)."""
     cursor = await connection.execute(
         'SELECT r.thread_id, CASE WHEN EXISTS (SELECT 1 FROM sammy.asks a JOIN sammy.runs c ON c.id = a.run_id '
-        "WHERE (c.id = r.id OR c.parent_run_id = r.id) AND a.answer IS NULL) THEN 'waiting' "
-        "WHEN r.status = 'waiting' THEN 'running' ELSE r.status END AS status "
+        "WHERE r.id IN (c.id, c.parent_run_id) AND a.answer IS NULL) THEN 'waiting' "
+        "WHEN r.status = 'waiting' THEN 'running' ELSE r.status END AS status FROM sammy.runs r "
         # The same condition as the index runs_active_by_user.
-        "FROM sammy.runs r WHERE r.user_id = %s AND r.status IN ('queued', 'running', 'waiting') "
-        'AND r.parent_run_id IS NULL',
+        "WHERE r.user_id = %s AND r.status IN ('queued', 'running', 'waiting') AND r.parent_run_id IS NULL",
         (user_id,),
     )
     return {str(row['thread_id']): row['status'] for row in await cursor.fetchall()}
@@ -225,10 +220,9 @@ async def create_run(
 
 
 async def list_runs(connection: Connection, user_id: str, thread_id: str) -> list[Run]:
-    """The thread's runs, oldest first."""
+    """The thread's own runs (not their subagents', `sammy.subagents`), oldest first."""
     cursor = await connection.execute(
-        f'SELECT {RUN_COLUMNS} FROM sammy.runs WHERE thread_id = %s AND user_id = %s AND parent_run_id IS NULL '
-        'ORDER BY created_at',
+        f'{THREAD_RUNS} ORDER BY created_at',
         (thread_id, user_id),
     )
     return [run_from(row) for row in await cursor.fetchall()]
@@ -244,8 +238,7 @@ async def get_run(connection: Connection, user_id: str, run_id: str) -> Run | No
 
 async def latest_run(connection: Connection, user_id: str, thread_id: str) -> Run | None:
     cursor = await connection.execute(
-        f'SELECT {RUN_COLUMNS} FROM sammy.runs WHERE thread_id = %s AND user_id = %s AND parent_run_id IS NULL '
-        'ORDER BY created_at DESC LIMIT 1',
+        f'{THREAD_RUNS} ORDER BY created_at DESC LIMIT 1',
         (thread_id, user_id),
     )
     row = await cursor.fetchone()
@@ -257,30 +250,6 @@ async def load_run(connection: Connection, run_id: str) -> Run:
     row = await cursor.fetchone()
     assert row is not None, 'a workflow starts only for a run the app recorded'
     return run_from(row)
-
-
-async def create_subagent_runs(connection: Connection, parent: Run, tasks: Sequence[tuple[str, str]]) -> None:
-    """A run for each `(run id, task)` of the parent's subagents, in its thread and started the same way. Idempotent:
-    a retried step finds the runs it made the first time."""
-    for run_id, task in tasks:
-        await connection.execute(
-            'INSERT INTO sammy.runs (id, user_id, thread_id, trigger, prompt, parent_run_id) '
-            'VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING',
-            (run_id, parent.user_id, parent.thread_id, parent.trigger, task, parent.id),
-        )
-
-
-async def stop_subagents(connection: Connection, run_id: str, notice: str) -> list[Run]:
-    """End the run's unfinished subagents as stopped and close what they ask; returns them, to close their tabs."""
-    cursor = await connection.execute(
-        "UPDATE sammy.runs SET status = 'stopped', output = %s, completed_at = now() "
-        f"WHERE parent_run_id = %s AND status IN ('queued', 'running', 'waiting') RETURNING {RUN_COLUMNS}",
-        (notice, run_id),
-    )
-    stopped = [run_from(row) for row in await cursor.fetchall()]
-    for run in stopped:
-        await close_open_asks(connection, run.id)
-    return stopped
 
 
 async def set_run_status(connection: Connection, run_id: str, status: RunStatus) -> None:
@@ -360,24 +329,21 @@ async def create_ask(
 
 
 async def open_ask(connection: Connection, user_id: str, run_id: str) -> Ask | None:
-    """The latest unanswered ask of the run or of one of its subagents, which the user answers in the run's thread."""
     cursor = await connection.execute(
-        f'SELECT {ASK_COLUMNS_OF_A} FROM sammy.asks a JOIN sammy.runs r ON r.id = a.run_id '
-        'WHERE (r.id = %s OR r.parent_run_id = %s) AND a.user_id = %s AND a.answer IS NULL '
-        'ORDER BY a.created_at DESC, a.occurrence DESC LIMIT 1',
-        (run_id, run_id, user_id),
+        f'SELECT {ASK_COLUMNS} FROM sammy.asks WHERE user_id = %s AND answer IS NULL AND run_id IN '
+        '(SELECT id FROM sammy.runs WHERE %s IN (id, parent_run_id)) ORDER BY created_at DESC LIMIT 1',
+        (user_id, run_id),
     )
     row = await cursor.fetchone()
     return None if row is None else ask_from(row)
 
 
 async def list_answered_asks(connection: Connection, user_id: str, thread_id: str) -> list[Ask]:
-    """The thread's asks that have an answer (or expired), in the order they were asked. A subagent's carries its
-    parent's run id, under which the chat shows it."""
-    columns = ASK_COLUMNS_OF_A.replace('a.run_id', 'coalesce(r.parent_run_id, a.run_id) AS run_id')
+    """The thread's asks that have an answer (or expired), in the order asked; a subagent's under its parent."""
     cursor = await connection.execute(
-        f'SELECT {columns} FROM sammy.asks a JOIN sammy.runs r ON r.id = a.run_id '
-        'WHERE r.thread_id = %s AND a.user_id = %s AND a.answer IS NOT NULL ORDER BY a.created_at, a.occurrence',
+        'SELECT a.id, coalesce(r.parent_run_id, a.run_id) AS run_id, a.user_id, a.occurrence, a.kind, a.prompt, '
+        'a.details, a.answer FROM sammy.asks a JOIN sammy.runs r ON r.id = a.run_id WHERE r.thread_id = %s '
+        'AND a.user_id = %s AND a.answer IS NOT NULL ORDER BY a.created_at, a.occurrence',
         (thread_id, user_id),
     )
     return [ask_from(row) for row in await cursor.fetchall()]
@@ -547,11 +513,10 @@ async def add_activity(connection: Connection, run_id: str, text: str) -> None:
 
 
 async def list_activity(connection: Connection, user_id: str, run_id: str) -> list[str]:
-    """The run's steps, its subagents' included."""
     cursor = await connection.execute(
         'SELECT a.text FROM sammy.activity a JOIN sammy.runs r ON r.id = a.run_id '
-        'WHERE (r.id = %s OR r.parent_run_id = %s) AND r.user_id = %s ORDER BY a.id',
-        (run_id, run_id, user_id),
+        'WHERE %s IN (r.id, r.parent_run_id) AND r.user_id = %s ORDER BY a.id',
+        (run_id, user_id),
     )
     return [row['text'] for row in await cursor.fetchall()]
 
@@ -579,11 +544,10 @@ async def search_threads(connection: Connection, user_id: str, query: str, limit
 
 
 async def list_thread_activity(connection: Connection, user_id: str, thread_id: str) -> dict[str, list[str]]:
-    """Every run's steps in a thread, its subagents' included, by run id, oldest first."""
+    """Every run's steps in a thread (a subagent's under its parent), by run id, oldest first."""
     cursor = await connection.execute(
-        'SELECT coalesce(r.parent_run_id, a.run_id) AS run_id, a.text FROM sammy.activity a '
-        'JOIN sammy.runs r ON r.id = a.run_id '
-        'WHERE r.thread_id = %s AND r.user_id = %s ORDER BY a.id',
+        'SELECT coalesce(r.parent_run_id, r.id) AS run_id, a.text FROM sammy.activity a JOIN sammy.runs r '
+        'ON r.id = a.run_id WHERE r.thread_id = %s AND r.user_id = %s ORDER BY a.id',
         (thread_id, user_id),
     )
     steps: dict[str, list[str]] = {}
@@ -621,7 +585,6 @@ def run_from(row: dict[str, Any]) -> Run:
         error=row['error'],
         started_at=row['created_at'],
         completed_at=row['completed_at'],
-        parent_run_id=str(parent) if (parent := row['parent_run_id']) else None,
     )
 
 
