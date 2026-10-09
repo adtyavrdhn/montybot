@@ -180,9 +180,11 @@ People can message Sammy from chat apps as well as the web and Mac apps, through
 credentials are set; the platforms themselves come in their own changes (#139 Slack, #140 Telegram, #141 WhatsApp,
 #142 Discord). Webhooks arrive at `POST /api/channels/<name>/webhook`.
 
-- **Linking.** Message the bot directly and it sends a link (`/#/link/<code>`) to open in the web app, signed in.
-  Or open **Chat apps** in the web app, get a code, and send `/start <code>` to the bot. Codes work once, for 15
-  minutes. Until a sender is linked, Sammy answers them only with the way to link, and starts nothing.
+- **Linking.** Message the bot directly and it sends a link (`/#/link/<code>`) to open in the web app, signed in;
+  the web app then shows a code to send back from that chat, which finishes it. Or open **Chat apps** in the web
+  app, get a code, and send `/start <code>` to the bot. Either way the last step is a code from the signed-in web
+  user arriving from the chat account, so someone who gets you to open their link gains nothing. Codes work once,
+  for 15 minutes. Until a sender is linked, Sammy answers them only with the way to link, and starts nothing.
 - **What works.** Each chat is a Sammy thread. Replies, files both ways (10 per message, 20 MB each), questions,
   approvals (buttons, or `1`/`yes` and `2`/`no` where the app has no buttons), hand-offs (a link to the chat on the
   web, where you take over the browser) and pings when a run started elsewhere needs you. Pings go to the direct chat

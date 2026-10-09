@@ -41,8 +41,9 @@ class Channels:
             if body['code'] != CODE:
                 route.fulfill(status=404, json={'detail': 'not found'})
                 return
+            # Linked once the chat sends the code back; the page's list is read again after.
             self.linked = [{'channel': 'telegram', 'notify': True, 'pings': True, 'linked_at': '2026-10-06T10:00:00Z'}]
-            route.fulfill(json={'channel': 'telegram'})
+            route.fulfill(json={'channel': 'telegram', 'code': 'ABCDEFGHJK', 'minutes': 15})
         elif path == '/api/channels/slack/code':
             route.fulfill(json={'code': 'SLACKCODE2', 'minutes': 15})
         elif path == '/api/channels/telegram' and request.method == 'PUT':
@@ -77,7 +78,9 @@ def test_a_chat_app_is_linked_from_its_link_after_signing_in(chat_apps: tuple[Pa
     expect(page.locator('#title')).to_have_text('Chat apps')
     no_overflow(page)
     page.click('#link-app')
-    expect(page.locator('#chat-apps-status')).to_have_text('Telegram is linked. Say hi to Sammy there.')
+    expect(page.locator('#chat-apps-status')).to_have_text(
+        'To finish, send ABCDEFGHJK to Sammy in Telegram within 15 minutes.'
+    )
     expect(page.locator('#link-card')).to_be_hidden()
     assert page.evaluate('location.hash') == '#/chat-apps'
     assert ('POST', '/api/channels/link', {'code': CODE}) in channels.calls

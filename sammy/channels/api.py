@@ -71,23 +71,20 @@ class NotifyBody(BaseModel):
 
 @auth.signed_in
 async def link_account(request: Request, user: User) -> Response:
-    """POST `{code}`: the platform account that got this code (`/#/link/<code>`) becomes this user's."""
+    """POST `{code}` (from `/#/link/<code>`): a code for this user that only the platform account that got the link
+    can send to the bot, which links it. Opening someone else's link therefore links nothing on its own."""
     body = LinkBody.model_validate_json(await request.body())
     async with _resources(request).pool.connection() as connection, connection.transaction():
         taken = await channel_store.take_sender_code(connection, linking.hash_code(body.code))
         if taken is None:
             return BAD_CODE
         channel, sender, chat_id = taken
-        await channel_store.link(
-            connection, channel=channel, external_user_id=sender, user_id=user.id, notify_chat_id=chat_id
-        )
+        code = await linking.code_for_user(connection, user.id, channel, sender=sender)
         if chat_id is not None:
             chat = Chat(channel=channel, chat_id=chat_id)
-            outgoing = Outgoing(text=inbound.LINKED)
-            await channel_store.enqueue(
-                connection, f'linked:{linking.hash_code(body.code)}', chat, outgoing, user_id=user.id
-            )
-    return JSONResponse({'channel': channel})
+            outgoing = Outgoing(text=inbound.SEND_THE_CODE)
+            await channel_store.enqueue(connection, f'confirm:{linking.hash_code(body.code)}', chat, outgoing)
+    return JSONResponse({'channel': channel, 'code': code, 'minutes': linking.CODE_MINUTES})
 
 
 @auth.signed_in

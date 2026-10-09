@@ -84,11 +84,15 @@ def wait_for(platform: FakePlatform, chat: str, needle: str, *, after: int = 0) 
 
 
 def link(client: Client, platform: FakePlatform, person: Person) -> None:
-    """The unknown sender writes, gets a link, and opens it signed in."""
+    """The unknown sender writes, gets a link, opens it signed in, and sends the code the web app shows."""
     assert person.say('hi').status_code == 200
     match = LINK.search(wait_for(platform, person.chat, '/#/link/'))
     assert match is not None
-    assert client.http.post('/api/channels/link', json={'code': match.group(1)}).status_code == 200
+    opened = client.http.post('/api/channels/link', json={'code': match.group(1)})
+    assert opened.status_code == 200
+    wait_for(platform, person.chat, 'send me the code the Sammy web page shows you')
+    assert client.http.get('/api/channels').json()['linked'] == []  # not until the chat sends the code
+    assert person.say(opened.json()['code']).status_code == 200
     wait_for(platform, person.chat, 'Linked. Say hi.')
     assert client.http.post('/api/channels/link', json={'code': match.group(1)}).status_code == 404  # used up
 
@@ -224,6 +228,15 @@ def test_an_unlinked_sender_learns_nothing_and_starts_nothing(
     assert count(database_url, 'SELECT count(*) FROM sammy.runs') == 0
     assert count(database_url, 'SELECT count(*) FROM sammy.threads') == 0
     assert client.http.post('/api/channels/link', json={'code': 'AAAAAAAAAA'}).status_code == 404
+
+    # Someone who gets a signed-in user to open their link gains nothing: the code that finishes it works only from
+    # the chat account that got the link, and the user would have to hand it over.
+    victim_side = LINK.search(first)
+    assert victim_side is not None
+    bound = client.http.post('/api/channels/link', json={'code': victim_side.group(1)}).json()['code']
+    two.say(bound)
+    eventually(lambda: len(platform.texts(two.chat)) == 2 or None, timeout=WAIT, what='a second link message')
+    assert client.http.get('/api/channels').json()['linked'] == []
 
     # The other way round: a code from the web app, sent to the bot, links the sender.
     code = client.http.post('/api/channels/fake/code', json={}).json()['code']

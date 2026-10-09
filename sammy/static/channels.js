@@ -71,7 +71,8 @@ $('link-app').addEventListener('click', () => report((async () => {
   try {
     const linked = await telemetry.span('link chat app', {}, () => (
       api('/api/channels/link', { method: 'POST', body: { code } })));
-    chatAppsNotice = `${chatAppName(linked.channel)} is linked. Say hi to Sammy there.`;
+    // Only the chat account that got the link can send this code, so opening someone else's link links nothing.
+    chatAppsNotice = `To finish, send ${linked.code} to Sammy in ${chatAppName(linked.channel)} within ${linked.minutes} minutes.`;
     location.hash = '#/chat-apps';
   } catch (error) {
     $('link-card').hidden = true;

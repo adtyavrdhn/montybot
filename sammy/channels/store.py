@@ -117,7 +117,7 @@ async def drop_expired_codes(connection: Connection) -> None:
 async def sender_nonce(connection: Connection, channel: str, external_user_id: str) -> str | None:
     cursor = await connection.execute(
         'SELECT nonce FROM sammy.channel_link_codes WHERE channel = %s AND external_user_id = %s '
-        'AND expires_at > now() ORDER BY expires_at DESC LIMIT 1',
+        'AND user_id IS NULL AND expires_at > now() ORDER BY expires_at DESC LIMIT 1',
         (channel, external_user_id),
     )
     row = await cursor.fetchone()
@@ -146,7 +146,7 @@ async def take_sender_code(connection: Connection, code_hash: str) -> tuple[str,
     """Use up a live code issued to a sender: its channel, sender and chat."""
     cursor = await connection.execute(
         'DELETE FROM sammy.channel_link_codes WHERE code_hash = %s AND external_user_id IS NOT NULL '
-        'AND expires_at > now() RETURNING channel, external_user_id, chat_id',
+        'AND user_id IS NULL AND expires_at > now() RETURNING channel, external_user_id, chat_id',
         (code_hash,),
     )
     row = await cursor.fetchone()
@@ -155,12 +155,12 @@ async def take_sender_code(connection: Connection, code_hash: str) -> tuple[str,
     return str(row['channel']), str(row['external_user_id']), row['chat_id']
 
 
-async def take_user_code(connection: Connection, channel: str, code_hash: str) -> str | None:
-    """Use up a live code issued to a web user for this channel: the user's id."""
+async def take_user_code(connection: Connection, channel: str, code_hash: str, sender: str) -> str | None:
+    """Use up a live code issued to a web user for this channel, if `sender` may send it: the user's id."""
     cursor = await connection.execute(
         'DELETE FROM sammy.channel_link_codes WHERE code_hash = %s AND channel = %s AND user_id IS NOT NULL '
-        'AND expires_at > now() RETURNING user_id',
-        (code_hash, channel),
+        'AND (external_user_id IS NULL OR external_user_id = %s) AND expires_at > now() RETURNING user_id',
+        (code_hash, channel, sender),
     )
     row = await cursor.fetchone()
     return None if row is None else str(row['user_id'])

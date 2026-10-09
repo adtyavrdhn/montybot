@@ -2,19 +2,36 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import asyncio
+import time
+from collections.abc import AsyncIterator, Sequence
+from pathlib import Path
 
 import pytest
 from fake_channel import FakeChannel
 from psycopg.rows import dict_row
 from pydantic import SecretStr
+from starlette.responses import Response
 
 from sammy.channels import linking
 from sammy.channels import store as channel_store
-from sammy.channels.base import ButtonAnswer, button_data
+from sammy.channels.base import (
+    Button,
+    ButtonAnswer,
+    Capabilities,
+    Inbound,
+    InboundFile,
+    Outgoing,
+    RawRequest,
+    button_data,
+)
+from sammy.channels.outbound import Pump
 from sammy.channels.registry import Channels
+from sammy.channels.store import Chat
 from sammy.channels.text import split
+from sammy.crypto import new_key
 from sammy.db import Connection, migrate
+from sammy.resources import open_resources
 from sammy.settings import Settings
 
 pytestmark = pytest.mark.anyio
@@ -134,11 +151,112 @@ async def test_a_senders_code_is_reused_while_live_then_works_once(connection: C
 async def test_a_web_users_code_works_once_on_its_own_platform(connection: Connection) -> None:
     user_id = await new_user(connection)
     code = await linking.code_for_user(connection, user_id, 'fake')
-    assert await channel_store.take_user_code(connection, 'other', linking.hash_code(code)) is None
+    assert await channel_store.take_user_code(connection, 'other', linking.hash_code(code), 'anyone') is None
     assert await channel_store.take_sender_code(connection, linking.hash_code(code)) is None
-    assert await channel_store.take_user_code(connection, 'fake', linking.hash_code(code)) == user_id
-    assert await channel_store.take_user_code(connection, 'fake', linking.hash_code(code)) is None
+    assert await channel_store.take_user_code(connection, 'fake', linking.hash_code(code), 'anyone') == user_id
+    assert await channel_store.take_user_code(connection, 'fake', linking.hash_code(code), 'anyone') is None
     expired = await linking.code_for_user(connection, user_id, 'fake')
     await expire_all(connection)
-    assert await channel_store.take_user_code(connection, 'fake', linking.hash_code(expired)) is None
+    assert await channel_store.take_user_code(connection, 'fake', linking.hash_code(expired), 'anyone') is None
     assert linking.code_in('hello there') is None and linking.code_in('/start') is None
+
+
+async def test_opening_a_senders_link_gives_a_code_only_that_sender_can_use(connection: Connection) -> None:
+    # The code a web user gets for someone's link finishes linking only from that chat account, and is not a
+    # sender's code: opening someone else's link never links their chat account on its own.
+    user_id = await new_user(connection)
+    bound = await linking.code_for_user(connection, user_id, 'fake', sender='alice')
+    assert await channel_store.take_sender_code(connection, linking.hash_code(bound)) is None
+    assert await channel_store.sender_nonce(connection, 'fake', 'alice') is None
+    assert await channel_store.take_user_code(connection, 'fake', linking.hash_code(bound), 'mallory') is None
+    assert await channel_store.take_user_code(connection, 'fake', linking.hash_code(bound), 'alice') == user_id
+
+
+# --- delivery ---
+
+
+class Recording:
+    """A platform that keeps what it is sent, and fails to format one text."""
+
+    name = 'recording'
+    capabilities = Capabilities(max_text=100, max_buttons=2, edits=True, threads=False, max_file_bytes=1000)
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    def verify(self, request: RawRequest) -> bool:
+        return False
+
+    def challenge(self, request: RawRequest) -> Response | None:
+        return None
+
+    def parse(self, request: RawRequest) -> list[Inbound]:
+        return []
+
+    def ack(self) -> Response:
+        return Response()
+
+    def format(self, markdown: str) -> str:
+        if markdown == 'cannot format':
+            raise RuntimeError('a bug in a platform adapter')
+        return markdown
+
+    async def send(self, chat_id: str, text: str, buttons: Sequence[Button], reply_to: str | None) -> str:
+        self.sent.append((chat_id, text))
+        return str(len(self.sent))
+
+    async def edit(self, chat_id: str, message_id: str, text: str) -> None:
+        return None
+
+    async def send_file(self, chat_id: str, name: str, media_type: str, data: bytes) -> str:
+        return ''
+
+    async def download(self, file: InboundFile) -> bytes:
+        return b''
+
+    async def aclose(self) -> None:
+        return None
+
+
+RECORDING = Recording()
+
+
+def recording_channel(settings: Settings) -> Recording:
+    return RECORDING
+
+
+async def test_a_message_that_fails_for_any_reason_does_not_hold_back_its_chat(
+    database_url: str, tmp_path: Path
+) -> None:
+    # The pump sends each chat's oldest unsent message first, so a message whose delivery fails anywhere (here in the
+    # adapter's formatting, before any platform call) must be marked failed, or the chat would never get another.
+    RECORDING.sent.clear()
+    configured = Settings(
+        _env_file=None,  # pyright: ignore[reportCallIssue]
+        database_url=database_url,
+        session_secret=SecretStr(SECRET),
+        encryption_key=SecretStr(new_key()),
+        model='test',
+        browser_backend='sammy.browser.fake:FakeBrowser',
+        mac_tunnel=False,
+        monty_url=None,
+        workspaces_dir=tmp_path,
+        composio_api_key=None,
+        channel_backends=['test_channels:recording_channel'],
+    )
+    async with open_resources(configured) as resources:
+        chat = Chat(channel='recording', chat_id='chat-1')
+        async with resources.pool.connection() as connection:
+            await channel_store.enqueue(connection, 'first', chat, Outgoing(text='cannot format'))
+            await channel_store.enqueue(connection, 'second', chat, Outgoing(text='after it'))
+        pump = Pump(resources)
+        deadline = time.monotonic() + 60
+        while not RECORDING.sent and time.monotonic() < deadline:
+            await pump.pump()
+            await asyncio.sleep(0.2)
+        assert RECORDING.sent == [('chat-1', 'after it')]
+        async with resources.pool.connection() as connection:
+            cursor = await connection.execute(
+                'SELECT error FROM sammy.channel_outbox WHERE failed_at IS NOT NULL ORDER BY seq'
+            )
+            assert [row['error'] for row in await cursor.fetchall()] == ['RuntimeError']

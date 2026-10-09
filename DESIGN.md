@@ -220,6 +220,8 @@ through its API. It registers with one line in `registry.BUILT_IN`, and is on on
 
 - **Linking.** An unknown sender who messages the bot directly gets a one-time link to `/#/link/<code>`, which they
   open in the web app signed in; or a signed-in user gets a code on the Chat apps page and sends it to the bot.
+  Opening a link does not link on its own: the web app shows a code that only that chat account can send back. Both
+  sides must be proved, or anyone could send their link to a signed-in user and then act as them from their own chat.
   Codes live 15 minutes, work once, and only their SHA-256 is stored. An unlinked sender gets nothing else: no run,
   and no data of any user. The answer they get is the same for everyone, but for their own code.
 - **Chats are threads.** One platform conversation (a direct chat, or a Slack or Discord thread) is one Sammy thread

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Self
 
 import logfire
@@ -116,41 +116,39 @@ async def notify(resources: Resources, *, user_id: str, thread_id: str, kind: No
 async def deliver(row_id: str) -> str:
     resources = current()
     with timing('channel.deliver') as span:
-        # Read outside a step, so DBOS records no message text (or link code); the row does not change until the
-        # last step below.
-        async with resources.pool.connection() as connection:
-            row = await channel_store.load_row(connection, row_id)
-        if row is None or row.sent:
-            return 'gone'
-        span.set_attribute('channel', row.channel)
-        channel = resources.channels.get(row.channel)
-        if channel is None:
-            await DBOS.run_step_async({**RECORD, 'name': 'channel.failed'}, failed, resources, row_id, 'ChannelOff')
-            return 'failed'
-        outgoing = row.outgoing
-        parts = split(channel.format(outgoing.text), channel.capabilities.max_text) if outgoing.text else []
-        buttons = outgoing.buttons[: channel.capabilities.max_buttons]
-        sent: list[str] = []
         try:
-            for i, part in enumerate(parts):
-                last = i == len(parts) - 1
-                sent.append(
-                    await DBOS.run_step_async(
-                        {**SEND, 'name': f'channel.send.{i}'}, send_part, row, part, buttons if last else ()
-                    )
-                )
-            for i, file_id in enumerate(outgoing.files):
-                sent.append(await DBOS.run_step_async({**SEND, 'name': f'channel.file.{i}'}, send_file, row, file_id))
+            return await _deliver(resources, row_id, span.set_attribute)
         except Exception as error:  # noqa: BLE001  recorded by type; the chat's next message goes on
+            # Any failure, not only a platform's, marks the row failed: a row left unsent would hold back every later
+            # message to its chat, as the pump sends each chat's oldest unsent row first.
             logfire.warn('A chat message was not sent: {error_type}', error_type=type(error).__name__)
             await DBOS.run_step_async(
                 {**RECORD, 'name': 'channel.failed'}, failed, resources, row_id, type(error).__name__
             )
             return 'failed'
-        await DBOS.run_step_async(
-            {**RECORD, 'name': 'channel.sent'}, record_sent, resources, row_id, sent, outgoing.secret
-        )
-        return 'sent'
+
+
+async def _deliver(resources: Resources, row_id: str, annotate: Callable[[str, str], object]) -> str:
+    # Read outside a step, so DBOS records no message text (or link code); the row does not change until the last
+    # step below.
+    async with resources.pool.connection() as connection:
+        row = await channel_store.load_row(connection, row_id)
+    if row is None or row.sent:
+        return 'gone'
+    annotate('channel', row.channel)
+    channel = _channel(row.channel)
+    outgoing = row.outgoing
+    parts = split(channel.format(outgoing.text), channel.capabilities.max_text) if outgoing.text else []
+    buttons = outgoing.buttons[: channel.capabilities.max_buttons]
+    sent: list[str] = []
+    for i, part in enumerate(parts):
+        last = i == len(parts) - 1
+        step: StepOptions = {**SEND, 'name': f'channel.send.{i}'}
+        sent.append(await DBOS.run_step_async(step, send_part, row, part, buttons if last else ()))
+    for i, file_id in enumerate(outgoing.files):
+        sent.append(await DBOS.run_step_async({**SEND, 'name': f'channel.file.{i}'}, send_file, row, file_id))
+    await DBOS.run_step_async({**RECORD, 'name': 'channel.sent'}, record_sent, resources, row_id, sent, outgoing.secret)
+    return 'sent'
 
 
 def _channel(name: str) -> Channel:

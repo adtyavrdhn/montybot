@@ -23,7 +23,9 @@ CREATE TABLE sammy.channel_link_codes (
     nonce text,
     user_id uuid REFERENCES sammy.users (id) ON DELETE CASCADE,
     expires_at timestamptz NOT NULL,
-    CHECK ((external_user_id IS NULL) <> (user_id IS NULL))
+    -- A sender's code (opened on the web), a web user's code (sent to the bot), or both: the code a web user got for
+    -- a sender's code, which only that sender can send to finish linking.
+    CHECK (external_user_id IS NOT NULL OR user_id IS NOT NULL)
 );
 CREATE INDEX channel_link_codes_by_sender ON sammy.channel_link_codes (channel, external_user_id)
     WHERE external_user_id IS NOT NULL;

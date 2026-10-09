@@ -37,6 +37,7 @@ from sammy.resources import Resources, current
 
 LINK_ELSEWHERE = 'Message me directly to link your account.'
 LINKED = 'Linked. Say hi.'
+SEND_THE_CODE = 'Almost there: send me the code the Sammy web page shows you.'
 BUSY = 'Sammy is still working on the last message in this chat.'
 ANSWERED = 'That was answered already.'
 APPROVE_WORDS = ('1', 'yes', 'approve')
@@ -118,7 +119,9 @@ async def unlinked(resources: Resources, chat: Chat, inbound: Inbound, key: str)
             return
         code = linking.code_in(inbound.text)
         user_id = (
-            await channel_store.take_user_code(connection, chat.channel, linking.hash_code(code)) if code else None
+            await channel_store.take_user_code(connection, chat.channel, linking.hash_code(code), inbound.sender_id)
+            if code
+            else None
         )
         if user_id is not None:
             await channel_store.link(
