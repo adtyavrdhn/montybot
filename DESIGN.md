@@ -209,6 +209,11 @@ Considered:
   addresses is still untested.
 - **Timeouts:** a waiting browser costs memory. After N minutes, save the `storageState` and close the browser. When
   the user returns, launch a fresh Chromium from the cookie jar for them to drive.
+- **Reminders and expiry (#131):** a DBOS schedule (`sammy-reminders`) sends one reminder, push and email, for each
+  ask still open after `REMIND_AFTER_SECONDS` (4 h). When the run's own `DBOS.recv` times out
+  (`ASK_TIMEOUT_SECONDS`, 24 h), the run stops: it frees the browser and its chat says what it waited for, so the
+  thread takes new messages again. The expiry stays in the run's workflow, on the durable timer it already waits on,
+  so it fires on time across restarts and never races the run.
 - **Return control:** the agent resumes with a short summary of what the user did, not screenshots.
 
 ## Data

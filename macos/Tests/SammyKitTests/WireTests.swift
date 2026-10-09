@@ -232,7 +232,10 @@ import Testing
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Europe/London")!
         let now = try #require(ThreadSummary.date("2026-10-07T15:00:00+00:00"))
-        func age(_ text: String) throws -> ChatAge { ChatAge.of(try #require(ThreadSummary.date(text)), now: now, calendar: calendar) }
+        func age(_ text: String) throws -> ChatAge {
+            let date = try #require(ThreadSummary.date(text))
+            return ChatAge.of(date, now: now, calendar: calendar)
+        }
         #expect(try age("2026-10-07T00:30:00.123456+00:00") == .today)
         #expect(try age("2026-10-06T08:00:00+00:00") == .yesterday)
         #expect(try age("2026-10-01T08:00:00+00:00") == .week)
@@ -262,6 +265,17 @@ import Testing
         let json = #"[{"id": "a", "title": "Eggs", "status": "waiting", "waiting_for": "approval"}, {"id": "b", "title": "Hi", "status": "waiting", "waiting_for": "something-new"}]"#
         let threads = try JSONDecoder().decode([ThreadSummary].self, from: Data(json.utf8))
         #expect(threads.map(\.waitingFor) == [.approval, nil])  // a kind not known yet is left unsaid, not an error
+        #expect(threads.map(\.waitingLong) == [false, false])  // an older server doesn't say
+    }
+
+    @Test func aChatLeftWaitingLongIsMarked() throws {
+        let json = #"[{"id": "a", "title": "Eggs", "status": "waiting", "waiting_for": "handoff", "waiting_long": true}, {"id": "b", "title": "Hi", "status": null, "outcome": "stopped", "waiting_for": null, "waiting_long": false}]"#
+        let threads = try JSONDecoder().decode([ThreadSummary].self, from: Data(json.utf8))
+        #expect(threads.map(\.waitingLong) == [true, false])
+        let long = threads[0]
+        #expect(long.with(status: .waiting, outcome: nil).waitingLong)  // still the same wait
+        #expect(!long.with(status: .waiting, outcome: nil, waitingFor: .approval).waitingLong)  // a new wait
+        #expect(!long.with(status: .running, outcome: nil).waitingLong)  // answered
     }
 
     @Test func aChatWaitingForAnAppToBeConnected() throws {

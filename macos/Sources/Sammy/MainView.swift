@@ -343,11 +343,16 @@ struct ThreadRow: View {
         case .waiting:
             // What it needs, in a word, as T3 Code's status pills: "Approval" says more than a dot.
             HStack(spacing: 5) {
+                if thread.waitingLong {
+                    // Waited long enough for a reminder: easy to find, before it stops by itself.
+                    Image(systemName: "clock.badge.exclamationmark").font(.system(size: 11)).foregroundStyle(Palette.onErrorContainer)
+                }
                 if let kind = thread.waitingFor {
                     Text(Self.word(for: kind)).font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.onSurfaceVariant)
                 }
                 Circle().fill(Palette.logfire).frame(width: 7, height: 7)
             }
+            .help(thread.waitingLong ? "\(app.sammyName) has been waiting on you for hours and stops if nobody answers" : "")
             .accessibilityHidden(true)
         case .running, .queued:
             SammyMark(mood: .working, size: 9).frame(width: 16, height: 16)
@@ -383,7 +388,8 @@ struct ThreadRow: View {
 
     private var statusText: String {
         switch (thread.status, thread.outcome) {
-        case (.waiting, _): thread.waitingFor.map { "Needs you: \(Self.word(for: $0).lowercased())" } ?? "Needs you"
+        case (.waiting, _):
+            (thread.waitingLong ? "Still needs you" : "Needs you") + (thread.waitingFor.map { ": \(Self.word(for: $0).lowercased())" } ?? "")
         case (.running, _), (.queued, _): "Working"
         case (_, .failed) where unseen: "Couldn't finish, not seen yet"
         case _ where unseen: "New reply"

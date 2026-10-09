@@ -218,8 +218,6 @@ async def hand_off(ctx: RunContext[RunDeps], reason: str) -> str:
         return await session.read()
 
     page = await browser_step(ctx, 'handoff.end', end)
-    if reply is None:
-        return f'The user did not take the browser in time. The page now:\n{page}'
     note = str(reply.get('note') or '').strip()
     said = f' They said: "{note}".' if note else ''
     return f'The user handed the browser back.{said} The page now:\n{page}'

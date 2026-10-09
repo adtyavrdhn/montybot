@@ -119,7 +119,8 @@ Decisions from review:
   and the library pinned at the bottom. Hovering a chat shows a button to delete it.
 - ⌘K opens a command palette (chats and actions, as T3 Code's); ⌘1…⌘9 go to the chats in the sidebar's order (the
   Go to Chat menu lists them), ⇧⌘1…4 to the library. A chat that needs you says what, in a word: Question, Approval
-  or Browser. Chats can be marked unread.
+  or Browser. One left waiting long enough for a reminder (`waiting_long`, 4 h) also shows a clock, so it is easy to
+  find before it stops by itself. Chats can be marked unread.
 - Reading further up a chat, it stays put while Sammy writes, with a button back to the latest. Sammy's browser
   beside the chat widens a narrow window to fit (or fills the window on a small screen) rather than squeeze both.
 - Sammy's steps stay under its reply, folded; approvals and takeovers stay in the chat as one quiet line each.

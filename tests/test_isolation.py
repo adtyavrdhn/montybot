@@ -398,7 +398,7 @@ async def test_chats_are_listed_by_when_they_were_last_active(pool: Pool) -> Non
 
 
 async def test_the_chat_list_says_what_a_waiting_chat_waits_for(pool: Pool) -> None:
-    """`waiting_for` names the latest open ask of a waiting run, for its user only."""
+    """`waiting_for` names the latest open ask of a waiting run, and when it was asked, for its user only."""
     async with pool.connection() as connection:
         user = await store.create_user(connection, 'waits@example.test', 'x')
         other = await store.create_user(connection, 'other-waits@example.test', 'x')
@@ -421,7 +421,13 @@ async def test_the_chat_list_says_what_a_waiting_chat_waits_for(pool: Pool) -> N
                 details={},
             )
         await store.set_run_status(connection, run_id, 'waiting')
-        assert await store.waiting_for(connection, user.id) == {thread.id: 'approval'}
+        waits = await store.waiting_for(connection, user.id)
+        assert {thread_id: kind for thread_id, (kind, _) in waits.items()} == {thread.id: 'approval'}
+        cursor = await connection.execute(
+            'SELECT created_at FROM sammy.asks WHERE occurrence = 2 AND run_id = %s', (run_id,)
+        )
+        approval = await cursor.fetchone()
+        assert approval is not None and waits[thread.id][1] == approval['created_at']
         assert await store.waiting_for(connection, other.id) == {}
 
 
