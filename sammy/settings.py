@@ -100,12 +100,31 @@ class Settings(BaseSettings):
     channel_backends: Annotated[list[str], NoDecode] = Field(default_factory=list[str])
     """Extra chat platforms (`sammy.channels.registry`), comma-separated `module:function` factories that take the
     settings and return a `Channel`, or None when not configured. Tests add a fake platform this way."""
+    whatsapp_access_token: SecretStr | None = None
+    """WhatsApp (`sammy.channels.whatsapp`): a system user's permanent token with `whatsapp_business_messaging`. On only
+    with the phone number id, the app secret and the verify token too."""
+    whatsapp_phone_number_id: str | None = None
+    """The id of the business phone number Sammy writes from (not the number itself), from WhatsApp > API Setup."""
+    whatsapp_app_secret: SecretStr | None = None
+    """The Meta app's secret, which signs every webhook (`X-Hub-Signature-256`)."""
+    whatsapp_verify_token: SecretStr | None = None
+    """Any string, entered as the webhook's verify token too: Meta sends it back once, when the webhook is set up."""
+    whatsapp_template: str = 'sammy_update'
+    """The approved template sent outside the 24-hour window, which says "Sammy has an update for you"."""
+    whatsapp_template_language: str = 'en'
 
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
     history_limit: int = 40
 
-    @field_validator('composio_api_key', mode='before')
+    @field_validator(
+        'composio_api_key',
+        'whatsapp_access_token',
+        'whatsapp_phone_number_id',
+        'whatsapp_app_secret',
+        'whatsapp_verify_token',
+        mode='before',
+    )
     @classmethod
     def blank_is_unset(cls, value: object) -> object:
         """`COMPOSIO_API_KEY=` (as in `.env.example`) means no Composio, not a key that is empty."""

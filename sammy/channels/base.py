@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from datetime import datetime, timedelta
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 from starlette.responses import Response
@@ -30,6 +31,10 @@ class Capabilities:
     """Whether conversations can be threads inside a channel (Slack, Discord)."""
     max_file_bytes: int
     """The largest file the bot can send; a larger one is sent as a link to the chat on the web."""
+    reply_window: timedelta | None = None
+    """How long after a chat's last message the bot may write to it freely (WhatsApp: 24 hours); None for no limit.
+    Outside it the chat's messages are held, the platform's re-engagement message is sent once (`Reopens`), and the
+    held messages go out when the chat writes again (`sammy.channels.outbound`)."""
 
 
 class _Frozen(BaseModel):
@@ -81,6 +86,8 @@ class Inbound(_Frozen):
     """A button press on an ask."""
     answer_message_id: str | None = None
     """The message whose button was pressed."""
+    sent_at: datetime | None = None
+    """When the user sent it, if the platform says; a reply window counts from it (else from when it arrived)."""
 
 
 class Button(_Frozen):
@@ -152,3 +159,13 @@ class Channel(Protocol):
     async def download(self, file: InboundFile) -> bytes: ...
 
     async def aclose(self) -> None: ...
+
+
+@runtime_checkable
+class Reopens(Protocol):
+    """What a platform with a reply window (`Capabilities.reply_window`) implements as well."""
+
+    async def reopen(self, chat_id: str) -> str:
+        """Send the one message the platform allows outside the window (WhatsApp: an approved template), which asks
+        the user to write back; returns the platform's id for it."""
+        ...

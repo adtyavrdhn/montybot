@@ -4,6 +4,7 @@
 receive(name, inbound)                 the webhook (sammy.channels.api), or a platform's own gateway loop
   DBOS workflow id channel:<name>:<delivery id>: a delivery the platform sends twice is handled once
 receive_message                        @DBOS.workflow
+  a platform with a reply window:      step channel.seen: the chat's window opens; messages held for it go out
   step channel.who                     the linked Sammy user, if any
   unlinked: step channel.link          a link code in a direct chat (or a web-issued code: linked); nothing else
   a button press: step channel.answer  the ask's answer (first answer wins, on any surface), then the ask's
@@ -65,6 +66,8 @@ async def receive_message(name: str, inbound: Inbound) -> str:
             return 'off'
         chat = Chat(channel=name, chat_id=inbound.chat_id)
         key = f'inbound:{name}:{inbound.delivery_id}'
+        if channel.capabilities.reply_window is not None:
+            await DBOS.run_step_async({**RECORD, 'name': 'channel.seen'}, seen, resources, chat, inbound)
         user_id = await DBOS.run_step_async({'name': 'channel.who'}, who, resources, name, inbound.sender_id)
         if user_id is None:
             await DBOS.run_step_async({**RECORD, 'name': 'channel.link'}, unlinked, resources, chat, inbound, key)
@@ -76,6 +79,8 @@ async def receive_message(name: str, inbound: Inbound) -> str:
             if edit is not None and channel.capabilities.edits:
                 await DBOS.run_step_async({**SEND, 'name': 'channel.edit'}, edit_message, name, *edit)
             return 'answered'
+        if not inbound.text.strip() and not inbound.files:
+            return 'empty'  # such as a press of a platform's re-engagement button: it only opened the window
         if await DBOS.run_step_async(
             {**RECORD, 'name': 'channel.reply'}, answer_text, resources, chat, user_id, inbound.text, key
         ):
@@ -100,6 +105,11 @@ async def receive_message(name: str, inbound: Inbound) -> str:
             return 'busy'
         await workflows.start(run_id)
         return 'started'
+
+
+async def seen(resources: Resources, chat: Chat, inbound: Inbound) -> None:
+    async with resources.pool.connection() as connection, connection.transaction():
+        await channel_store.seen(connection, chat, inbound.sent_at)
 
 
 async def who(resources: Resources, name: str, sender_id: str) -> str | None:

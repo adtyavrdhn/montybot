@@ -7,8 +7,13 @@ producers (inside steps that exist already, so no run's step numbering changes)
   notifications.notify                notify: an ask of a run from a chat goes to that chat; anything else is a ping
                                       to each linked direct chat that wants pings
 Pump (in the app, every 0.5 s)        the oldest unsent row of each chat -> deliver(row_id), workflow id
-                                      channel-send:<row id>, so every replica and restart starts it once
+                                      channel-send:<row id> (:<n> after its n-th release from a hold), so every
+                                      replica and restart starts it once
 deliver(row_id)                       @DBOS.workflow
+  a platform with a reply window, closed:
+    step channel.window               open, closed, or closed and not yet reopened since the chat last wrote
+    step channel.reopen               the platform's re-engagement message, once per closed window (`Reopens`)
+    step channel.hold                 the row waits until the chat writes (`inbound`: store.seen releases it)
   split the formatted text at the platform's limit (pure: a replay splits the same way)
   step channel.send.<i>               one per part, retried
   step channel.file.<i>               one per file (too big for the platform: a link to the chat instead)
@@ -32,8 +37,8 @@ from dbos import DBOS, SetWorkflowID, StepOptions
 
 from sammy import attachments, store
 from sammy.channels import store as channel_store
-from sammy.channels.base import Button, Capabilities, Channel, Outgoing, button_data
-from sammy.channels.store import Chat, OutboxRow
+from sammy.channels.base import Button, Capabilities, Channel, Outgoing, Reopens, button_data
+from sammy.channels.store import Chat, OutboxRow, Window
 from sammy.channels.text import split
 from sammy.db import Connection
 from sammy.models import Ask, NoticeKind
@@ -137,6 +142,8 @@ async def _deliver(resources: Resources, row_id: str, annotate: Callable[[str, s
         return 'gone'
     annotate('channel', row.channel)
     channel = _channel(row.channel)
+    if await _held(resources, channel, row):
+        return 'held'
     outgoing = row.outgoing
     parts = split(channel.format(outgoing.text), channel.capabilities.max_text) if outgoing.text else []
     buttons = outgoing.buttons[: channel.capabilities.max_buttons]
@@ -149,6 +156,40 @@ async def _deliver(resources: Resources, row_id: str, annotate: Callable[[str, s
         sent.append(await DBOS.run_step_async({**SEND, 'name': f'channel.file.{i}'}, send_file, row, file_id))
     await DBOS.run_step_async({**RECORD, 'name': 'channel.sent'}, record_sent, resources, row_id, sent, outgoing.secret)
     return 'sent'
+
+
+async def _held(resources: Resources, channel: Channel, row: OutboxRow) -> bool:
+    """Outside the chat's reply window, if the platform has one: the re-engagement message once, and the row held."""
+    window = channel.capabilities.reply_window
+    if window is None:
+        return False
+    seconds = window.total_seconds()
+    state = await DBOS.run_step_async({**RECORD, 'name': 'channel.window'}, window_of, resources, row, seconds)
+    if state == 'open':
+        return False
+    if state == 'reopen':
+        await DBOS.run_step_async({**SEND, 'name': 'channel.reopen'}, reopen, row)
+    return await DBOS.run_step_async(
+        {**RECORD, 'name': 'channel.hold'}, hold, resources, row, seconds, state == 'reopen'
+    )
+
+
+async def window_of(resources: Resources, row: OutboxRow, seconds: float) -> Window:
+    async with resources.pool.connection() as connection:
+        return await channel_store.window(connection, Chat(channel=row.channel, chat_id=row.chat_id), seconds)
+
+
+async def reopen(row: OutboxRow) -> str:
+    channel = _channel(row.channel)
+    if not isinstance(channel, Reopens):
+        raise TypeError(f'the chat platform {row.channel!r} has a reply window but cannot reopen it')
+    return await channel.reopen(row.chat_id)
+
+
+async def hold(resources: Resources, row: OutboxRow, seconds: float, reopened: bool) -> bool:
+    chat = Chat(channel=row.channel, chat_id=row.chat_id)
+    async with resources.pool.connection() as connection, connection.transaction():
+        return await channel_store.hold(connection, row.id, chat, seconds, reopened)
 
 
 def _channel(name: str) -> Channel:
@@ -221,13 +262,19 @@ class Pump:
         """Start the workflow of each chat's next row; returns how many were started."""
         async with self._resources.pool.connection() as connection:
             rows = await channel_store.next_rows(connection, self._resources.channels.names)
-        self._started &= set(rows)
+        workflow_ids = {row_id: workflow_id(row_id, releases) for row_id, releases in rows}
+        self._started &= set(workflow_ids.values())
         started = 0
-        for row_id in rows:
-            if row_id in self._started:
+        for row_id, made in workflow_ids.items():
+            if made in self._started:
                 continue
-            with SetWorkflowID(f'channel-send:{row_id}'):
+            with SetWorkflowID(made):
                 await DBOS.start_workflow_async(deliver, row_id)
-            self._started.add(row_id)
+            self._started.add(made)
             started += 1
         return started
+
+
+def workflow_id(row_id: str, releases: int) -> str:
+    """A row's delivery workflow: a new one each time it is released from a hold, as the one that held it finished."""
+    return f'channel-send:{row_id}:{releases}' if releases else f'channel-send:{row_id}'
