@@ -211,6 +211,15 @@ Considered:
   the user returns, launch a fresh Chromium from the cookie jar for them to drive.
 - **Return control:** the agent resumes with a short summary of what the user did, not screenshots.
 
+## Steering a run
+
+A message the user sends while a run works joins that run instead of being refused. The gateway stores it on the
+run, under a lock on the run's row, so the run cannot finish in between. Before each model request, the workflow
+reads the messages it has not read yet in a DBOS step, which records which ones it read, so a replay after a
+restart reads the same ones. They go into that request as the user's, through Pydantic AI's pending-message queue
+(`RunContext.enqueue`). If a run finishes before it reads a message, the message starts the thread's next run, so
+nothing is lost and a thread never has two runs at once.
+
 ## Data
 
 - **Cookie jar:** envelope-encrypted with a key per tenant (KMS). Saved after every run and every hand-off. One writer

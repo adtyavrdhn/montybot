@@ -7,9 +7,12 @@ POST /api/threads/<id>/messages  (sammy.api)
 run_thread(run_id)                                   @DBOS.workflow
   step run.start        status running, load the run and the thread's history, the message's files into /work/uploads
   agent.run(...)        model requests are steps (DBOSDurability); browser and memory calls are our own steps;
-                        ask_user, approvals and hand-offs wait in DBOS.recv (sammy.approvals)
-  step run.finish       append the new messages (files as notes: sammy.attachments), status done (or failed)
+                        ask_user, approvals and hand-offs wait in DBOS.recv (sammy.approvals); before each model
+                        request, step steer.<n> reads what the user sent meanwhile (sammy.steering)
+  step run.finish       append the new messages (files as notes: sammy.attachments), status done (or failed); what
+                        the user sent that the run never read becomes the thread's next run
   step run.close        the browser service saves the user's sign-ins and closes the run's browser
+  start(next run)       if run.finish made one
 ```
 
 If the app stops, DBOS starts the workflow again when the app comes back (same `executor_id`), and every finished
@@ -34,10 +37,10 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from sammy import attachments, store, streaming
+from sammy import attachments, steering, store, streaming
 from sammy.browser.contract import BrowserError
 from sammy.browser.service import UnknownRun
-from sammy.deps import RunDeps
+from sammy.deps import RunDeps, Steered
 from sammy.models import FINISHED, Attachment, Run, RunStatus, Schedule
 from sammy.observability import timed, timing
 from sammy.resources import Resources, current
@@ -115,6 +118,7 @@ async def run_thread(run_id: str) -> str:
         local_time = started[3] if len(started) > 3 else ''
         squirrel_name = started[4] if len(started) > 4 else ''  # and before the squirrel's name, a 4-tuple
         files: list[Attachment] = started[5] if len(started) > 5 else []  # and before files, a 5-tuple
+        steers = len(started) > 6  # and before steering, a 6-tuple: such a run has no steer steps to replay
         if run.status in FINISHED:
             return run.status  # stopped before its workflow started
         lifecycle.set_attributes({'thread_id': run.thread_id, 'user_id': run.user_id, 'trigger': run.trigger})
@@ -124,8 +128,14 @@ async def run_thread(run_id: str) -> str:
         *history, asked = await attachments.with_files(resources.pool, run.user_id, [*history, asked])
         prompt = next(p.content for p in asked.parts if isinstance(p, UserPromptPart))
         deps = RunDeps(
-            resources=resources, run=run, schedule=schedule, local_time=local_time, squirrel_name=squirrel_name
+            resources=resources,
+            run=run,
+            schedule=schedule,
+            local_time=local_time,
+            squirrel_name=squirrel_name,
+            steered=Steered(on=steers),
         )
+        next_run: str | None = None
         try:
             try:
                 with timing('run.agent'):
@@ -147,7 +157,7 @@ async def run_thread(run_id: str) -> str:
                     raise  # a replay that does not match its recording is a bug to see, not a failed task
                 return 'failed'
             new_messages = ModelMessagesTypeAdapter.dump_json(attachments.without_files(result.new_messages()))
-            await DBOS.run_step_async(
+            next_run = await DBOS.run_step_async(
                 {**RETRIED, 'name': 'run.finish'}, finish_run, resources, run, new_messages, result.output
             )
             return 'done'
@@ -156,6 +166,8 @@ async def run_thread(run_id: str) -> str:
                 await DBOS.run_step_async({**RETRIED, 'name': 'run.close'}, close_browser, resources, run)
             finally:
                 streaming.discard(run_id)
+            if next_run is not None:  # after run.close, which must not close the next run's browser
+                await start(next_run)
 
 
 # The workflow starts in this context: a run an app traced joins the app's trace; any other run is a trace of its own,
@@ -168,7 +180,7 @@ async def start(run_id: str) -> WorkflowHandleAsync[str]:
 
 async def start_run(
     resources: Resources, run_id: str
-) -> tuple[Run, bytes, Schedule | None, str, str, list[Attachment]]:
+) -> tuple[Run, bytes, Schedule | None, str, str, list[Attachment], bool]:
     with timing('run.start'):
         async with resources.pool.connection() as connection, connection.transaction():
             run = await store.load_run(connection, run_id)
@@ -180,7 +192,8 @@ async def start_run(
         squirrel_name = user.squirrel_name if user is not None else ''
         files = await attachments.into_workspace(resources, run.user_id, run.id)
         history_json = ModelMessagesTypeAdapter.dump_json(history)
-        return run, history_json, schedule, local_time_in(timezone), squirrel_name, files
+        # The last item says the run reads messages sent while it works (`steers` above).
+        return run, history_json, schedule, local_time_in(timezone), squirrel_name, files, True
 
 
 def local_time_in(timezone: str) -> str:
@@ -189,16 +202,19 @@ def local_time_in(timezone: str) -> str:
     return f'{now:%A} {now.day} {now:%B %Y, %H:%M} ({timezone})'
 
 
-async def finish_run(resources: Resources, run: Run, new_messages: bytes, output: str) -> None:
+async def finish_run(resources: Resources, run: Run, new_messages: bytes, output: str) -> str | None:
+    """Returns the id of the thread's next run, if what the user sent meanwhile made one (`steering.hand_on`)."""
     # A visible reply promises the user's lease is free. Keep existing DBOS step order for paused-run replay;
     # cleanup belongs to this retried terminal step, and the final run.close remains idempotent.
     await close_browser(resources, run)
     with timing('run.finish'):
         async with resources.pool.connection() as connection, connection.transaction():
             if await store.lock_finished(connection, run.id):
-                return  # this step ran before and committed, but DBOS had not recorded it
+                # this step ran before and committed, but DBOS had not recorded it
+                return await steering.started_after(connection, run.id)
             await store.append_history(connection, run.thread_id, ModelMessagesTypeAdapter.validate_json(new_messages))
             await store.finish_run(connection, run.id, 'done', output=output)
+            return await steering.hand_on(connection, run)
 
 
 async def fail_run(resources: Resources, run: Run, error_type: str, notice: str = FAILURE_NOTICE) -> None:
@@ -226,13 +242,10 @@ async def end_run(resources: Resources, run: Run, status: RunStatus, notice: str
         if await store.lock_finished(connection, run.id):
             return False
         files = await attachments.users_files(connection, run.id)
+        sent = await steering.close(connection, run.id)  # what the user sent while it worked, read or not
+        asked = [UserPromptPart(content=attachments.prompt(run.prompt, files)), *map(UserPromptPart, sent)]
         await store.append_history(
-            connection,
-            run.thread_id,
-            [
-                ModelRequest(parts=[UserPromptPart(content=attachments.prompt(run.prompt, files))]),
-                ModelResponse(parts=[TextPart(content=notice)]),
-            ],
+            connection, run.thread_id, [ModelRequest(parts=asked), ModelResponse(parts=[TextPart(content=notice)])]
         )
         await store.finish_run(connection, run.id, status, output=notice, error=error)
         await store.close_open_asks(connection, run.id)

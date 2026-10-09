@@ -20,6 +20,20 @@ class Asked:
 
 
 @dataclass
+class Steered:
+    """Whether this run reads the messages the user sends while it works (`sammy.steering`), and how many model
+    requests have looked for them. Off for a run recorded before steering: its replay must make the same steps.
+    Counted in workflow code, which DBOS replays in the same order."""
+
+    on: bool = False
+    count: int = 0
+
+    def next(self) -> int:
+        self.count += 1
+        return self.count
+
+
+@dataclass
 class CodeState:
     """The run's Monty session between `run_code` calls: an id in monty-server's store (or bytes, locally). Set from
     each `run_code` step's recorded result, so a replay restores it."""
@@ -56,6 +70,7 @@ class RunDeps:
     code: CodeState = field(default_factory=CodeState)
     notified: Notified = field(default_factory=Notified)
     connected: Connected = field(default_factory=Connected)
+    steered: Steered = field(default_factory=Steered)
 
     @property
     def user_id(self) -> str:

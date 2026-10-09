@@ -8,9 +8,12 @@ same messages run against a real model with SAMMY_TEST_MODEL.
 from __future__ import annotations
 
 import io
+import os
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from PIL import Image
 from pydantic_ai.messages import (
@@ -25,6 +28,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from sites.shop import PRICES
 
 
 @dataclass
@@ -34,6 +38,8 @@ class Turn:
     instructions: str = ''
     seen: list[str] = field(default_factory=list[str])
     """Each thing the user sent in the whole conversation, as the model got it (`seen_in`)."""
+    later: list[str] = field(default_factory=list[str])
+    """What the user sent while this run worked, after `prompt` (`sammy.steering`)."""
 
     @property
     def last(self) -> str:
@@ -112,20 +118,28 @@ def favourite_colour(turn: Turn) -> ModelResponse:
     return say(f'Got it: your favourite colour is {colour}.')
 
 
+def ordered(turn: Turn) -> str:
+    """Eggs, unless the user changed the order while the run worked ("make it milk")."""
+    changed = (item for item in PRICES if item != 'eggs' and any(item in text.lower() for text in turn.later))
+    return next(changed, 'eggs')
+
+
 def order_eggs(turn: Turn) -> ModelResponse:
+    item = ordered(turn)
     if turn.returns and turn.returns[-1].tool_name == 'run_code' and '\nError: ' in '\n' + turn.last:
         return say(f'My code failed: {turn.last}')
     if not turn.returns:
         # `shop` is used again after the hand-off: Monty keeps the session's variables across the pause.
-        return run(f"shop = {turn.url!r}\nawait goto(shop + '/')\nprint(await fixture_click('#add-eggs'))")
+        return run(f"shop = {turn.url!r}\nawait goto(shop + '/')\nprint(await fixture_click('#add-{item}'))")
     if 'Title: Sign in' in turn.last:
         if turn.called('hand_off'):
             return say('You are still not signed in, so I stopped.')
         return call('hand_off', reason='Please sign in to the shop, then hand the browser back.')
-    if 'In cart: eggs' not in turn.last and not turn.called('commit'):
-        return run("await goto(shop + '/')\nprint(await fixture_click('#add-eggs'))")
+    if f'In cart: {item}' not in turn.last and not turn.called('commit'):
+        return run(f"await goto(shop + '/')\nprint(await fixture_click('#add-{item}'))")
     if not turn.called('commit'):
-        return call('commit', target='#place-order', description='Place the order for eggs ($3.20)')
+        description = f'Place the order for {item} (${PRICES[item]:.2f})'
+        return call('commit', target='#place-order', description=description)
     result = turn.result_of('commit')
     order = re.search(r'Order #\d+: [a-z, ]+, \$\d+\.\d\d', result)
     if order is None:
@@ -250,6 +264,17 @@ def share_report(turn: Turn) -> ModelResponse:
 
 def fail(turn: Turn) -> ModelResponse:
     raise RuntimeError('the model provider is down')
+
+
+def hello_on_cue(turn: Turn) -> ModelResponse:
+    """Says it has started (a file in SAMMY_TEST_CUE), then answers once the test makes the file `go`: so a test can
+    send a message after the run's last model request began. Plain `def`: the model runs it on a thread."""
+    cue = Path(os.environ['SAMMY_TEST_CUE'])
+    (cue / 'started').touch()
+    deadline = time.monotonic() + 60
+    while not (cue / 'go').exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return say('Hello on cue.')
 
 
 def order_from_code(turn: Turn) -> ModelResponse:
@@ -420,6 +445,7 @@ SCRIPTS: dict[str, Script] = {
     'What are my schedules': my_schedules,
     'Order eggs straight from code at': order_from_code,
     'Fail please': fail,
+    'Say hello on cue': hello_on_cue,  # before 'Say hello', which it starts with
     'Say hello': hello,
     'Ask me my favourite colour': favourite_colour,
     'What time is it for me': users_time,
@@ -459,16 +485,28 @@ def seen_in(messages: list[ModelMessage]) -> list[str]:
     return [line.replace('\n', '\\n') for line in seen]  # one line each, whatever a file's text holds
 
 
-def current_turn(messages: list[ModelMessage]) -> Turn:
-    """The user's latest message and the tool results since."""
-    start = max(
-        i
-        for i, m in enumerate(messages)
-        if isinstance(m, ModelRequest) and any(isinstance(p, UserPromptPart) for p in m.parts)
+def starts_run(messages: list[ModelMessage], index: int) -> bool:
+    """Whether the request at `index` has the user's message that started a run. One sent while the run worked goes
+    with tool results, in their request or the one right after it."""
+    message = messages[index]
+    return (
+        isinstance(message, ModelRequest)
+        and any(isinstance(p, UserPromptPart) for p in message.parts)
+        and not any(isinstance(p, ToolReturnPart) for p in message.parts)
+        and (index == 0 or not isinstance(messages[index - 1], ModelRequest))
     )
-    content = next(p.content for p in messages[start].parts if isinstance(p, UserPromptPart))  # pyright: ignore[reportAttributeAccessIssue]
+
+
+def current_turn(messages: list[ModelMessage]) -> Turn:
+    """The user's latest message, the tool results since, and what the user sent while the run worked."""
+    start = max(i for i in range(len(messages)) if starts_run(messages, i))
+    said = [
+        p for m in messages[start:] if isinstance(m, ModelRequest) for p in m.parts if isinstance(p, UserPromptPart)
+    ]
+    content = said[0].content
     # A message with files is a list: the text first, if there is any.
     prompt = content if isinstance(content, str) else next((c for c in content if isinstance(c, str)), '')
+    later = [p.content for p in said[1:] if isinstance(p.content, str)]
     returns = [
         part
         for message in messages[start:]
@@ -478,7 +516,7 @@ def current_turn(messages: list[ModelMessage]) -> Turn:
     ]
     latest = messages[-1]
     instructions = (latest.instructions or '') if isinstance(latest, ModelRequest) else ''
-    return Turn(prompt=prompt, returns=returns, instructions=instructions, seen=seen_in(messages))
+    return Turn(prompt=prompt, returns=returns, instructions=instructions, seen=seen_in(messages), later=later)
 
 
 def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:

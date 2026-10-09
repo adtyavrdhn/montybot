@@ -99,6 +99,7 @@ h1, h2 { letter-spacing: -.045em; font-weight: 600; line-height: 1.15; }
 .msg { max-width: 88%; padding: 14px 18px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .96rem; line-height: 1.65; flex-shrink: 0; }
 .msg.event { align-self: center; max-width: 100%; padding: 4px 12px; border-radius: 999px; background: var(--lavender); color: var(--muted); font-size: .8rem; }
 .msg.user { align-self: flex-end; background: #efe3f3; border-bottom-right-radius: 4px; }
+.msg.user small.unread { display: block; margin-top: 4px; color: var(--muted); font-size: .75rem; }
 .msg.assistant { align-self: flex-start; padding-left: 0; max-width: 100%; white-space: normal; }
 .msg.assistant p, .msg.assistant ul, .msg.assistant ol, .msg.assistant pre, .msg.assistant .table-scroll { margin: 0 0 .8em; }
 .msg.assistant > :last-child { margin-bottom: 0; }

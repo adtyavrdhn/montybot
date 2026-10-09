@@ -95,6 +95,12 @@ class MockAPI:
             ]
             result = {'thread_id': THREAD, 'run_id': RUN}
             status = 201
+        elif path == f'/api/threads/{THREAD}/messages' and method == 'POST' and self.run is not None:
+            assert isinstance(body, dict)  # as the server does while a run works: the message joins it
+            self.messages.append({'role': 'user', 'text': body['text'], 'unread': True})
+            self.run = {**self.run, 'unread': 1}
+            result = {'thread_id': THREAD, 'run_id': self.run['id'], 'steered': True}
+            status = 201
         elif path == f'/api/threads/{THREAD}':
             result = {'title': 'Compare flights to Lisbon', 'messages': self.messages, 'run': self.run}
         elif path.startswith('/api/attachments/'):
@@ -454,7 +460,7 @@ def streaming_chat(page: Page, mock: MockAPI) -> None:
     mock.run = {'id': 'run', 'status': 'running', 'activity': [], 'ask': None}
     page.goto(f'http://sammy.test/#/t/{THREAD}')
     expect(page.locator('#stop')).to_be_visible()
-    expect(page.locator('#send')).not_to_be_visible()
+    expect(page.locator('#send')).to_be_visible()  # a message sent now joins the run
     page.wait_for_function('window.eventSources.length === 1')
     assert page.evaluate('window.eventSources[0].url') == '/api/runs/run/events'
 
@@ -812,6 +818,26 @@ def test_skip_link_and_a_working_chat_say_where_you_are(frontend: tuple[Page, Mo
     page.keyboard.press('Enter')
     expect(page.locator('#message')).to_be_focused()
     expect(page).to_have_url(f'http://sammy.test/#/t/{THREAD}')  # still in the chat
+
+
+def test_a_message_sent_while_sammy_works_shows_until_sammy_reads_it(frontend: tuple[Page, MockAPI]) -> None:
+    page, mock = frontend
+    streaming_chat(page, mock)
+    expect(page.locator('#message')).to_have_attribute('placeholder', re.compile('Add to what it is doing'))
+    page.fill('#message', 'Oh, and get the large size')
+    page.click('#send')
+    expect(page.locator('.msg.user').last).to_contain_text('Oh, and get the large size')
+    expect(page.locator('.msg.user small.unread')).to_have_text('Sammy will see this next')
+    expect(page.locator('#message')).to_have_value('')
+    expect(page.locator('#stop')).to_be_visible()  # still the same run
+    assert page.evaluate('window.eventSources.length') == 1
+
+    del mock.messages[-1]['unread']  # Sammy read it
+    assert mock.run is not None
+    mock.run = {**mock.run, 'thread_id': THREAD, 'unread': 0}
+    emit(page, 'status', mock.run)
+    expect(page.locator('.msg.user small.unread')).to_have_count(0)
+    expect(page.locator('.msg.user').last).to_have_text('Oh, and get the large size')
 
 
 def test_enter_while_sammy_waits_goes_to_the_question(frontend: tuple[Page, MockAPI]) -> None:
