@@ -161,8 +161,9 @@ def test_a_requested_secret_is_used_in_a_request_and_never_seen(
     dumped = dump_spans(spans)
     assert TOKEN not in dumped
     assert 'Buy oat milk' in dumped  # content is exported: the token is not, for that reason alone
+    # The request that went, by host; the refused one records no host, as a refused URL's host can hold a value.
     http_spans = [span for span in spans if span.name == 'code.http']
-    assert [(span.attributes or {}).get('http.host') for span in http_spans] == ['127.0.0.1']
+    assert [(span.attributes or {}).get('http.host') for span in http_spans] == ['127.0.0.1', None]
 
     # Sealed in its own row; in the clear nowhere, DBOS's recorded steps and messages included.
     assert stored_where(database_url, TOKEN) == set()
