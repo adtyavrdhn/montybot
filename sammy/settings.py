@@ -98,9 +98,19 @@ class Settings(BaseSettings):
 
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
-    history_limit: int = 40
+    history_window: int = Field(default=50, gt=0)
+    """A chat's latest messages that runs always get word for word, besides the summary of older ones
+    (`sammy/history.py`)."""
+    history_batch: int = Field(default=50, gt=0)
+    """Once more than `history_window` + this many of a chat's messages are outside its summary, the oldest this many
+    go into it."""
+    history_summary_chars: int = Field(default=20_000, gt=0)
+    """The longest a chat's summary may be."""
+    history_summary_model: str | None = None
+    """The model that writes the summaries, named as `model` is; a cheap one, such as `claude-code:claude-haiku-4-5`.
+    Unset: `model`."""
 
-    @field_validator('composio_api_key', mode='before')
+    @field_validator('composio_api_key', 'history_summary_model', mode='before')
     @classmethod
     def blank_is_unset(cls, value: object) -> object:
         """`COMPOSIO_API_KEY=` (as in `.env.example`) means no Composio, not a key that is empty."""

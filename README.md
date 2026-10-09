@@ -29,8 +29,12 @@ Every layer of Sammy avoids paying for what it doesn't need.
   snapshots included) are cached between a run's model calls (`CACHE` in `sammy/agent.py`). The bulk of the
   conversation is billed at cache-read prices instead of full price.
 - **Token diets everywhere.**
-  - History is trimmed to the last `HISTORY_LIMIT` (40) messages, cut at a user turn so the conversation stays
-    whole with no tool call cut from its result (`recent()` in `sammy/workflows.py`).
+  - Long chats are summarised, not cut off. Once more than `HISTORY_WINDOW` + `HISTORY_BATCH` (50 + 50) messages
+    are outside a chat's summary, a background DBOS workflow puts the oldest batch into it, cut at a user turn so no
+    tool call is cut from its result. The summary is written by a cheap model (`HISTORY_SUMMARY_MODEL`) and capped at
+    `HISTORY_SUMMARY_CHARS` (20,000). Runs get the summary, as a cached system prompt, then the messages after it, so
+    the prompt stays the same size however long the chat gets. The agent's `search_history` and `read_history` tools
+    give back any older message word for word (`sammy/history.py`).
   - Pages reach the model as a compact text outline (headings, text, numbered controls) of at most 12,000
     characters, not raw HTML or a screenshot for every step (`sammy/browser/snapshot.py`).
   - Images are shrunk to 1568 px before the model sees them. Earlier turns' files come back only within a 16 MB

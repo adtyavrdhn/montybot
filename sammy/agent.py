@@ -20,6 +20,7 @@ from sammy.code import code_tools
 from sammy.cpython import INSTRUCTIONS as CPYTHON_INSTRUCTIONS
 from sammy.cpython import cpython_tools
 from sammy.deps import RunDeps
+from sammy.history import history_tools
 from sammy.integration_tools import INSTRUCTIONS as INTEGRATION_INSTRUCTIONS
 from sammy.integration_tools import connected_integrations, integration_tools
 from sammy.memory import memory_tools, recall
@@ -122,6 +123,7 @@ def build_agent(model: Model | str) -> Agent[RunDeps, str]:
             browser_tools,
             user_tools,
             memory_tools,
+            history_tools,
             schedule_tools,
             integration_tools,
         ],
