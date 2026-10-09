@@ -11,7 +11,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -23,6 +23,7 @@ from sammy import store
 from sammy.browser.contract import BrowserBackend, TabsBackend
 from sammy.browser.host import BrowserHost, Detour
 from sammy.browser.tunnel import NOWHERE, Place, Tunnels
+from sammy.channels.registry import Channels
 from sammy.crypto import deployment_key
 from sammy.db import Pool, create_pool, migrate
 from sammy.imports import import_object
@@ -48,6 +49,8 @@ class Resources:
     tunnels: Tunnels | None = None
     """The users' Mac tunnels; None when `mac_tunnel` is off or the engine has no egress proxy to swap."""
     integrations: Integrations
+    channels: Channels = field(default_factory=Channels)
+    """The chat platforms this server talks to (`sammy.channels`)."""
     # Retained for the experimental Jev helpers; production never constructs or calls this model.
     jev_model: Model | None = None
 
@@ -155,6 +158,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
     )
     model = load_model(settings.model)
     agent = build_agent(model)
+    channels = Channels.from_settings(settings)
     async with browser, open_monty(settings) as monty:
         _current = Resources(
             settings=settings,
@@ -167,6 +171,7 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
             workspaces=Workspaces(settings.workspaces_dir),
             tunnels=tunnels,
             integrations=integrations,
+            channels=channels,
         )
         try:
             DBOS.launch()
@@ -177,4 +182,5 @@ async def open_resources(settings: Settings) -> AsyncGenerator[Resources]:
             if tunnels is not None:
                 await tunnels.aclose()
             await integrations.aclose()
+            await channels.aclose()
             await pool.close()

@@ -19,6 +19,7 @@ step returns its recorded result instead of running again.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -37,6 +38,8 @@ from pydantic_ai.messages import (
 from sammy import attachments, store, streaming
 from sammy.browser.contract import BrowserError
 from sammy.browser.service import UnknownRun
+from sammy.channels.outbound import enqueue_reply
+from sammy.db import Connection
 from sammy.deps import RunDeps
 from sammy.models import FINISHED, Attachment, Run, RunStatus, Schedule
 from sammy.observability import timed, timing
@@ -166,6 +169,18 @@ async def start(run_id: str) -> WorkflowHandleAsync[str]:
         return await DBOS.start_workflow_async(run_thread, run_id)
 
 
+async def create_message_run(
+    connection: Connection, *, user_id: str, thread_id: str, run_id: str, text: str, attachment_ids: Sequence[str]
+) -> list[str]:
+    """Record a user's message as its run, with the files they sent (uploads, `attachments.upload`); returns the
+    files' names. The web app and the chat apps both send messages this way. Raises `store.ActiveRun`,
+    `store.ThreadGone`, `attachments.AttachmentGone` or `attachments.TooMuch`. Call in a transaction; then `start`."""
+    await store.create_run(
+        connection, run_id=run_id, user_id=user_id, thread_id=thread_id, prompt=text, trigger='message'
+    )
+    return await attachments.attach(connection, user_id, run_id, attachment_ids)
+
+
 async def start_run(
     resources: Resources, run_id: str
 ) -> tuple[Run, bytes, Schedule | None, str, str, list[Attachment]]:
@@ -199,6 +214,7 @@ async def finish_run(resources: Resources, run: Run, new_messages: bytes, output
                 return  # this step ran before and committed, but DBOS had not recorded it
             await store.append_history(connection, run.thread_id, ModelMessagesTypeAdapter.validate_json(new_messages))
             await store.finish_run(connection, run.id, 'done', output=output)
+            await _reply_to_chat(connection, resources, run, output)
 
 
 async def fail_run(resources: Resources, run: Run, error_type: str, notice: str = FAILURE_NOTICE) -> None:
@@ -236,7 +252,20 @@ async def end_run(resources: Resources, run: Run, status: RunStatus, notice: str
         )
         await store.finish_run(connection, run.id, status, output=notice, error=error)
         await store.close_open_asks(connection, run.id)
+        await _reply_to_chat(connection, resources, run, notice)
     return True
+
+
+async def _reply_to_chat(connection: Connection, resources: Resources, run: Run, output: str) -> None:
+    """A run from a chat app answers there too (`sammy.channels.outbound`), in the transaction that ends it."""
+    await enqueue_reply(
+        connection,
+        resources.settings.public_url,
+        run_id=run.id,
+        user_id=run.user_id,
+        thread_id=run.thread_id,
+        output=output,
+    )
 
 
 async def close_browser(resources: Resources, run: Run) -> None:

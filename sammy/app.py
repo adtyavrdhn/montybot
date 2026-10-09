@@ -17,6 +17,8 @@ from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from sammy import api, approvals, tunnel_api, workflows
+from sammy.channels import api as channels_api
+from sammy.channels.outbound import Pump
 from sammy.live import live_app
 from sammy.observability import ClientTraceContext
 from sammy.resources import Resources, open_resources
@@ -33,7 +35,8 @@ def create_app(settings: Settings) -> ASGIApp:
         async with open_resources(settings) as resources:
             await approvals.redeliver_answers(resources)
             await workflows.start_queued(resources)
-            yield {'resources': resources}
+            async with Pump(resources):  # sends what the chat apps' outbox holds
+                yield {'resources': resources}
 
     app = Starlette(
         routes=[
@@ -84,6 +87,12 @@ def create_app(settings: Settings) -> ASGIApp:
             Route('/integrations/mcp/callback', api.mcp_callback),
             Route('/api/memories', api.read_memories),
             Route('/api/memories/{memory_id:uuid}', api.remove_memory, methods=['DELETE']),
+            Route('/api/channels', channels_api.list_channels),
+            Route('/api/channels/link', channels_api.link_account, methods=['POST']),
+            Route('/api/channels/{name:str}/webhook', channels_api.webhook, methods=['GET', 'POST']),
+            Route('/api/channels/{name:str}/code', channels_api.new_code, methods=['POST']),
+            Route('/api/channels/{name:str}', channels_api.set_notify, methods=['PUT']),
+            Route('/api/channels/{name:str}', channels_api.unlink, methods=['DELETE']),
             Route('/api/telemetry', api.telemetry_settings),
             Route('/api/telemetry/{path:path}', api.forward_telemetry, methods=['POST']),
         ],

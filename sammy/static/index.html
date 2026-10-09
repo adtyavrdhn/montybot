@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/markdown.js" defer></script>
   <script src="/static/app.js" defer></script>
+  <script src="/static/channels.js" defer></script>
 </head>
 <body>
   <div id="app">
@@ -63,6 +64,7 @@
         <div class="drawer-tools">
           <button id="open-signins" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="4"/><path d="m11 12 8 8 3-3-3-3-2 2"/></svg> Saved browser data</button>
           <button id="open-integrations" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v4m6-4v4M7 7h10v4a5 5 0 0 1-10 0Zm5 9v5"/></svg> Integrations</button>
+          <button id="open-chat-apps" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4Z"/></svg> Chat apps</button>
           <button id="open-schedules" class="link"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16m-12 4h3"/></svg> Schedules</button>
           <button id="enable-notifications" class="link" hidden><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9Zm4 12h4"/></svg> <span id="notifications-label">Notify me when Sammy needs me</span></button>
           <button id="signout" class="link">Sign out</button>
@@ -156,6 +158,20 @@
             <summary class="group-title">More apps <span id="more-count" class="group-count"></span></summary>
             <ul id="more-list" class="integration-list" aria-label="More apps"></ul>
           </details>
+        </div>
+      </section>
+      <section id="chat-apps" class="page" aria-labelledby="chat-apps-title" hidden>
+        <div class="page-content">
+          <button class="secondary back">Back to chat</button>
+          <div class="page-heading"><span class="page-symbol" aria-hidden="true">✉</span><h2 id="chat-apps-title" tabindex="-1">Chat apps</h2></div>
+          <p class="muted">Message Sammy from the chat apps you already use. Link an app once, and your chats there are chats here too.</p>
+          <div id="link-card" class="page-note" hidden>
+            <strong>Link this chat app to your Sammy account?</strong>
+            <p>Only do this if you just messaged Sammy in the app yourself: whoever sent that message can then use Sammy as you.</p>
+            <button id="link-app" type="button">Link</button>
+          </div>
+          <p id="chat-apps-status" role="status"></p>
+          <ul id="chat-app-list" aria-label="Chat apps"></ul>
         </div>
       </section>
       <section id="schedules" class="page" aria-labelledby="schedules-title" hidden>

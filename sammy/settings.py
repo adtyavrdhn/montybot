@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -96,6 +97,10 @@ class Settings(BaseSettings):
     """Each user is `<prefix><user id>` in Composio. A Composio project shared with other apps must give each its own
     prefix: Sammy never lists, uses or removes a connection outside it."""
 
+    channel_backends: Annotated[list[str], NoDecode] = Field(default_factory=list[str])
+    """Extra chat platforms (`sammy.channels.registry`), comma-separated `module:function` factories that take the
+    settings and return a `Channel`, or None when not configured. Tests add a fake platform this way."""
+
     ask_timeout_seconds: float = 24 * 60 * 60
     """How long a run waits for the user to answer a question, an approval or a hand-off."""
     history_limit: int = 40
@@ -105,6 +110,13 @@ class Settings(BaseSettings):
     def blank_is_unset(cls, value: object) -> object:
         """`COMPOSIO_API_KEY=` (as in `.env.example`) means no Composio, not a key that is empty."""
         return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator('channel_backends', mode='before')
+    @classmethod
+    def comma_separated(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [name.strip() for name in value.split(',') if name.strip()]
+        return value
 
     @field_validator('public_url')
     @classmethod

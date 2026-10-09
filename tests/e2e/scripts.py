@@ -94,6 +94,12 @@ def hello(turn: Turn) -> ModelResponse:
     return say('Hello! I am Sammy.')
 
 
+def long_story(turn: Turn) -> ModelResponse:
+    """Three paragraphs, each too long to share a chat message with another (the fake chat app takes 200)."""
+    words = 'the squirrel buried another acorn under the old oak and remembered where it was'
+    return say('\n\n'.join(f'Part {n}: {words}, {words}.' for n in ('one', 'two', 'three')))
+
+
 def users_time(turn: Turn) -> ModelResponse:
     return say(next(line for line in turn.instructions.splitlines() if 'For the user it is now' in line))
 
@@ -421,6 +427,7 @@ SCRIPTS: dict[str, Script] = {
     'Order eggs straight from code at': order_from_code,
     'Fail please': fail,
     'Say hello': hello,
+    'Tell me a long story': long_story,
     'Ask me my favourite colour': favourite_colour,
     'What time is it for me': users_time,
     'What is your name': own_name,

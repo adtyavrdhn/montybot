@@ -35,8 +35,9 @@ It differs on purpose:
   browser downloads land in (#21).
 - **No computer use.** There is no E2B desktop and no router choosing between Monty and computer use. Sammy only
   drives a browser. A task that needs a desktop app is out of scope. (Decided 2026-10-06.)
-- **Agents are the clients, not chat channels.** Users reach Sammy through the agent they already use. That agent
-  can sit behind Slack or a phone app, but Sammy does not talk to those directly.
+- **People reach Sammy in the chat apps they already use.** (Reversed by #138: this used to say "agents are the
+  clients, not chat channels".) Slack, Telegram, WhatsApp and Discord talk to Sammy directly, next to the web and
+  Mac apps, through one shared chat layer (below). Each platform is a thin adapter on top of it.
 - **DBOS is the durable backend.** That answers the note's open question for this service.
 
 ## Components
@@ -210,6 +211,32 @@ Considered:
 - **Timeouts:** a waiting browser costs memory. After N minutes, save the `storageState` and close the browser. When
   the user returns, launch a fresh Chromium from the cookie jar for them to drive.
 - **Return control:** the agent resumes with a short summary of what the user did, not screenshots.
+
+## Chat apps
+
+`sammy/channels/` is the layer every chat platform shares, so a platform only implements the `Channel` protocol
+(`base.py`): check a webhook's signature, read it into `Inbound` messages, and send, edit, upload and download
+through its API. It registers with one line in `registry.BUILT_IN`, and is on only when all its credentials are set.
+
+- **Linking.** An unknown sender who messages the bot directly gets a one-time link to `/#/link/<code>`, which they
+  open in the web app signed in; or a signed-in user gets a code on the Chat apps page and sends it to the bot.
+  Opening a link does not link on its own: the web app shows a code that only that chat account can send back. Both
+  sides must be proved, or anyone could send their link to a signed-in user and then act as them from their own chat.
+  Codes live 15 minutes, work once, and only their SHA-256 is stored. An unlinked sender gets nothing else: no run,
+  and no data of any user. The answer they get is the same for everyone, but for their own code.
+- **Chats are threads.** One platform conversation (a direct chat, or a Slack or Discord thread) is one Sammy thread
+  per linked user, so history, `recent()` and schedules work as they do on the web. A message starts its run the way
+  the web app does (`workflows.create_message_run`).
+- **Inbound** is one DBOS workflow per delivery, whose id is the platform's delivery id, so a delivery the platform
+  sends twice is handled once. Asks are answered from the chat with buttons, or with a numbered text reply where
+  there are none, through `approvals.answer`, so the first answer wins whatever surface it came from. A hand-off
+  links to the chat on the web, where the take-over button is; the link grants nothing without the web session.
+- **Outbound** goes through an outbox table. Producers only add rows, inside steps that exist already (finishing a
+  run, notifying), keyed so a retried step adds a row once. A pump in the app starts one DBOS workflow per row, one
+  row per chat at a time, which sends each part of a reply (split at the platform's limit) and each file as its own
+  retried step. A restart in the middle of a reply sends each part once; a crash in the instant between the platform
+  accepting a part and DBOS recording it can repeat that one part, as platform APIs take no idempotency key.
+- **Pings.** A linked direct chat is a notification target next to web push and email, which the user can turn off.
 
 ## Data
 
