@@ -69,10 +69,14 @@ class NewMessage(BaseModel):
     async def start(self, connection: Any, user: User, thread_id: str, run_id: str) -> list[str]:
         """Make the message's run, with its files; returns their names. Raises `store.ActiveRun`, `store.ThreadGone`,
         `attachments.AttachmentGone` or `attachments.TooMuch`. Call in a transaction."""
-        await store.create_run(
-            connection, run_id=run_id, user_id=user.id, thread_id=thread_id, prompt=self.text, trigger='message'
+        return await workflows.create_message_run(
+            connection,
+            user_id=user.id,
+            thread_id=thread_id,
+            run_id=run_id,
+            text=self.text,
+            attachment_ids=[str(i) for i in self.attachments],
         )
-        return await attachments.attach(connection, user.id, run_id, [str(i) for i in self.attachments])
 
 
 async def remember_about_user(connection: Any, user: User, message: NewMessage) -> None:

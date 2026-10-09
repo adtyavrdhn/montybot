@@ -173,6 +173,29 @@ and removed on the Integrations page of the web and Mac apps.
   with the user's data key. Requests go to public addresses only, checked as each connection opens
   (`sammy/integrations/egress.py`), and are never traced, as a server's URL can hold a key.
 
+## Chat apps
+
+People can message Sammy from chat apps as well as the web and Mac apps, through one shared layer
+(`sammy/channels/`, see [`DESIGN.md`](DESIGN.md#chat-apps)). Each platform is a thin adapter, on only when all its
+credentials are set; the platforms themselves come in their own changes (#139 Slack, #140 Telegram, #141 WhatsApp,
+#142 Discord). Webhooks arrive at `POST /api/channels/<name>/webhook`.
+
+- **Linking.** Message the bot directly and it sends a link (`/#/link/<code>`) to open in the web app, signed in.
+  Or open **Chat apps** in the web app, get a code, and send `/start <code>` to the bot. Codes work once, for 15
+  minutes. Until a sender is linked, Sammy answers them only with the way to link, and starts nothing.
+- **What works.** Each chat is a Sammy thread. Replies, files both ways (10 per message, 20 MB each), questions,
+  approvals (buttons, or `1`/`yes` and `2`/`no` where the app has no buttons), hand-offs (a link to the chat on the
+  web, where you take over the browser) and pings when a run started elsewhere needs you. Pings go to the direct chat
+  you linked from; turn them off on the Chat apps page.
+- **Sent once.** Replies go through an outbox and a DBOS workflow per message, one step per part, so a restart in the
+  middle of a long reply sends each part once. A crash in the instant between the platform accepting a part and Sammy
+  recording it can send that one part twice: platform APIs take no idempotency key.
+- **Privacy.** Every webhook is size-capped and signature-checked before it is read, and handled once per delivery
+  id. Message text is traced only with `LOGFIRE_INCLUDE_CONTENT`; tokens and link codes never are.
+
+`CHANNEL_BACKENDS` adds platforms by `module:function` (comma-separated); the tests add a fake one this way
+(`tests/fake_channel.py`), whose `PlatformServer` a platform's own tests can reuse to stand in for its API.
+
 ## Observability
 
 `LOGFIRE_TOKEN` is optional: without it, no telemetry is sent to Logfire. What is exported is decided per field in

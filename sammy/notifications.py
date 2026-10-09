@@ -1,4 +1,5 @@
-"""Telling the user the bot needs them: a web push to each browser or phone they turned it on in, and an email.
+"""Telling the user the bot needs them: a web push to each browser or phone they turned it on in, an email, and a
+message in each chat app they linked and left pings on (`sammy.channels.outbound.notify`).
 
 Sent when a run asks something (`sammy.approvals.open_ask`), when a scheduled task finishes, and when a watch finds
 what the user waits for (`sammy.schedules`). The message says only which of these it is and links to the chat,
@@ -22,6 +23,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from psycopg.types.json import Jsonb
 from pywebpush import WebPushException, webpush  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 
+from sammy.channels import outbound
 from sammy.db import Connection
 from sammy.models import NoticeKind
 from sammy.resources import Resources
@@ -91,7 +93,12 @@ async def remove_subscription(connection: Connection, user_id: str, endpoint: st
 
 
 async def notify(resources: Resources, *, user_id: str, thread_id: str, kind: NoticeKind, tag: str) -> None:
-    """Push and email that the bot needs the user. Never raises: a failure is logged by type only."""
+    """Push, email and chat apps: the bot needs the user. Never raises: a failure is logged by type only."""
+    try:
+        # First: it only adds rows to the chat outbox, in the step that calls this, so a retry adds them once.
+        await outbound.notify(resources, user_id=user_id, thread_id=thread_id, kind=kind, tag=tag, what=WHAT[kind])
+    except Exception as error:  # noqa: BLE001  a notification must never fail the run
+        logfire.warn('A chat notification was not queued: {error_type}', error_type=type(error).__name__)
     try:
         await _notify(resources, user_id=user_id, thread_id=thread_id, kind=kind, tag=tag)
     except Exception as error:  # noqa: BLE001  a notification must never fail the run
