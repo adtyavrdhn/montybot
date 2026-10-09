@@ -29,6 +29,7 @@ class ThreadGone(Exception):
 USER_COLUMNS = 'id, email, name, timezone, squirrel_name'
 RUN_COLUMNS = 'id, user_id, thread_id, trigger, prompt, status, output, error, created_at, completed_at'
 ASK_COLUMNS = 'id, run_id, user_id, occurrence, kind, prompt, details, answer'
+THREAD_RUNS = f'SELECT {RUN_COLUMNS} FROM sammy.runs WHERE thread_id = %s AND user_id = %s AND parent_run_id IS NULL'
 SCHEDULE_COLUMNS = 'id, user_id, thread_id, name, cron, timezone, when_text, prompt, watch'
 
 # --- users ---
@@ -126,14 +127,13 @@ async def list_threads(connection: Connection, user_id: str) -> list[Thread]:
 
 
 async def active_runs(connection: Connection, user_id: str) -> dict[str, RunStatus]:
-    """The status of each of the user's unfinished runs, by thread id. A run waiting with every ask answered is
-    about to carry on, so it counts as running (as in `api.run_view`)."""
+    """Each unfinished run's status by thread id: waiting while it or one of its subagents asks (see `api.run_view`)."""
     cursor = await connection.execute(
-        "SELECT r.thread_id, CASE WHEN r.status = 'waiting' AND NOT EXISTS "
-        '(SELECT 1 FROM sammy.asks a WHERE a.run_id = r.id AND a.answer IS NULL) '
-        "THEN 'running' ELSE r.status END AS status "
+        'SELECT r.thread_id, CASE WHEN EXISTS (SELECT 1 FROM sammy.asks a JOIN sammy.runs c ON c.id = a.run_id '
+        "WHERE r.id IN (c.id, c.parent_run_id) AND a.answer IS NULL) THEN 'waiting' "
+        "WHEN r.status = 'waiting' THEN 'running' ELSE r.status END AS status FROM sammy.runs r "
         # The same condition as the index runs_active_by_user.
-        "FROM sammy.runs r WHERE r.user_id = %s AND r.status IN ('queued', 'running', 'waiting')",
+        "WHERE r.user_id = %s AND r.status IN ('queued', 'running', 'waiting') AND r.parent_run_id IS NULL",
         (user_id,),
     )
     return {str(row['thread_id']): row['status'] for row in await cursor.fetchall()}
@@ -144,7 +144,7 @@ async def latest_outcomes(connection: Connection, user_id: str) -> dict[str, Run
     latest run is unfinished or that have none are left out."""
     cursor = await connection.execute(
         'SELECT DISTINCT ON (thread_id) thread_id, status FROM sammy.runs WHERE user_id = %s '
-        'ORDER BY thread_id, created_at DESC',
+        'AND parent_run_id IS NULL ORDER BY thread_id, created_at DESC',
         (user_id,),
     )
     return {str(row['thread_id']): row['status'] for row in await cursor.fetchall() if row['status'] in FINISHED}
@@ -220,9 +220,9 @@ async def create_run(
 
 
 async def list_runs(connection: Connection, user_id: str, thread_id: str) -> list[Run]:
-    """The thread's runs, oldest first."""
+    """The thread's own runs (not their subagents', `sammy.subagents`), oldest first."""
     cursor = await connection.execute(
-        f'SELECT {RUN_COLUMNS} FROM sammy.runs WHERE thread_id = %s AND user_id = %s ORDER BY created_at',
+        f'{THREAD_RUNS} ORDER BY created_at',
         (thread_id, user_id),
     )
     return [run_from(row) for row in await cursor.fetchall()]
@@ -238,7 +238,7 @@ async def get_run(connection: Connection, user_id: str, run_id: str) -> Run | No
 
 async def latest_run(connection: Connection, user_id: str, thread_id: str) -> Run | None:
     cursor = await connection.execute(
-        f'SELECT {RUN_COLUMNS} FROM sammy.runs WHERE thread_id = %s AND user_id = %s ORDER BY created_at DESC LIMIT 1',
+        f'{THREAD_RUNS} ORDER BY created_at DESC LIMIT 1',
         (thread_id, user_id),
     )
     row = await cursor.fetchone()
@@ -330,20 +330,20 @@ async def create_ask(
 
 async def open_ask(connection: Connection, user_id: str, run_id: str) -> Ask | None:
     cursor = await connection.execute(
-        f'SELECT {ASK_COLUMNS} FROM sammy.asks WHERE run_id = %s AND user_id = %s AND answer IS NULL '
-        'ORDER BY occurrence DESC LIMIT 1',
-        (run_id, user_id),
+        f'SELECT {ASK_COLUMNS} FROM sammy.asks WHERE user_id = %s AND answer IS NULL AND run_id IN '
+        '(SELECT id FROM sammy.runs WHERE %s IN (id, parent_run_id)) ORDER BY created_at DESC LIMIT 1',
+        (user_id, run_id),
     )
     row = await cursor.fetchone()
     return None if row is None else ask_from(row)
 
 
 async def list_answered_asks(connection: Connection, user_id: str, thread_id: str) -> list[Ask]:
-    """The thread's asks that have an answer (or expired), in the order they were asked."""
+    """The thread's asks that have an answer (or expired), in the order asked; a subagent's under its parent."""
     cursor = await connection.execute(
-        f'SELECT {", ".join("a." + column for column in ASK_COLUMNS.split(", "))} FROM sammy.asks a '
-        'JOIN sammy.runs r ON r.id = a.run_id '
-        'WHERE r.thread_id = %s AND a.user_id = %s AND a.answer IS NOT NULL ORDER BY r.created_at, a.occurrence',
+        'SELECT a.id, coalesce(r.parent_run_id, a.run_id) AS run_id, a.user_id, a.occurrence, a.kind, a.prompt, '
+        'a.details, a.answer FROM sammy.asks a JOIN sammy.runs r ON r.id = a.run_id WHERE r.thread_id = %s '
+        'AND a.user_id = %s AND a.answer IS NOT NULL ORDER BY a.created_at, a.occurrence',
         (thread_id, user_id),
     )
     return [ask_from(row) for row in await cursor.fetchall()]
@@ -515,7 +515,7 @@ async def add_activity(connection: Connection, run_id: str, text: str) -> None:
 async def list_activity(connection: Connection, user_id: str, run_id: str) -> list[str]:
     cursor = await connection.execute(
         'SELECT a.text FROM sammy.activity a JOIN sammy.runs r ON r.id = a.run_id '
-        'WHERE a.run_id = %s AND r.user_id = %s ORDER BY a.id',
+        'WHERE %s IN (r.id, r.parent_run_id) AND r.user_id = %s ORDER BY a.id',
         (run_id, user_id),
     )
     return [row['text'] for row in await cursor.fetchall()]
@@ -525,7 +525,7 @@ async def last_scheduled_runs(connection: Connection, user_id: str) -> dict[str,
     """The latest run each of the user's schedules started, by its thread id."""
     cursor = await connection.execute(
         f'SELECT DISTINCT ON (thread_id) {RUN_COLUMNS} FROM sammy.runs '
-        "WHERE user_id = %s AND trigger = 'schedule' ORDER BY thread_id, created_at DESC",
+        "WHERE user_id = %s AND trigger = 'schedule' AND parent_run_id IS NULL ORDER BY thread_id, created_at DESC",
         (user_id,),
     )
     return {str(row['thread_id']): run_from(row) for row in await cursor.fetchall()}
@@ -544,10 +544,10 @@ async def search_threads(connection: Connection, user_id: str, query: str, limit
 
 
 async def list_thread_activity(connection: Connection, user_id: str, thread_id: str) -> dict[str, list[str]]:
-    """Every run's steps in a thread, by run id, oldest first."""
+    """Every run's steps in a thread (a subagent's under its parent), by run id, oldest first."""
     cursor = await connection.execute(
-        'SELECT a.run_id, a.text FROM sammy.activity a JOIN sammy.runs r ON r.id = a.run_id '
-        'WHERE r.thread_id = %s AND r.user_id = %s ORDER BY a.id',
+        'SELECT coalesce(r.parent_run_id, r.id) AS run_id, a.text FROM sammy.activity a JOIN sammy.runs r '
+        'ON r.id = a.run_id WHERE r.thread_id = %s AND r.user_id = %s ORDER BY a.id',
         (thread_id, user_id),
     )
     steps: dict[str, list[str]] = {}

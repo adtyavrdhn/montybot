@@ -186,6 +186,11 @@ class BrowserHost:
         self._closed: set[RunId] = set()
         self._reaper: asyncio.Task[None] | None = None
 
+    @property
+    def shares_browser(self) -> bool:
+        """Whether runs of one user get tabs of one browser (`share_browser`), so they can work side by side."""
+        return self._share_browser
+
     async def __aenter__(self) -> Self:
         self._reaper = asyncio.create_task(self._reap_forever())
         return self
@@ -270,11 +275,15 @@ class BrowserHost:
         or keeps a browser alive, and does not wait for a call in progress. Once the run has ended, the user's browser
         kept open (`keep_open`), where their last run left it. `UnknownRun` if there is no open browser or it is busy;
         `HandoffActive` during a hand-off."""
-        run = self._runs.get(run_id)
-        if run is None:
+        if run_id not in self._runs:
             return await self._peek_parked(user_id)
-        backend = run.backend if run.user_id == user_id else None
-        if backend is None or run.lock.locked():
+        return await self.peek_tab(run_id=run_id, user_id=user_id)
+
+    async def peek_tab(self, *, run_id: RunId, user_id: UserId) -> Screenshot:
+        """`peek_screenshot` of the run's own tab only, never the parked browser: a subagent's on the live screen."""
+        run = self._runs.get(run_id)
+        backend = run.backend if run is not None and run.user_id == user_id else None
+        if run is None or backend is None or run.lock.locked():
             raise UnknownRun('no browser to watch for this run')
         async with run.lock:  # free when checked above; only a waiter woken just before could get it first
             _check_handoff(run, None)

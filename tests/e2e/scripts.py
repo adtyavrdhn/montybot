@@ -376,7 +376,90 @@ def acme_wiki(turn: Turn) -> ModelResponse:
     return say(turn.result_of('connect_integration'))
 
 
+# --- subagents (#132) ---
+
+KETTLE_PRICE = re.compile(r'Price: \$(\d+\.\d\d)')
+
+
+def urls_in(turn: Turn) -> list[str]:
+    return [url.rstrip('/.,') for url in re.findall(r'https?://\S+', turn.prompt)]
+
+
+def cheapest(prices: list[tuple[str, str]]) -> ModelResponse:
+    if not prices:
+        return say('I found no prices.')
+    url, price = min(prices, key=lambda found: float(found[1]))
+    return say(f'Cheapest: {url} at ${price}')
+
+
+def compare_one_by_one(turn: Turn) -> ModelResponse:
+    """Without subagents: the agent opens each site itself, one after another, so every page lands in its context."""
+    urls = urls_in(turn)
+    pages = [str(r.content) for r in turn.returns if r.tool_name == 'run_code']
+    if len(pages) < len(urls):
+        return run(f'print(await goto({urls[len(pages)] + "/"!r}))')
+    prices = zip(urls, pages, strict=True)
+    return cheapest([(url, found.group(1)) for url, page in prices if (found := KETTLE_PRICE.search(page))])
+
+
+def compare_side_by_side(turn: Turn) -> ModelResponse:
+    """With subagents: one job per site, and only their answers come back."""
+    if not turn.called('run_subagents'):
+        jobs = [{'task': f'Find the price of the Acme kettle at {url}', 'sites': [url]} for url in urls_in(turn)]
+        return call('run_subagents', jobs=jobs)
+    return cheapest(re.findall(r'(https?://\S+) sells it for \$(\d+\.\d\d)', turn.last))
+
+
+def find_kettle_price(turn: Turn) -> ModelResponse:
+    """A subagent's job: read the one site's price."""
+    if not turn.returns:
+        return run(f'print(await goto({turn.url + "/"!r}))')
+    found = KETTLE_PRICE.search(turn.last)
+    return say(f'{turn.url} sells it for ${found.group(1)}' if found else f'No price at {turn.url}.')
+
+
+def read_then_ask(turn: Turn) -> ModelResponse:
+    """A subagent's job that opens its page, then needs the user: its tab stays open while it waits."""
+    if not turn.called('run_code'):
+        return run(f'print(await goto({turn.url + "/"!r}))')
+    if not turn.called('ask_user'):
+        return call('ask_user', question='Which kettle do you mean?')
+    found = KETTLE_PRICE.search(turn.result_of('run_code'))
+    return say(f'The {turn.result_of("ask_user")} at {turn.url} is ${found.group(1) if found else "?"}')
+
+
+def cart_eggs(turn: Turn) -> ModelResponse:
+    """A subagent's job that needs the user to sign in, in its own tab."""
+    if not turn.returns:
+        return run(f"shop = {turn.url!r}\nawait goto(shop + '/')\nprint(await fixture_click('#add-eggs'))")
+    if 'Title: Sign in' in turn.last:
+        if turn.called('hand_off'):
+            return say('Still not signed in.')
+        return call('hand_off', reason='Please sign in to the shop, then hand the browser back.')
+    if 'In cart: eggs' not in turn.last and turn.called('run_code') < 2:
+        return run("await goto(shop + '/')\nprint(await fixture_click('#add-eggs'))")
+    return say(line_with(turn.last, 'In cart:').strip(' -') or f'I could not fill the cart. {turn.last}')
+
+
+def one_job(task: str) -> Script:
+    """Hand the whole task, for the site in the message, to one subagent, and pass on its answer."""
+
+    def script(turn: Turn) -> ModelResponse:
+        if not turn.called('run_subagents'):
+            return call('run_subagents', jobs=[{'task': task.format(url=turn.url)}])
+        return say(turn.last)
+
+    return script
+
+
 SCRIPTS: dict[str, Script] = {
+    'One site at a time, compare the kettle at': compare_one_by_one,
+    'Side by side, compare the kettle at': compare_side_by_side,
+    'Find the price of the Acme kettle at': find_kettle_price,
+    'Side by side, ask me which kettle at': one_job('Open the kettle page, then ask me which kettle, at {url}'),
+    'Open the kettle page, then ask me which kettle, at': read_then_ask,
+    'Have a helper put eggs in my cart at': one_job('Put eggs in my cart at {url}'),
+    'Put eggs in my cart at': cart_eggs,
     "yo what's on my linear": my_linear,
     'Search my Acme Wiki': acme_wiki,
     'Check my Gmail': my_gmail,

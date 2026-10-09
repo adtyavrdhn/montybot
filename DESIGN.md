@@ -211,6 +211,29 @@ Considered:
   the user returns, launch a fresh Chromium from the cookie jar for them to drive.
 - **Return control:** the agent resumes with a short summary of what the user did, not screenshots.
 
+## Subagents
+
+A task that splits into independent parts, such as one product on three sites, runs as subagents
+(`run_subagents`, `sammy/subagents.py`, #132). Each job is a run of its own: a row in `sammy.runs` with
+`parent_run_id`, in the parent's thread, and a DBOS child workflow whose id is that run's id, so a restart resumes
+it. It has its own short context and its own tab of the user's browser, so jobs read their sites side by side, and
+the parent's context gets only their answers.
+
+- **Inherited:** the user's sign-ins (the tab shares the user's browser), how the parent was started (so a
+  scheduled run's approval of `commit` holds), and the user's time zone.
+- **Asks:** a job asks and hands off as any run does, waiting in its own `DBOS.recv`. The thread shows the open ask
+  of the run or of one of its jobs, and taking over a job's hand-off opens the job's tab.
+- **Limits:** at most `SUBAGENT_MAX_JOBS` jobs per call (tools run one at a time, so that is also the most at once),
+  and `SUBAGENT_TOKEN_BUDGET` tokens for all the jobs of one run. Tokens stand in for cost because they are always
+  known; a model's price is not.
+- **Live screen:** while a run has jobs going, `GET /api/runs/<id>/screen` returns their tabs side by side in one
+  picture (a tab that is busy shows its last frame), so the web and Mac apps show them without knowing about jobs.
+- **Stopping** the parent cancels its workflow and its children's, and closes their tabs.
+- **Storage:** the jobs' own queries are in `sammy/subagent_runs.py`; `sammy/store.py` only leaves jobs out of a
+  thread's own runs and shows their asks and activity as the parent's.
+- **Needs tabs.** Without an engine that has tabs (`TabsBackend`), a second run of the user cannot get a browser
+  while the first holds it, so the tool is not offered.
+
 ## Data
 
 - **Cookie jar:** envelope-encrypted with a key per tenant (KMS). Saved after every run and every hand-off. One writer

@@ -62,8 +62,10 @@ layer reports in, in **one connected trace**.
   (`service.version`) and environment, then `instrument_pydantic_ai`, `instrument_httpx` and
   `instrument_system_metrics`. Agent runs, every model request, every tool call, **token usage, cache hits and
   cost**, every outgoing HTTP call to a model provider, CPU and memory.
-- **44 hand-named spans across the whole system:**
+- **50 hand-named spans across the whole system:**
   - runs: `run.lifecycle`, `run.start`, `run.agent`, `run.dispatch`, `run.finish`, `run.fail`, `run.close`
+  - subagents: `subagents.create`, `subagent.lifecycle`, `subagent.start`, `subagent.agent`, `subagent.finish`,
+    `subagents.screen`
   - Monty: `monty.run`, `monty.session`, `monty.snippet`, `monty.dump`, `monty.load`
   - the agent driving the browser: `code.browser.goto`, `code.browser.click`, `code.browser.type`,
     `code.browser.read`
@@ -111,6 +113,12 @@ layer reports in, in **one connected trace**.
   `sammy/crypto.py`).
 - **Human takeover.** When a site wants a password or a CAPTCHA, Sammy hands you the live browser, with an editable
   address bar and tabs, and picks up when you hand it back.
+- **Helpers that work side by side.** "Compare the price of X on three sites" runs as three subagents at once
+  (`run_subagents`), each a run of its own in a tab of your browser, with your sign-ins. Sammy's own context gets
+  their answers, not their pages. Their questions and hand-offs show up in your chat, and a restart resumes them.
+  While they work, the live screen shows their tabs side by side.
+  At most `SUBAGENT_MAX_JOBS` (3) per call, sharing `SUBAGENT_TOKEN_BUDGET` (1M) tokens per task
+  (`sammy/subagents.py`). Needs an engine with tabs, such as the server's Chromium over CDP.
 - **Files both ways.** Drop up to 10 files per message (20 MB each). Sammy reads images, PDFs and text directly,
   opens spreadsheets with real CPython, and hands files back with `share_file`.
 - **Memory, schedules and notifications.** Per-user memories, cron schedules in your own time zone, watches, and web

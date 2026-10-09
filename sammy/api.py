@@ -27,7 +27,7 @@ from pydantic import AfterValidator, BaseModel, Field, StrictBool, StringConstra
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
-from sammy import approvals, attachments, auth, schedules, store, streaming, workflows
+from sammy import approvals, attachments, auth, schedules, store, streaming, subagents, workflows
 from sammy.browser.contract import (
     BrowserError,
 )
@@ -461,9 +461,10 @@ async def run_events(request: Request, user: User) -> Response:
 
 
 async def run_view(connection: Any, user: User, run: Run) -> dict[str, Any]:
-    ask = await store.open_ask(connection, user.id, run.id) if run.status == 'waiting' else None
+    # The run's open ask, or one of its subagents' (sammy.subagents) while it waits for their answers.
+    ask = await store.open_ask(connection, user.id, run.id) if run.status in ('running', 'waiting') else None
     # Answered, and about to carry on: for the user it is working again, not waiting for them.
-    status = 'running' if run.status == 'waiting' and ask is None else run.status
+    status = 'waiting' if ask is not None else 'running' if run.status == 'waiting' else run.status
     return {
         'id': run.id,
         'thread_id': run.thread_id,
@@ -528,13 +529,16 @@ async def answer_ask(request: Request, user: User) -> Response:
 
 
 async def open_handoff(request: Request, user: User) -> tuple[Run, Ask] | None:
-    """The run and its hand-off ask, if the run is the user's and waits for them to hand the browser back."""
+    """The run and its hand-off ask, if the run is the user's and waits for them to hand the browser back. For a
+    subagent's hand-off (sammy.subagents), the subagent's run: the user takes over its tab."""
     async with resources_of(request).pool.connection() as connection:
         run = await store.get_run(connection, user.id, str(request.path_params['run_id']))
-        if run is None or run.status != 'waiting':
+        if run is None or run.status not in ('running', 'waiting'):
             return None
         ask = await store.open_ask(connection, user.id, run.id)
-    if ask is None or ask.kind != 'handoff':
+        if ask is not None and ask.run_id != run.id:
+            run = await store.get_run(connection, user.id, ask.run_id)
+    if run is None or ask is None or ask.kind != 'handoff':
         return None
     return run, ask
 
@@ -581,18 +585,21 @@ async def live_link(request: Request, user: User) -> Response:
 
 @auth.signed_in
 async def watch_screen(request: Request, user: User) -> Response:
-    """The bot's browser as it works, for the user to watch: read only. Once the run has ended, the user's browser
-    kept open for their next run (during a hand-off the user has the live view instead)."""
+    """The bot's browser as it works, for the user to watch: read only. While the run's subagents work, their tabs
+    side by side (sammy.subagents). Once the run has ended, the user's browser kept open for their next run (during a
+    hand-off the user has the live view instead)."""
     resources = resources_of(request)
     async with resources.pool.connection() as connection:
         run = await store.get_run(connection, user.id, str(request.path_params['run_id']))
     if run is None:
         return NOT_FOUND
     try:
-        screenshot = await resources.browser.peek_screenshot(run_id=run.id, user_id=user.id)
+        png = await subagents.screen(resources, user.id, run.id)
+        if png is None:
+            png = (await resources.browser.peek_screenshot(run_id=run.id, user_id=user.id)).png
     except BrowserError:
         return Response(status_code=204)  # no picture now: no browser yet, busy with a call, or a hand-off began
-    return Response(screenshot.png, media_type='image/png', headers={'Cache-Control': 'no-store'})
+    return Response(png, media_type='image/png', headers={'Cache-Control': 'no-store'})
 
 
 # --- notifications ---
