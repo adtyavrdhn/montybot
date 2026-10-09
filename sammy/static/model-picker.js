@@ -1,13 +1,15 @@
 'use strict';
 
 // One saved preference shared by Settings and the composer. Never carry overrides across models.
-const modelPicker = { data: null, busy: false, error: '', message: '', revision: 0 };
+// `busy` disables the controls while loading or saving; only `saving` holds back a message, as the next run must use
+// the choice being saved. Loading does not: the server reads the saved preference itself.
+const modelPicker = { data: null, busy: false, saving: false, error: '', message: '', revision: 0 };
 const MODEL_PICKERS = ['quick-model', 'settings-model'];
 const SIMPLE_THINKING = ['low', 'medium', 'high'];
 
 function resetModelPreferences() {
   modelPicker.revision += 1;
-  Object.assign(modelPicker, { data: null, busy: false, error: '', message: '' });
+  Object.assign(modelPicker, { data: null, busy: false, saving: false, error: '', message: '' });
   renderModelPickers();
 }
 
@@ -39,6 +41,7 @@ async function saveModelPreferences(model, settings) {
   if (modelPicker.busy) return;
   const revision = ++modelPicker.revision;
   modelPicker.busy = true;
+  modelPicker.saving = true;
   modelPicker.error = '';
   modelPicker.message = 'Saving model settings…';
   renderModelPickers();
@@ -55,6 +58,7 @@ async function saveModelPreferences(model, settings) {
   } finally {
     if (revision === modelPicker.revision) {
       modelPicker.busy = false;
+      modelPicker.saving = false;
       renderModelPickers();
     }
   }

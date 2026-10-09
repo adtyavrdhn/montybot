@@ -2,8 +2,8 @@
 
 $('composer').addEventListener('submit', (event) => {
   event.preventDefault();
-  if (modelPicker.busy) {
-    showNotice('Wait for model settings to finish loading or saving before sending.');
+  if (modelPicker.saving) {
+    showNotice('Wait for your model choice to finish saving before sending.');
     return;
   }
   if ($('send').hidden && !$('ask').hidden) {  // Sammy waits for an answer: take the user there

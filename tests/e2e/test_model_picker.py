@@ -184,7 +184,7 @@ def test_send_waits_for_save(picker: tuple[Page, MockAPI]) -> None:
     expect(quick.get_by_label('Model', exact=True)).to_be_disabled()
     page.locator('#message').fill('Next run')
     page.locator('#send').click()
-    expect(page.locator('#notice')).to_contain_text('Wait for model settings')
+    expect(page.locator('#notice')).to_contain_text('Wait for your model choice')
     assert not any(method == 'POST' and path == '/api/threads' for method, path, _ in mock.calls)
     prefs.hold = False
     assert len(prefs.pending) == 1
@@ -193,3 +193,16 @@ def test_send_waits_for_save(picker: tuple[Page, MockAPI]) -> None:
     page.locator('#send').click()
     expect(page.locator('.msg.user')).to_have_text('Next run')
     assert prefs.model == 'openai:gpt'
+
+
+def test_sending_while_models_load_is_not_held_back(picker: tuple[Page, MockAPI]) -> None:
+    # The server reads the saved preference itself, so only a pending save may hold a message back.
+    page, mock = picker
+    prefs = install(page)
+    prefs.hold = True
+    workspace(page, mock)
+    expect(page.locator('#quick-model')).to_have_attribute('aria-busy', 'true')
+    page.locator('#message').fill('Say hello.')
+    page.locator('#send').click()
+    expect(page.locator('.msg.user')).to_have_text('Say hello.')
+    assert any(method == 'POST' and path == '/api/threads' for method, path, _ in mock.calls)
